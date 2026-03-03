@@ -29,7 +29,7 @@ struct CourseListView: View {
             }
         } detail: {
             if let course = selectedCourse {
-                Text(course.name) // Placeholder — will be replaced with ScorecardImportView in Task 12
+                ScorecardImportView(course: course)
             } else {
                 Text("Select a course or create a new one")
                     .foregroundStyle(.secondary)

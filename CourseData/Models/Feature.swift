@@ -1,11 +1,11 @@
 import Foundation
 
-enum FeatureType: String, Codable, CaseIterable {
+enum FeatureType: String, Codable, CaseIterable, Hashable {
     case bunker
     case water
 }
 
-struct Feature: Identifiable, Codable, Equatable {
+struct Feature: Identifiable, Codable, Equatable, Hashable {
     let id: UUID
     let type: FeatureType
     var front: Coordinate

@@ -1,12 +1,12 @@
 import Foundation
 
-struct Green: Codable, Equatable {
+struct Green: Codable, Equatable, Hashable {
     var front: Coordinate
     var middle: Coordinate
     var back: Coordinate
 }
 
-struct Hole: Identifiable, Codable, Equatable {
+struct Hole: Identifiable, Codable, Equatable, Hashable {
     let id: UUID
     let number: Int
     var par: Int

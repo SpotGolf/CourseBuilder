@@ -1,11 +1,11 @@
 import Foundation
 
-enum Gender: String, Codable {
+enum Gender: String, Codable, Hashable {
     case male
     case female
 }
 
-struct TeeDefinition: Codable, Equatable, Identifiable {
+struct TeeDefinition: Codable, Equatable, Hashable, Identifiable {
     var id: String { name }
     let name: String
     let color: String
@@ -14,13 +14,13 @@ struct TeeDefinition: Codable, Equatable, Identifiable {
     var slope: Int?
 }
 
-struct CourseLocation: Codable, Equatable {
+struct CourseLocation: Codable, Equatable, Hashable {
     var city: String
     var state: String
     var coordinate: Coordinate
 }
 
-struct Course: Identifiable, Codable, Equatable {
+struct Course: Identifiable, Codable, Equatable, Hashable {
     let id: String
     var name: String
     var location: CourseLocation

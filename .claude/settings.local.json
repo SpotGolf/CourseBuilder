@@ -1,0 +1,33 @@
+{
+  "permissions": {
+    "allow": [
+      "WebSearch",
+      "WebFetch(domain:course.bluegolf.com)",
+      "WebFetch(domain:www.greenskeeper.org)",
+      "WebFetch(domain:golfcourseapi.com)",
+      "WebFetch(domain:golfapi.io)",
+      "WebFetch(domain:www.golflink.com)",
+      "WebFetch(domain:codakuma.com)",
+      "WebFetch(domain:www.hackingwithswift.com)",
+      "WebFetch(domain:api.golfcourseapi.com)",
+      "WebFetch(domain:blog.rogermolas.com)",
+      "WebFetch(domain:github.com)",
+      "WebFetch(domain:www.thebroadlandsgc.com)",
+      "WebFetch(domain:holyswift.app)",
+      "WebFetch(domain:golf-course-database.com)",
+      "WebFetch(domain:www.golfdigest.com)",
+      "WebFetch(domain:anthonyteo.com)",
+      "WebFetch(domain:www.createwithswift.com)",
+      "WebFetch(domain:www.golfadvisor.com)",
+      "WebFetch(domain:www.mscorecard.com)",
+      "WebFetch(domain:www.golfnow.com)",
+      "WebFetch(domain:www.golfpass.com)",
+      "WebFetch(domain:rapidapi.com)",
+      "WebFetch(domain:zylalabs.com)",
+      "WebFetch(domain:raw.githubusercontent.com)",
+      "Bash(xcodegen generate:*)",
+      "Bash(xcodebuild:*)",
+      "Bash(git:*)"
+    ]
+  }
+}

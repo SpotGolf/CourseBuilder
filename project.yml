@@ -1,0 +1,34 @@
+name: CourseData
+options:
+  bundleIdPrefix: com.spotgolf
+  deploymentTarget:
+    macOS: "14.0"
+  xcodeVersion: "15.0"
+  minimumXcodeGenVersion: "2.38.0"
+settings:
+  base:
+    SWIFT_VERSION: "5.9"
+targets:
+  CourseData:
+    type: application
+    platform: macOS
+    sources:
+      - CourseData
+    settings:
+      base:
+        CODE_SIGN_ENTITLEMENTS: CourseData/Resources/CourseData.entitlements
+        GENERATE_INFOPLIST_FILE: YES
+        INFOPLIST_KEY_NSLocationUsageDescription: "CourseData uses your location for testing course distances"
+    scheme:
+      testTargets:
+        - CourseDataTests
+  CourseDataTests:
+    type: bundle.unit-test
+    platform: macOS
+    sources:
+      - CourseDataTests
+    settings:
+      base:
+        GENERATE_INFOPLIST_FILE: YES
+    dependencies:
+      - target: CourseData

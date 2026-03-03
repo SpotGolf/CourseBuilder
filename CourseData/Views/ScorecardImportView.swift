@@ -71,6 +71,11 @@ struct ScorecardImportView: View {
                 importFromImage(url: url)
             }
         }
+        .sheet(isPresented: $navigateToMap) {
+            MapEditorView(course: course)
+                .environmentObject(store)
+                .frame(minWidth: 900, minHeight: 600)
+        }
     }
 
     private func importFromAPI() {

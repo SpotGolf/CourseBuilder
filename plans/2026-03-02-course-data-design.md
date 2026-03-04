@@ -22,23 +22,43 @@ Search for course (MKLocalSearch, .golf POI filter)
 
 ```json
 {
-  "id": "broadlands-gc-broomfield-co",
+  "id": "A5F3B2C1-1234-4567-89AB-CDEF01234567",
   "name": "The Broadlands Golf Course",
+  "clubName": "The Broadlands Golf Club",
+  "golfCourseAPIId": 19198,
   "location": {
+    "address": "4380 W 144th Ave",
     "city": "Broomfield",
     "state": "CO",
+    "country": "US",
     "coordinate": { "latitude": 39.9397, "longitude": -105.0267 }
   },
   "tees": [
-    { "name": "Black", "color": "#000000", "gender": "male", "rating": 73.5, "slope": 137 },
-    { "name": "Gold", "color": "#FFD700", "gender": "male", "rating": 71.2, "slope": 131 },
-    { "name": "Red", "color": "#FF0000", "gender": "female", "rating": 69.1, "slope": 121 }
+    {
+      "name": "Black", "color": "#000000",
+      "male": {
+        "courseRating": 73.5, "slopeRating": 137,
+        "frontCourseRating": 37.6, "frontSlopeRating": 134,
+        "backCourseRating": 38.1, "backSlopeRating": 129,
+        "totalYards": 7289, "parTotal": 72
+      }
+    },
+    {
+      "name": "Red", "color": "#FF0000",
+      "female": {
+        "courseRating": 69.1, "slopeRating": 121,
+        "frontCourseRating": 34.2, "frontSlopeRating": 118,
+        "backCourseRating": 34.9, "backSlopeRating": 124,
+        "totalYards": 5200, "parTotal": 72
+      }
+    }
   ],
   "holes": [
     {
       "number": 1,
       "par": 4,
-      "handicap": 13,
+      "maleHandicap": 13,
+      "femaleHandicap": 11,
       "yardages": { "Black": 401, "Gold": 378, "Blue": 355, "Red": 298 },
       "tees": {
         "Black": { "latitude": 39.9401, "longitude": -105.0271 },
@@ -70,10 +90,15 @@ Search for course (MKLocalSearch, .golf POI filter)
 
 ### Key data model decisions
 
-- One JSON file per course
+- One JSON file per course, named by UUID
+- `id` is a random UUID v4, `golfCourseAPIId` stores the external API identifier
+- `clubName` is the facility/club name; `name` is the specific course name
+- `location` includes `address` and `country` in addition to city/state/coordinate
+- Tee rating/slope data is grouped into `TeeInformation` structs under `male`/`female` on each tee definition, including front/back nine splits (`frontCourseRating`, `frontSlopeRating`, `backCourseRating`, `backSlopeRating`), `totalYards`, and `parTotal`
 - `tees` on each hole is an object keyed by tee name — keys match the course-level tee definitions and `yardages` keys
 - `green` is a top-level hole property with `front`, `middle`, `back` coordinates
 - `features` only contains hazards (bunkers, water) — each with `front` and `back` coordinates relative to line of play (front = closer to tee, back = far side)
+- Holes have separate `maleHandicap` and `femaleHandicap`
 - Tee boxes are a single coordinate per tee set
 - All coordinates are WGS84 lat/lon
 

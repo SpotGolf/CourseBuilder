@@ -10,7 +10,8 @@ struct Hole: Identifiable, Codable, Equatable, Hashable {
     let id: UUID
     let number: Int
     var par: Int
-    var handicap: Int
+    var maleHandicap: Int
+    var femaleHandicap: Int
     var yardages: [String: Int]
     var tees: [String: Coordinate]
     var green: Green?
@@ -20,7 +21,8 @@ struct Hole: Identifiable, Codable, Equatable, Hashable {
         id: UUID = UUID(),
         number: Int,
         par: Int,
-        handicap: Int,
+        maleHandicap: Int = 0,
+        femaleHandicap: Int = 0,
         yardages: [String: Int] = [:],
         tees: [String: Coordinate] = [:],
         green: Green? = nil,
@@ -29,7 +31,8 @@ struct Hole: Identifiable, Codable, Equatable, Hashable {
         self.id = id
         self.number = number
         self.par = par
-        self.handicap = handicap
+        self.maleHandicap = maleHandicap
+        self.femaleHandicap = femaleHandicap
         self.yardages = yardages
         self.tees = tees
         self.green = green

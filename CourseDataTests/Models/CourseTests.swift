@@ -4,19 +4,20 @@ import XCTest
 final class CourseTests: XCTestCase {
     func testCodableRoundTrip() throws {
         let course = Course(
-            id: "broadlands-gc-broomfield-co",
             name: "The Broadlands Golf Course",
             location: CourseLocation(
+                address: "4380 W 144th Ave",
                 city: "Broomfield",
                 state: "CO",
+                country: "US",
                 coordinate: Coordinate(latitude: 39.9397, longitude: -105.0267)
             ),
             tees: [
-                TeeDefinition(name: "Black", color: "#000000", gender: .male, rating: 73.5, slope: 137),
-                TeeDefinition(name: "Gold", color: "#FFD700", gender: .male, rating: 71.2, slope: 131)
+                TeeDefinition(name: "Black", color: "#000000", male: TeeInformation(courseRating: 73.5, slopeRating: 137)),
+                TeeDefinition(name: "Gold", color: "#FFD700", male: TeeInformation(courseRating: 71.2, slopeRating: 131))
             ],
             holes: [
-                Hole(number: 1, par: 4, handicap: 13,
+                Hole(number: 1, par: 4, maleHandicap: 13,
                      yardages: ["Black": 401],
                      tees: ["Black": Coordinate(latitude: 39.9401, longitude: -105.0271)])
             ]
@@ -30,26 +31,24 @@ final class CourseTests: XCTestCase {
         XCTAssertEqual(course.id, decoded.id)
         XCTAssertEqual(course.name, decoded.name)
         XCTAssertEqual(course.location.city, "Broomfield")
+        XCTAssertEqual(course.location.address, "4380 W 144th Ave")
+        XCTAssertEqual(course.location.country, "US")
         XCTAssertEqual(course.tees.count, 2)
         XCTAssertEqual(course.holes.count, 1)
     }
 
     func testEmptyCourse() {
         let course = Course(
-            id: "test",
             name: "Test Course",
             location: CourseLocation(
+                address: "",
                 city: "Denver",
                 state: "CO",
+                country: "",
                 coordinate: Coordinate(latitude: 39.0, longitude: -105.0)
             )
         )
         XCTAssertTrue(course.tees.isEmpty)
         XCTAssertTrue(course.holes.isEmpty)
-    }
-
-    func testGenerateID() {
-        let id = Course.generateID(name: "The Broadlands Golf Course", city: "Broomfield", state: "CO")
-        XCTAssertEqual(id, "the-broadlands-golf-course-broomfield-co")
     }
 }

@@ -119,7 +119,7 @@ enum ScorecardOCR {
             let hole = Hole(
                 number: i + 1,
                 par: par,
-                handicap: handicap,
+                maleHandicap: handicap,
                 yardages: yardages
             )
             holes.append(hole)

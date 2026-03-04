@@ -10,23 +10,55 @@ struct MapEditorView: View {
     @State private var selectedHole: Int = 1
     @State private var selectedPinID: UUID?
     @State private var mapPosition: MapCameraPosition = .automatic
-    @State private var isDetecting = false
+    @State private var mapStyle: MapStyle = .standard
+    @State private var activeTool: ToolMode = .select
     @State private var statusMessage = ""
+    @State private var toolClickIndex: Int = 0
+    @FocusState private var isMapFocused: Bool
 
     var body: some View {
-        HSplitView {
-            holeSidebar
-                .frame(minWidth: 180, maxWidth: 220)
+        VStack(spacing: 0) {
+            toolbar
+            Divider()
 
-            VStack(spacing: 0) {
-                toolbar
-                mapArea
-                statusBar
+            HSplitView {
+                holeSidebar
+                    .frame(minWidth: 180, maxWidth: 220)
+
+                VStack(spacing: 0) {
+                    mapArea
+                    statusBar
+                }
+
+                inspectorPanel
+                    .frame(minWidth: 240, maxWidth: 300)
             }
         }
+        .focusable()
+        .focused($isMapFocused)
+        .onKeyPress(characters: CharacterSet(charactersIn: "stgbw")) { press in
+            if let mode = ToolMode.allCases.first(where: { $0.shortcutKey == press.characters.first }) {
+                activeTool = mode
+                toolClickIndex = 0
+                return .handled
+            }
+            return .ignored
+        }
+        .onKeyPress(.delete) {
+            deleteSelectedPin()
+            return .handled
+        }
+        .navigationTitle("\(course.name) — \(course.location.city), \(course.location.state)")
         .onAppear {
+            if let latest = store.courses.first(where: { $0.id == course.id }) {
+                course = latest
+            }
             loadPinsFromCourse()
             centerMapOnCourse()
+            isMapFocused = true
+        }
+        .onChange(of: pins) {
+            saveCourse()
         }
     }
 
@@ -70,6 +102,7 @@ struct MapEditorView: View {
                     List(holePins) { pin in
                         Button {
                             selectedPinID = pin.id
+                            activeTool = .select
                         } label: {
                             HStack {
                                 Circle()
@@ -96,26 +129,46 @@ struct MapEditorView: View {
     // MARK: - Toolbar
 
     private var toolbar: some View {
-        HStack {
-            Text(course.name)
-                .font(.title3.bold())
+        HStack(spacing: 12) {
+            // Tool picker (left)
+            HStack(spacing: 2) {
+                ForEach(ToolMode.allCases, id: \.self) { mode in
+                    Button {
+                        activeTool = mode
+                        toolClickIndex = 0
+                        isMapFocused = true
+                    } label: {
+                        VStack(spacing: 1) {
+                            Image(systemName: mode.systemImage)
+                                .font(.system(size: 14))
+                            Text(String(mode.shortcutKey))
+                                .font(.system(size: 9, design: .monospaced))
+                                .foregroundStyle(.secondary)
+                        }
+                        .frame(width: 36, height: 36)
+                        .background(activeTool == mode ? Color.accentColor.opacity(0.2) : Color.clear)
+                        .cornerRadius(6)
+                        .overlay(
+                            RoundedRectangle(cornerRadius: 6)
+                                .stroke(activeTool == mode ? Color.accentColor : Color.clear, lineWidth: 1)
+                        )
+                    }
+                    .buttonStyle(.plain)
+                }
+            }
 
             Spacer()
 
-            distanceReadout
+            // Course name + distance (center)
+            VStack(spacing: 2) {
+                Text(course.name)
+                    .font(.caption.bold())
+                distanceReadout
+            }
 
             Spacer()
 
-            Button("Auto-Detect") {
-                runAutoDetect()
-            }
-            .disabled(isDetecting)
-
-            if isDetecting {
-                ProgressView()
-                    .scaleEffect(0.7)
-            }
-
+            // Export/Save (right)
             Button("Export JSON...") {
                 exportJSON()
             }
@@ -125,7 +178,7 @@ struct MapEditorView: View {
             }
         }
         .padding(.horizontal)
-        .padding(.vertical, 8)
+        .padding(.vertical, 6)
     }
 
     // MARK: - Distance Readout
@@ -171,13 +224,44 @@ struct MapEditorView: View {
                     }
                 }
             }
-            .mapStyle(.imagery(elevation: .realistic))
-            .onTapGesture(count: 2) { position in
-                if let coord = proxy.convert(position, from: .local) {
-                    addNewPin(at: Coordinate(coord))
-                }
+            .mapStyle(mapStyle)
+            .mapControls {
+                MapZoomStepper()
+                MapPitchToggle()
+            }
+            .overlay {
+                // Transparent overlay for placement tool taps
+                Color.clear
+                    .contentShape(Rectangle())
+                    .allowsHitTesting(activeTool != .select)
+                    .gesture(
+                        SpatialTapGesture()
+                            .onEnded { tap in
+                                if let coord = proxy.convert(tap.location, from: .local) {
+                                    placePin(at: Coordinate(coord))
+                                }
+                            }
+                    )
+            }
+            .overlay(alignment: .topTrailing) {
+                mapStylePicker
+                    .padding(8)
             }
         }
+    }
+
+    private var mapStylePicker: some View {
+        Menu {
+            Button("Satellite") { mapStyle = .imagery(elevation: .realistic) }
+            Button("Hybrid") { mapStyle = .hybrid(elevation: .realistic) }
+            Button("Standard") { mapStyle = .standard }
+        } label: {
+            Image(systemName: "map")
+                .padding(8)
+                .background(.regularMaterial, in: RoundedRectangle(cornerRadius: 8))
+        }
+        .menuStyle(.borderlessButton)
+        .fixedSize()
     }
 
     private func pinMarker(for pin: EditablePin) -> some View {
@@ -188,6 +272,7 @@ struct MapEditorView: View {
             .shadow(radius: 2)
             .onTapGesture {
                 selectedPinID = pin.id
+                activeTool = .select
             }
     }
 
@@ -195,34 +280,104 @@ struct MapEditorView: View {
         pins.filter { $0.holeNumber == selectedHole }
     }
 
-    // MARK: - Pin Inspector (right side)
+    // MARK: - Inspector Panel
 
-    // Using a popover anchored to the selected pin in the sidebar instead of a floating panel
-    // This is handled via the sidebar pin selection — when selectedPinID is set, we show the editor
+    private var inspectorPanel: some View {
+        VStack(alignment: .leading, spacing: 0) {
+            Text("Inspector")
+                .font(.headline)
+                .padding()
 
-    // MARK: - Status Bar
+            Divider()
 
-    private var statusBar: some View {
-        HStack {
             if let selectedPinID, let index = pins.firstIndex(where: { $0.id == selectedPinID }) {
                 PinEditorView(
                     pin: $pins[index],
                     teeNames: course.tees.map(\.name),
                     onDelete: {
-                        pins.remove(at: index)
-                        self.selectedPinID = nil
+                        deletePin(at: index)
                     }
                 )
+                .frame(maxHeight: .infinity, alignment: .top)
             } else {
-                Text(statusMessage.isEmpty ? "Double-click map to place a pin" : statusMessage)
-                    .font(.caption)
-                    .foregroundStyle(.secondary)
-                    .frame(maxWidth: .infinity, alignment: .leading)
-                    .padding(.horizontal)
-                    .padding(.vertical, 8)
+                VStack(spacing: 8) {
+                    Image(systemName: "mappin.slash")
+                        .font(.largeTitle)
+                        .foregroundStyle(.quaternary)
+                    Text("No pin selected")
+                        .font(.subheadline)
+                        .foregroundStyle(.secondary)
+                    Text(activeTool != .select
+                         ? "Click map to place \(activeTool.rawValue.lowercased()) pin"
+                         : "Click a pin to select it")
+                        .font(.caption)
+                        .foregroundStyle(.tertiary)
+                }
+                .frame(maxWidth: .infinity, maxHeight: .infinity)
             }
         }
         .background(Color(.windowBackgroundColor))
+    }
+
+    // MARK: - Status Bar
+
+    private var statusBar: some View {
+        HStack(spacing: 12) {
+            // Active tool indicator
+            HStack(spacing: 4) {
+                Image(systemName: activeTool.systemImage)
+                    .font(.caption)
+                Text(activeTool.rawValue)
+                    .font(.caption.bold())
+                Text("(\(String(activeTool.shortcutKey)))")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+            }
+
+            Divider()
+                .frame(height: 12)
+
+            // Tool hint
+            Text(toolHint)
+                .font(.caption)
+                .foregroundStyle(.secondary)
+
+            Spacer()
+
+            // Status message
+            if !statusMessage.isEmpty {
+                Text(statusMessage)
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+            }
+
+            // Hole + pin count
+            Text("Hole \(selectedHole)")
+                .font(.caption)
+            Text("\(pinsForCurrentHole.count) pins")
+                .font(.caption)
+                .foregroundStyle(.secondary)
+        }
+        .padding(.horizontal)
+        .padding(.vertical, 6)
+        .background(Color(.windowBackgroundColor))
+    }
+
+    private var toolHint: String {
+        switch activeTool {
+        case .select: "Click pin to select | Delete to remove"
+        case .tee: "Click map to place tee"
+        case .green:
+            switch toolClickIndex {
+            case 0: "Click map: green front"
+            case 1: "Click map: green middle"
+            default: "Click map: green back"
+            }
+        case .bunker:
+            toolClickIndex == 0 ? "Click map: bunker front" : "Click map: bunker back"
+        case .water:
+            toolClickIndex == 0 ? "Click map: water front" : "Click map: water back"
+        }
     }
 
     // MARK: - Pin Colors
@@ -242,16 +397,58 @@ struct MapEditorView: View {
 
     // MARK: - Pin Management
 
-    private func addNewPin(at coordinate: Coordinate) {
+    private func placePin(at coordinate: Coordinate) {
+        let pinType = pinTypeForCurrentClick()
         let pin = EditablePin(
             id: UUID(),
-            pinType: .tee,
+            pinType: pinType,
             coordinate: coordinate,
-            teeName: course.tees.first?.name,
+            teeName: pinType == .tee ? course.tees.first?.name : nil,
             holeNumber: selectedHole
         )
         pins.append(pin)
         selectedPinID = pin.id
+        toolClickIndex += 1
+
+        // Reset click index when sequence is complete
+        switch activeTool {
+        case .green:
+            if toolClickIndex >= 3 { toolClickIndex = 0 }
+        case .bunker, .water:
+            if toolClickIndex >= 2 { toolClickIndex = 0 }
+        default:
+            toolClickIndex = 0
+        }
+    }
+
+    private func pinTypeForCurrentClick() -> PinType {
+        switch activeTool {
+        case .select:
+            return .tee
+        case .tee:
+            return .tee
+        case .green:
+            switch toolClickIndex {
+            case 0: return .greenFront
+            case 1: return .greenMiddle
+            default: return .greenBack
+            }
+        case .bunker:
+            return toolClickIndex == 0 ? .bunkerFront : .bunkerBack
+        case .water:
+            return toolClickIndex == 0 ? .waterFront : .waterBack
+        }
+    }
+
+    private func deleteSelectedPin() {
+        guard let selectedPinID,
+              let index = pins.firstIndex(where: { $0.id == selectedPinID }) else { return }
+        deletePin(at: index)
+    }
+
+    private func deletePin(at index: Int) {
+        pins.remove(at: index)
+        selectedPinID = nil
     }
 
     // MARK: - Load Pins from Course
@@ -387,52 +584,9 @@ struct MapEditorView: View {
         if coord.latitude != 0 || coord.longitude != 0 {
             let region = MKCoordinateRegion(
                 center: coord.clCoordinate,
-                span: MKCoordinateSpan(latitudeDelta: 0.01, longitudeDelta: 0.01)
+                span: MKCoordinateSpan(latitudeDelta: 0.004, longitudeDelta: 0.004)
             )
             mapPosition = .region(region)
-        }
-    }
-
-    // MARK: - Auto-Detect
-
-    private func runAutoDetect() {
-        isDetecting = true
-        statusMessage = "Detecting features..."
-
-        Task {
-            do {
-                let coord = course.location.coordinate
-                let region = MKCoordinateRegion(
-                    center: coord.clCoordinate,
-                    span: MKCoordinateSpan(latitudeDelta: 0.005, longitudeDelta: 0.005)
-                )
-                let detector = FeatureDetector()
-                let detected = try await detector.detect(in: region)
-
-                for feature in detected {
-                    let pinType: PinType
-                    switch feature.kind {
-                    case .green:
-                        pinType = .greenMiddle
-                    case .teeBox:
-                        pinType = .tee
-                    }
-
-                    let pin = EditablePin(
-                        id: UUID(),
-                        pinType: pinType,
-                        coordinate: feature.coordinate,
-                        teeName: pinType == .tee ? course.tees.first?.name : nil,
-                        holeNumber: selectedHole
-                    )
-                    pins.append(pin)
-                }
-
-                statusMessage = "Detected \(detected.count) features"
-            } catch {
-                statusMessage = "Detection failed: \(error.localizedDescription)"
-            }
-            isDetecting = false
         }
     }
 

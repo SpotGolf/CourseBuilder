@@ -22,10 +22,17 @@ struct CourseListView: View {
                 }
             }
             .navigationTitle("Courses")
-            .toolbar {
-                Button("New Course") {
+            .safeAreaInset(edge: .bottom) {
+                Button {
                     showNewCourse = true
+                } label: {
+                    Image(systemName: "plus")
+                        .frame(maxWidth: .infinity)
+                        .padding(.vertical, 6)
                 }
+                .buttonStyle(.borderless)
+                .padding(.horizontal, 12)
+                .padding(.bottom, 8)
             }
         } detail: {
             if let course = selectedCourse {
@@ -67,14 +74,15 @@ struct NewCourseSheet: View {
                     .keyboardShortcut(.cancelAction)
                 Button("Create") {
                     let course = Course(
-                        id: Course.generateID(name: name, city: city, state: state),
                         name: name,
                         location: CourseLocation(
+                            address: "",
                             city: city,
                             state: state,
+                            country: "",
                             coordinate: Coordinate(latitude: 0, longitude: 0)
                         ),
-                        holes: (1...18).map { Hole(number: $0, par: 4, handicap: $0) }
+                        holes: (1...18).map { Hole(number: $0, par: 4) }
                     )
                     onCreate(course)
                 }

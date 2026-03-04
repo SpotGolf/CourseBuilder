@@ -19,7 +19,7 @@ final class ScorecardScraperTests: XCTestCase {
         let result = try ScorecardScraper.parseGolfLink(html: html)
         XCTAssertEqual(result.holes.count, 3)
         XCTAssertEqual(result.holes[0].par, 4)
-        XCTAssertEqual(result.holes[0].handicap, 13)
+        XCTAssertEqual(result.holes[0].maleHandicap, 13)
         XCTAssertEqual(result.holes[0].yardages["Black"], 401)
         XCTAssertEqual(result.holes[0].yardages["Gold"], 378)
         XCTAssertEqual(result.holes[1].par, 5)

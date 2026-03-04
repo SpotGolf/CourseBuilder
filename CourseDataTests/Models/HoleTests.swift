@@ -31,7 +31,7 @@ final class HoleTests: XCTestCase {
         let hole = Hole(
             number: 1,
             par: 4,
-            handicap: 13,
+            maleHandicap: 13,
             yardages: ["Black": 401, "Gold": 378],
             tees: [
                 "Black": Coordinate(latitude: 39.9401, longitude: -105.0271),
@@ -61,7 +61,7 @@ final class HoleTests: XCTestCase {
     }
 
     func testEmptyHole() {
-        let hole = Hole(number: 5, par: 3, handicap: 7)
+        let hole = Hole(number: 5, par: 3, maleHandicap: 7)
         XCTAssertTrue(hole.yardages.isEmpty)
         XCTAssertTrue(hole.tees.isEmpty)
         XCTAssertNil(hole.green)

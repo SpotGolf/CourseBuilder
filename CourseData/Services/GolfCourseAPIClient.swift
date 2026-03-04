@@ -1,4 +1,7 @@
 import Foundation
+import os
+
+private let logger = Logger(subsystem: "com.spotgolf.CourseData", category: "GolfCourseAPI")
 
 actor GolfCourseAPIClient {
     // MARK: - Configuration
@@ -24,7 +27,7 @@ actor GolfCourseAPIClient {
         let clubName: String
         let courseName: String
         let location: APILocation
-        let holes: Int
+        let holes: Int?
 
         enum CodingKeys: String, CodingKey {
             case id
@@ -41,6 +44,8 @@ actor GolfCourseAPIClient {
         let state: String
         let country: String?
         let zipCode: String?
+        let latitude: Double?
+        let longitude: Double?
 
         enum CodingKeys: String, CodingKey {
             case address
@@ -48,16 +53,24 @@ actor GolfCourseAPIClient {
             case state
             case country
             case zipCode = "zip_code"
+            case latitude
+            case longitude
         }
     }
 
+    struct CourseDetailResponse: Codable {
+        let course: CourseDetail
+    }
+
     struct CourseDetail: Codable {
+        let id: Int?
         let courseName: String
         let clubName: String
         let location: APILocation
         let tees: TeeSets
 
         enum CodingKeys: String, CodingKey {
+            case id
             case courseName = "course_name"
             case clubName = "club_name"
             case location
@@ -76,6 +89,10 @@ actor GolfCourseAPIClient {
         let slopeRating: Int?
         let totalYards: Int?
         let parTotal: Int?
+        let frontCourseRating: Double?
+        let frontSlopeRating: Int?
+        let backCourseRating: Double?
+        let backSlopeRating: Int?
         let holes: [APIHole]
 
         enum CodingKeys: String, CodingKey {
@@ -84,89 +101,128 @@ actor GolfCourseAPIClient {
             case slopeRating = "slope_rating"
             case totalYards = "total_yards"
             case parTotal = "par_total"
+            case frontCourseRating = "front_course_rating"
+            case frontSlopeRating = "front_slope_rating"
+            case backCourseRating = "back_course_rating"
+            case backSlopeRating = "back_slope_rating"
             case holes
         }
     }
 
     struct APIHole: Codable {
-        let holeNumber: Int
         let par: Int
         let yardage: Int
         let handicap: Int
-
-        enum CodingKeys: String, CodingKey {
-            case holeNumber = "hole_number"
-            case par
-            case yardage
-            case handicap
-        }
     }
 
     // MARK: - Network Methods
 
     func search(query: String) async throws -> SearchResponse {
-        var components = URLComponents(url: baseURL.appendingPathComponent("courses/search"), resolvingAgainstBaseURL: false)!
+        var components = URLComponents(url: baseURL.appendingPathComponent("search"), resolvingAgainstBaseURL: false)!
         components.queryItems = [URLQueryItem(name: "search_query", value: query)]
 
         var request = URLRequest(url: components.url!)
-        request.setValue(apiKey, forHTTPHeaderField: "Authorization")
+        request.setValue("Key \(apiKey)", forHTTPHeaderField: "Authorization")
 
-        let (data, _) = try await session.data(for: request)
-        return try JSONDecoder().decode(SearchResponse.self, from: data)
+        logger.debug("Search request: \(request.httpMethod ?? "GET", privacy: .public) \(request.url?.absoluteString ?? "nil", privacy: .public)")
+
+        let (data, response) = try await session.data(for: request)
+
+        if let httpResponse = response as? HTTPURLResponse {
+            logger.debug("Search response status: \(httpResponse.statusCode, privacy: .public)")
+        }
+        let bodyString = String(data: data, encoding: .utf8) ?? "<non-utf8>"
+        logger.debug("Search response body: \(bodyString, privacy: .public)")
+
+        do {
+            return try JSONDecoder().decode(SearchResponse.self, from: data)
+        } catch {
+            logger.error("Search decode failed: \(error, privacy: .public)\nBody: \(bodyString, privacy: .public)")
+            throw error
+        }
     }
 
     func fetchCourse(id: Int) async throws -> CourseDetail {
         let url = baseURL.appendingPathComponent("courses/\(id)")
 
         var request = URLRequest(url: url)
-        request.setValue(apiKey, forHTTPHeaderField: "Authorization")
+        request.setValue("Key \(apiKey)", forHTTPHeaderField: "Authorization")
 
-        let (data, _) = try await session.data(for: request)
-        return try JSONDecoder().decode(CourseDetail.self, from: data)
+        logger.debug("FetchCourse request: \(request.httpMethod ?? "GET", privacy: .public) \(request.url?.absoluteString ?? "nil", privacy: .public)")
+
+        let (data, response) = try await session.data(for: request)
+
+        if let httpResponse = response as? HTTPURLResponse {
+            logger.debug("FetchCourse response status: \(httpResponse.statusCode, privacy: .public)")
+        }
+        let bodyString = String(data: data, encoding: .utf8) ?? "<non-utf8>"
+        logger.debug("FetchCourse response body: \(bodyString, privacy: .public)")
+        print("[GolfCourseAPI] FetchCourse response body: \(bodyString)")
+
+        do {
+            let wrapper = try JSONDecoder().decode(CourseDetailResponse.self, from: data)
+            return wrapper.course
+        } catch {
+            logger.error("FetchCourse decode failed: \(error, privacy: .public)\nBody: \(bodyString, privacy: .public)")
+            throw error
+        }
     }
 
     // MARK: - Conversion
 
     static func convertToCourse(detail: CourseDetail) -> Course {
         let location = CourseLocation(
+            address: detail.location.address ?? "",
             city: detail.location.city,
             state: detail.location.state,
-            coordinate: Coordinate(latitude: 0, longitude: 0)
+            country: detail.location.country ?? "",
+            coordinate: Coordinate(
+                latitude: detail.location.latitude ?? 0,
+                longitude: detail.location.longitude ?? 0
+            )
         )
 
-        let courseID = Course.generateID(
-            name: detail.courseName,
-            city: detail.location.city,
-            state: detail.location.state
-        )
-
-        // Build tee definitions — male first, then female
-        var teeDefinitions: [TeeDefinition] = []
+        // Build tee definitions, merging male/female by name
+        var teeMap: [String: TeeDefinition] = [:]
 
         // Collect all hole data grouped by hole number
-        // Key: hole number, Value: (par, handicap, yardages dict)
-        var holeDataMap: [Int: (par: Int, handicap: Int, yardages: [String: Int])] = [:]
+        var holeDataMap: [Int: (par: Int, maleHandicap: Int, femaleHandicap: Int, yardages: [String: Int])] = [:]
 
         // Process male tees
         if let maleTees = detail.tees.male {
             for teeSet in maleTees {
-                let teeDef = TeeDefinition(
-                    name: teeSet.teeName,
-                    color: defaultColor(for: teeSet.teeName),
-                    gender: .male,
-                    rating: teeSet.courseRating,
-                    slope: teeSet.slopeRating
+                let info = TeeInformation(
+                    courseRating: teeSet.courseRating,
+                    slopeRating: teeSet.slopeRating,
+                    frontCourseRating: teeSet.frontCourseRating,
+                    frontSlopeRating: teeSet.frontSlopeRating,
+                    backCourseRating: teeSet.backCourseRating,
+                    backSlopeRating: teeSet.backSlopeRating,
+                    totalYards: teeSet.totalYards,
+                    parTotal: teeSet.parTotal
                 )
-                teeDefinitions.append(teeDef)
+                if var existing = teeMap[teeSet.teeName] {
+                    existing.male = info
+                    teeMap[teeSet.teeName] = existing
+                } else {
+                    teeMap[teeSet.teeName] = TeeDefinition(
+                        name: teeSet.teeName,
+                        color: defaultColor(for: teeSet.teeName),
+                        male: info
+                    )
+                }
 
-                for hole in teeSet.holes {
-                    if var existing = holeDataMap[hole.holeNumber] {
+                for (index, hole) in teeSet.holes.enumerated() {
+                    let holeNumber = index + 1
+                    if var existing = holeDataMap[holeNumber] {
                         existing.yardages[teeSet.teeName] = hole.yardage
-                        holeDataMap[hole.holeNumber] = existing
+                        existing.maleHandicap = hole.handicap
+                        holeDataMap[holeNumber] = existing
                     } else {
-                        holeDataMap[hole.holeNumber] = (
+                        holeDataMap[holeNumber] = (
                             par: hole.par,
-                            handicap: hole.handicap,
+                            maleHandicap: hole.handicap,
+                            femaleHandicap: 0,
                             yardages: [teeSet.teeName: hole.yardage]
                         )
                     }
@@ -177,23 +233,38 @@ actor GolfCourseAPIClient {
         // Process female tees
         if let femaleTees = detail.tees.female {
             for teeSet in femaleTees {
-                let teeDef = TeeDefinition(
-                    name: teeSet.teeName,
-                    color: defaultColor(for: teeSet.teeName),
-                    gender: .female,
-                    rating: teeSet.courseRating,
-                    slope: teeSet.slopeRating
+                let info = TeeInformation(
+                    courseRating: teeSet.courseRating,
+                    slopeRating: teeSet.slopeRating,
+                    frontCourseRating: teeSet.frontCourseRating,
+                    frontSlopeRating: teeSet.frontSlopeRating,
+                    backCourseRating: teeSet.backCourseRating,
+                    backSlopeRating: teeSet.backSlopeRating,
+                    totalYards: teeSet.totalYards,
+                    parTotal: teeSet.parTotal
                 )
-                teeDefinitions.append(teeDef)
+                if var existing = teeMap[teeSet.teeName] {
+                    existing.female = info
+                    teeMap[teeSet.teeName] = existing
+                } else {
+                    teeMap[teeSet.teeName] = TeeDefinition(
+                        name: teeSet.teeName,
+                        color: defaultColor(for: teeSet.teeName),
+                        female: info
+                    )
+                }
 
-                for hole in teeSet.holes {
-                    if var existing = holeDataMap[hole.holeNumber] {
+                for (index, hole) in teeSet.holes.enumerated() {
+                    let holeNumber = index + 1
+                    if var existing = holeDataMap[holeNumber] {
                         existing.yardages[teeSet.teeName] = hole.yardage
-                        holeDataMap[hole.holeNumber] = existing
+                        existing.femaleHandicap = hole.handicap
+                        holeDataMap[holeNumber] = existing
                     } else {
-                        holeDataMap[hole.holeNumber] = (
+                        holeDataMap[holeNumber] = (
                             par: hole.par,
-                            handicap: hole.handicap,
+                            maleHandicap: 0,
+                            femaleHandicap: hole.handicap,
                             yardages: [teeSet.teeName: hole.yardage]
                         )
                     }
@@ -201,20 +272,24 @@ actor GolfCourseAPIClient {
             }
         }
 
+        let teeDefinitions = Array(teeMap.values)
+
         // Build holes sorted by hole number
         let holes = holeDataMap.keys.sorted().map { number -> Hole in
             let data = holeDataMap[number]!
             return Hole(
                 number: number,
                 par: data.par,
-                handicap: data.handicap,
+                maleHandicap: data.maleHandicap,
+                femaleHandicap: data.femaleHandicap,
                 yardages: data.yardages
             )
         }
 
         return Course(
-            id: courseID,
             name: detail.courseName,
+            clubName: detail.clubName,
+            golfCourseAPIId: detail.id,
             location: location,
             tees: teeDefinitions,
             holes: holes

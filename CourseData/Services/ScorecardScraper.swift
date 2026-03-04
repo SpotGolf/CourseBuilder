@@ -98,7 +98,7 @@ enum ScorecardScraper {
             let hole = Hole(
                 number: holeNum,
                 par: parByHole[holeNum] ?? 0,
-                handicap: handicapByHole[holeNum] ?? 0,
+                maleHandicap: handicapByHole[holeNum] ?? 0,
                 yardages: yardagesByHole[holeNum] ?? [:]
             )
             holes.append(hole)

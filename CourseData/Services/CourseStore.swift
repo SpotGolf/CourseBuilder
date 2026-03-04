@@ -29,7 +29,7 @@ class CourseStore: ObservableObject {
         }
     }
 
-    func load(id: String) throws -> Course? {
+    func load(id: UUID) throws -> Course? {
         let fileURL = directory.appendingPathComponent("\(id).json")
         guard FileManager.default.fileExists(atPath: fileURL.path) else { return nil }
         let data = try Data(contentsOf: fileURL)
@@ -45,7 +45,7 @@ class CourseStore: ObservableObject {
         }
     }
 
-    func delete(id: String) throws {
+    func delete(id: UUID) throws {
         let fileURL = directory.appendingPathComponent("\(id).json")
         try FileManager.default.removeItem(at: fileURL)
         courses.removeAll { $0.id == id }

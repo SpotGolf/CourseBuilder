@@ -8,7 +8,10 @@ struct ScorecardImportView: View {
     @State private var isImporting = false
     @State private var statusMessage = ""
     @State private var showImagePicker = false
-    @State private var navigateToMap = false
+    @State private var showAPIKeyAlert = false
+    @Environment(\.openWindow) private var openWindow
+    @State private var searchResults: [GolfCourseAPIClient.CourseSearchResult] = []
+    @AppStorage("golfCourseAPIKey") private var apiKey: String = ""
 
     var body: some View {
         VStack(spacing: 0) {
@@ -18,7 +21,7 @@ struct ScorecardImportView: View {
                     .font(.title2.bold())
                 Spacer()
                 Button("Open Map Editor") {
-                    navigateToMap = true
+                    openWindow(id: "map-editor", value: course.id)
                 }
                 .disabled(course.holes.isEmpty)
             }
@@ -49,6 +52,24 @@ struct ScorecardImportView: View {
                     .padding(.horizontal)
             }
 
+            if !searchResults.isEmpty {
+                List(searchResults, id: \.id) { result in
+                    Button {
+                        selectSearchResult(result)
+                    } label: {
+                        VStack(alignment: .leading) {
+                            Text(result.courseName)
+                                .font(.headline)
+                            Text("\(result.clubName) — \(result.location.city), \(result.location.state)")
+                                .font(.caption)
+                                .foregroundStyle(.secondary)
+                        }
+                    }
+                    .buttonStyle(.plain)
+                }
+                .frame(maxHeight: 150)
+            }
+
             Divider()
 
             // Scorecard table
@@ -71,26 +92,57 @@ struct ScorecardImportView: View {
                 importFromImage(url: url)
             }
         }
-        .sheet(isPresented: $navigateToMap) {
-            MapEditorView(course: course)
-                .environmentObject(store)
-                .frame(minWidth: 900, minHeight: 600)
+        .alert("API Key Required", isPresented: $showAPIKeyAlert) {
+            SettingsLink {
+                Text("Open Settings")
+            }
+            Button("Cancel", role: .cancel) {}
+        } message: {
+            Text("Please add your GolfCourseAPI key in Settings (⌘,) before searching.")
+        }
+        .onAppear {
+            if let latest = store.courses.first(where: { $0.id == course.id }) {
+                course = latest
+            }
         }
     }
 
     private func importFromAPI() {
+        guard !apiKey.isEmpty else {
+            showAPIKeyAlert = true
+            return
+        }
         isImporting = true
         statusMessage = "Searching..."
+        searchResults = []
         Task {
             do {
-                let importer = ScorecardImporter(apiKey: apiKey)
-                let imported = try await importer.importScorecard(
-                    courseName: searchQuery.isEmpty ? course.name : searchQuery,
-                    city: course.location.city,
-                    state: course.location.state
-                )
+                let client = GolfCourseAPIClient(apiKey: apiKey)
+                let response = try await client.search(query: searchQuery.isEmpty ? course.name : searchQuery)
+                searchResults = response.courses
+                statusMessage = "Found \(response.courses.count) result(s)"
+            } catch {
+                statusMessage = "Search failed: \(error.localizedDescription)"
+            }
+            isImporting = false
+        }
+    }
+
+    private func selectSearchResult(_ result: GolfCourseAPIClient.CourseSearchResult) {
+        isImporting = true
+        statusMessage = "Fetching scorecard data..."
+        Task {
+            do {
+                let client = GolfCourseAPIClient(apiKey: apiKey)
+                let detail = try await client.fetchCourse(id: result.id)
+                let imported = GolfCourseAPIClient.convertToCourse(detail: detail)
                 course.tees = imported.tees
                 course.holes = imported.holes
+                course.location = imported.location
+                course.clubName = imported.clubName
+                course.golfCourseAPIId = imported.golfCourseAPIId
+                try? store.save(course)
+                searchResults = []
                 statusMessage = "Imported \(imported.holes.count) holes with \(imported.tees.count) tee sets"
             } catch {
                 statusMessage = "Import failed: \(error.localizedDescription)"
@@ -126,9 +178,6 @@ struct ScorecardImportView: View {
         }
     }
 
-    private var apiKey: String? {
-        ProcessInfo.processInfo.environment["GOLF_COURSE_API_KEY"]
-    }
 }
 
 // MARK: - ScorecardTableView
@@ -143,9 +192,21 @@ struct ScorecardTableView: View {
                 GridRow {
                     Text("Hole").bold().frame(width: 50)
                     Text("Par").bold().frame(width: 40)
-                    Text("Hdcp").bold().frame(width: 40)
+                    Text("M Hcp").bold().frame(width: 45)
+                    Text("F Hcp").bold().frame(width: 45)
                     ForEach(course.tees) { tee in
-                        Text(tee.name).bold().frame(width: 60)
+                        VStack(spacing: 2) {
+                            Text(tee.name).bold()
+                            Button {
+                                deleteTee(id: tee.id)
+                            } label: {
+                                Image(systemName: "xmark.circle.fill")
+                                    .foregroundStyle(.secondary)
+                                    .font(.caption2)
+                            }
+                            .buttonStyle(.plain)
+                        }
+                        .frame(width: 60)
                     }
                 }
                 Divider()
@@ -156,8 +217,11 @@ struct ScorecardTableView: View {
                         TextField("", value: $hole.par, format: .number)
                             .frame(width: 40)
                             .textFieldStyle(.roundedBorder)
-                        TextField("", value: $hole.handicap, format: .number)
-                            .frame(width: 40)
+                        TextField("", value: $hole.maleHandicap, format: .number)
+                            .frame(width: 45)
+                            .textFieldStyle(.roundedBorder)
+                        TextField("", value: $hole.femaleHandicap, format: .number)
+                            .frame(width: 45)
                             .textFieldStyle(.roundedBorder)
                         ForEach(course.tees) { tee in
                             let binding = Binding(
@@ -172,6 +236,13 @@ struct ScorecardTableView: View {
                 }
             }
             .padding()
+        }
+    }
+
+    private func deleteTee(id: String) {
+        course.tees.removeAll { $0.id == id }
+        for i in course.holes.indices {
+            course.holes[i].yardages.removeValue(forKey: id)
         }
     }
 }

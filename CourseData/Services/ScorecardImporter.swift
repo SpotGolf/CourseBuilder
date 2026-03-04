@@ -42,7 +42,7 @@ class ScorecardImporter: ObservableObject {
         if let apiClient {
             do {
                 status = "Searching GolfCourseAPI.com..."
-                let response = try await apiClient.search(query: "\(courseName) \(city) \(state)")
+                let response = try await apiClient.search(query: courseName)
                 if let match = response.courses.first {
                     status = "Fetching scorecard data..."
                     let detail = try await apiClient.fetchCourse(id: match.id)
@@ -82,11 +82,10 @@ class ScorecardImporter: ObservableObject {
 
     /// Create an empty course shell for manual entry
     func createManualCourse(name: String, city: String, state: String, holeCount: Int = 18) -> Course {
-        let holes = (1...holeCount).map { Hole(number: $0, par: 4, handicap: $0) }
+        let holes = (1...holeCount).map { Hole(number: $0, par: 4) }
         return Course(
-            id: Course.generateID(name: name, city: city, state: state),
             name: name,
-            location: CourseLocation(city: city, state: state, coordinate: Coordinate(latitude: 0, longitude: 0)),
+            location: CourseLocation(address: "", city: city, state: state, country: "", coordinate: Coordinate(latitude: 0, longitude: 0)),
             holes: holes
         )
     }
@@ -95,14 +94,12 @@ class ScorecardImporter: ObservableObject {
         let tees = data.teeNames.map { teeName in
             TeeDefinition(
                 name: teeName,
-                color: defaultColor(for: teeName),
-                gender: .male
+                color: defaultColor(for: teeName)
             )
         }
         return Course(
-            id: Course.generateID(name: name, city: city, state: state),
             name: name,
-            location: CourseLocation(city: city, state: state, coordinate: Coordinate(latitude: 0, longitude: 0)),
+            location: CourseLocation(address: "", city: city, state: state, country: "", coordinate: Coordinate(latitude: 0, longitude: 0)),
             tees: tees,
             holes: data.holes
         )

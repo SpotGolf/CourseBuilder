@@ -32,6 +32,10 @@ Course search (MapKit) -> Scorecard import (API/scraping/OCR) -> Feature detecti
 
 One JSON file per course. Holes contain: tees (keyed by name), green (front/middle/back), features (bunker/water with front/back). See `plans/2026-03-02-course-data-design.md` for full schema.
 
+## Git
+
+Default branch is `main`.
+
 ## Environment
 
-Set `GOLF_COURSE_API_KEY` environment variable for GolfCourseAPI.com access.
+GolfCourseAPI.com key is configured in app Settings (Cmd+,).

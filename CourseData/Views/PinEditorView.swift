@@ -1,5 +1,43 @@
 import SwiftUI
 
+enum ToolMode: String, CaseIterable {
+    case select = "Select"
+    case tee = "Tee"
+    case green = "Green"
+    case bunker = "Bunker"
+    case water = "Water"
+
+    var shortcutKey: Character {
+        switch self {
+        case .select: "s"
+        case .tee: "t"
+        case .green: "g"
+        case .bunker: "b"
+        case .water: "w"
+        }
+    }
+
+    var defaultPinType: PinType? {
+        switch self {
+        case .select: nil
+        case .tee: .tee
+        case .green: .greenFront
+        case .bunker: .bunkerFront
+        case .water: .waterFront
+        }
+    }
+
+    var systemImage: String {
+        switch self {
+        case .select: "cursorarrow"
+        case .tee: "figure.golf"
+        case .green: "circle.circle"
+        case .bunker: "square.on.square.dashed"
+        case .water: "drop"
+        }
+    }
+}
+
 enum PinType: String, CaseIterable {
     case tee = "Tee"
     case greenFront = "Green (Front)"
@@ -21,6 +59,10 @@ struct EditablePin: Identifiable, Equatable {
 
     static func == (lhs: EditablePin, rhs: EditablePin) -> Bool {
         lhs.id == rhs.id
+            && lhs.pinType == rhs.pinType
+            && lhs.coordinate == rhs.coordinate
+            && lhs.teeName == rhs.teeName
+            && lhs.holeNumber == rhs.holeNumber
     }
 }
 
@@ -64,6 +106,6 @@ struct PinEditorView: View {
             Button("Delete", role: .destructive, action: onDelete)
         }
         .padding()
-        .frame(width: 250)
+        .frame(maxWidth: .infinity, alignment: .leading)
     }
 }

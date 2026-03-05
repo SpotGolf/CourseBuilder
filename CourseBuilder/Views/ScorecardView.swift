@@ -7,6 +7,7 @@ struct ScorecardView: View {
     @State private var isImporting = false
     @State private var statusMessage = ""
     @State private var showImagePicker = false
+    @State private var saveTask: Task<Void, Never>?
     @Environment(\.openWindow) private var openWindow
 
     var body: some View {
@@ -137,8 +138,13 @@ struct ScorecardView: View {
                 course = latest
             }
         }
-        .onChange(of: course) { _, newValue in
-            try? store.save(newValue)
+        .onChange(of: course) { _, _ in
+            saveTask?.cancel()
+            saveTask = Task {
+                try? await Task.sleep(for: .milliseconds(500))
+                guard !Task.isCancelled else { return }
+                try? store.save(course)
+            }
         }
     }
 

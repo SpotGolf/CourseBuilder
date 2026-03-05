@@ -34,6 +34,7 @@ struct MapEditorView: View {
     @State private var activeTool: ToolMode = .select
     @State private var statusMessage = ""
     @State private var toolClickIndex: Int = 0
+    @State private var saveTask: Task<Void, Never>?
     @State private var isDraggingPin = false
     @State private var dragOffset: CGSize = .zero
     @State private var visibleRegion: MKCoordinateRegion?
@@ -90,7 +91,12 @@ struct MapEditorView: View {
             isMapFocused = true
         }
         .onChange(of: pins) {
-            saveCourse()
+            saveTask?.cancel()
+            saveTask = Task {
+                try? await Task.sleep(for: .milliseconds(500))
+                guard !Task.isCancelled else { return }
+                saveCourse()
+            }
         }
     }
 

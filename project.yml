@@ -19,6 +19,8 @@ targets:
         CODE_SIGN_ENTITLEMENTS: CourseBuilder/Resources/CourseBuilder.entitlements
         ASSETCATALOG_COMPILER_APPICON_NAME: AppIcon
         GENERATE_INFOPLIST_FILE: YES
+        MARKETING_VERSION: "1.0.0"
+        CURRENT_PROJECT_VERSION: "1"
         INFOPLIST_KEY_NSLocationUsageDescription: "CourseBuilder uses your location for course distance verification"
     scheme:
       testTargets:

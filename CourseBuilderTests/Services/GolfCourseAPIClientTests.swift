@@ -170,6 +170,74 @@ final class GolfCourseAPIClientTests: XCTestCase {
         }
     }
 
+    func testExtractSubCourseNamesWithSlash() throws {
+        let json = """
+        {
+            "id": 1,
+            "course_name": "Vista/Canyon",
+            "club_name": "Test Club",
+            "location": { "address": "", "city": "Denver", "state": "CO", "country": "US", "zip_code": "" },
+            "tees": {
+                "male": [{
+                    "tee_name": "Blue",
+                    "course_rating": 72.0, "slope_rating": 130,
+                    "front_course_rating": 36.0, "front_slope_rating": 128,
+                    "back_course_rating": 36.0, "back_slope_rating": 132,
+                    "total_yards": 6800, "par_total": 72,
+                    "holes": [
+                        { "par": 4, "yardage": 400, "handicap": 1 },
+                        { "par": 4, "yardage": 410, "handicap": 2 },
+                        { "par": 4, "yardage": 420, "handicap": 3 },
+                        { "par": 4, "yardage": 430, "handicap": 4 }
+                    ]
+                }],
+                "female": []
+            }
+        }
+        """.data(using: .utf8)!
+
+        let detail = try JSONDecoder().decode(GolfCourseAPIClient.CourseDetail.self, from: json)
+        let course = try GolfCourseAPIClient.convertToCourse(detail: detail)
+
+        XCTAssertEqual(course.subCourses.count, 2)
+        XCTAssertEqual(course.subCourses[0].name, "Vista")
+        XCTAssertEqual(course.subCourses[1].name, "Canyon")
+    }
+
+    func testConvertToCourseMultipleDetails() throws {
+        let makeDetail: (Int, String) -> GolfCourseAPIClient.CourseDetail = { id, name in
+            let json = """
+            {
+                "id": \(id),
+                "course_name": "\(name)",
+                "club_name": "Test Club",
+                "location": { "address": "", "city": "Denver", "state": "CO", "country": "US", "zip_code": "" },
+                "tees": {
+                    "male": [{
+                        "tee_name": "Blue",
+                        "course_rating": 36.0, "slope_rating": 130,
+                        "front_course_rating": 36.0, "front_slope_rating": 128,
+                        "back_course_rating": 36.0, "back_slope_rating": 132,
+                        "total_yards": 3400, "par_total": 36,
+                        "holes": [
+                            { "par": 4, "yardage": 400, "handicap": 1 },
+                            { "par": 3, "yardage": 180, "handicap": 9 }
+                        ]
+                    }],
+                    "female": []
+                }
+            }
+            """.data(using: .utf8)!
+            return try! JSONDecoder().decode(GolfCourseAPIClient.CourseDetail.self, from: json)
+        }
+
+        let details = [makeDetail(1, "Front Nine"), makeDetail(2, "Back Nine")]
+        let course = try GolfCourseAPIClient.convertToCourse(details: details)
+
+        XCTAssertEqual(course.golfCourseAPIIds, [1, 2])
+        XCTAssertFalse(course.subCourses.isEmpty)
+    }
+
     func testConvertToCourseEmptyDetailsThrows() {
         XCTAssertThrowsError(try GolfCourseAPIClient.convertToCourse(details: [])) { error in
             XCTAssertTrue(error is GolfCourseAPIClient.APIError)

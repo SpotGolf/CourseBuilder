@@ -32,9 +32,15 @@ struct SubCourse: Identifiable, Codable, Equatable, Hashable {
 }
 
 struct TeeDefinition: Codable, Equatable, Hashable, Identifiable {
-    var id: String { name }
+    let id: UUID
     var name: String
     var color: String
+
+    init(id: UUID = UUID(), name: String, color: String) {
+        self.id = id
+        self.name = name
+        self.color = color
+    }
 
     static func defaultColor(for teeName: String) -> String {
         switch teeName.lowercased() {

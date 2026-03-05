@@ -17,16 +17,6 @@ enum ToolMode: String, CaseIterable {
         }
     }
 
-    var defaultPinType: PinType? {
-        switch self {
-        case .select: nil
-        case .tee: .tee
-        case .green: .greenFront
-        case .bunker: .bunkerFront
-        case .water: .waterFront
-        }
-    }
-
     var systemImage: String {
         switch self {
         case .select: "cursorarrow"

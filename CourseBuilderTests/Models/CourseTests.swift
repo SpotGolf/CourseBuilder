@@ -55,6 +55,12 @@ final class CourseTests: XCTestCase {
         XCTAssertEqual(TeeDefinition.defaultColor(for: "Unknown"), "#808080")
     }
 
+    func testTeeDefinitionUniqueIds() {
+        let tee1 = TeeDefinition(name: "", color: "#FFFFFF")
+        let tee2 = TeeDefinition(name: "", color: "#000000")
+        XCTAssertNotEqual(tee1.id, tee2.id)
+    }
+
     func testEmptyCourse() {
         let course = Course(
             name: "Test Course",

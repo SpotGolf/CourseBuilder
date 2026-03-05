@@ -70,7 +70,8 @@ struct AddCourseSheet: View {
     @AppStorage("golfCourseAPIKey") private var apiKey: String = ""
     @State private var searchQuery = ""
     @State private var searchResults: [GolfCourseAPIClient.CourseSearchResult] = []
-    @State private var selectedResultIDs: Set<Int> = []
+    @State private var selectedClubName: String?
+    @State private var checkedResultIDs: Set<Int> = []
     @State private var isSearching = false
     @State private var searchError = ""
     @State private var isFetching = false
@@ -86,10 +87,22 @@ struct AddCourseSheet: View {
     @State private var country = ""
     @State private var holeCount = 18
 
+    private var groupedResults: [(clubName: String, courses: [GolfCourseAPIClient.CourseSearchResult])] {
+        var groups: [String: [GolfCourseAPIClient.CourseSearchResult]] = [:]
+        var order: [String] = []
+        for result in searchResults {
+            if groups[result.clubName] == nil {
+                order.append(result.clubName)
+            }
+            groups[result.clubName, default: []].append(result)
+        }
+        return order.map { (clubName: $0, courses: groups[$0]!) }
+    }
+
     private var canAdd: Bool {
         switch selectedTab {
         case .search:
-            return !selectedResultIDs.isEmpty
+            return !checkedResultIDs.isEmpty
         case .manualEntry:
             return !name.isEmpty && !city.isEmpty && !state.isEmpty
         }
@@ -184,15 +197,57 @@ struct AddCourseSheet: View {
                     .foregroundStyle(.secondary)
                 Spacer()
             } else {
-                List(searchResults, id: \.id, selection: $selectedResultIDs) { result in
-                    VStack(alignment: .leading) {
-                        Text(result.courseName)
-                            .font(.headline)
-                        Text("\(result.location.city), \(result.location.state)")
-                            .font(.caption)
-                            .foregroundStyle(.secondary)
+                List {
+                    ForEach(groupedResults, id: \.clubName) { group in
+                        let isSelected = selectedClubName == group.clubName
+                        HStack {
+                            Image(systemName: isSelected ? "chevron.down" : "chevron.right")
+                                .font(.caption)
+                                .foregroundStyle(.secondary)
+                                .frame(width: 12)
+                            VStack(alignment: .leading) {
+                                Text(group.clubName)
+                                    .font(.headline)
+                                if let loc = group.courses.first?.location {
+                                    Text("\(loc.city), \(loc.state)")
+                                        .font(.caption)
+                                        .foregroundStyle(.secondary)
+                                }
+                            }
+                            Spacer()
+                        }
+                        .listRowBackground(isSelected ? Color.accentColor.opacity(0.15) : Color.clear)
+                        .contentShape(Rectangle())
+                        .onTapGesture {
+                            if isSelected {
+                                selectedClubName = nil
+                                checkedResultIDs = []
+                            } else {
+                                selectedClubName = group.clubName
+                                checkedResultIDs = Set(group.courses.map(\.id))
+                            }
+                        }
+
+                        if isSelected {
+                            ForEach(group.courses, id: \.id) { result in
+                                Toggle(isOn: Binding(
+                                    get: { checkedResultIDs.contains(result.id) },
+                                    set: { checked in
+                                        if checked {
+                                            checkedResultIDs.insert(result.id)
+                                        } else {
+                                            checkedResultIDs.remove(result.id)
+                                        }
+                                    }
+                                )) {
+                                    Text(result.courseName)
+                                        .font(.subheadline)
+                                }
+                                .toggleStyle(.checkbox)
+                                .padding(.leading, 24)
+                            }
+                        }
                     }
-                    .tag(result)
                 }
             }
         }
@@ -201,8 +256,8 @@ struct AddCourseSheet: View {
     private func addCourse() {
         switch selectedTab {
         case .search:
-            guard !selectedResultIDs.isEmpty else { return }
-            let selected = searchResults.filter { selectedResultIDs.contains($0.id) }
+            guard !checkedResultIDs.isEmpty else { return }
+            let selected = searchResults.filter { checkedResultIDs.contains($0.id) }
             fetchAndAddCourses(selected)
         case .manualEntry:
             let holesPerSub = holeCount == 9 ? holeCount : holeCount / 2
@@ -233,7 +288,8 @@ struct AddCourseSheet: View {
         isSearching = true
         searchError = ""
         searchResults = []
-        selectedResultIDs = []
+        selectedClubName = nil
+        checkedResultIDs = []
         Task {
             do {
                 let client = GolfCourseAPIClient(apiKey: apiKey)

@@ -176,10 +176,7 @@ struct MapEditorView: View {
 
             Spacer()
 
-            // Export/Save (right)
-            Button("Export JSON...") {
-                exportJSON()
-            }
+            Spacer().frame(width: 0)
         }
         .padding(.horizontal)
         .padding(.vertical, 6)
@@ -610,28 +607,6 @@ struct MapEditorView: View {
                 span: MKCoordinateSpan(latitudeDelta: 0.004, longitudeDelta: 0.004)
             )
             mapPosition = .region(region)
-        }
-    }
-
-    // MARK: - Export JSON
-
-    private func exportJSON() {
-        applyPinsToCourse()
-
-        let panel = NSSavePanel()
-        panel.allowedContentTypes = [.json]
-        panel.nameFieldStringValue = "\(course.id).json"
-
-        guard panel.runModal() == .OK, let url = panel.url else { return }
-
-        do {
-            let encoder = JSONEncoder()
-            encoder.outputFormatting = [.prettyPrinted, .sortedKeys]
-            let data = try encoder.encode(course)
-            try data.write(to: url)
-            statusMessage = "Exported to \(url.lastPathComponent)"
-        } catch {
-            statusMessage = "Export failed: \(error.localizedDescription)"
         }
     }
 

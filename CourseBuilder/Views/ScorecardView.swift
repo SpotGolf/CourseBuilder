@@ -16,6 +16,7 @@ struct ScorecardView: View {
                 // Action buttons
                 HStack {
                     Spacer()
+                    Button("Export JSON...") { exportJSON() }
                     Button("Import Image...") { showImagePicker = true }
                     Button("Open Map Editor") {
                         openWindow(id: "map-editor", value: course.id)
@@ -154,6 +155,24 @@ struct ScorecardView: View {
             statusMessage = "OCR imported \(totalHoles) holes"
         } catch {
             statusMessage = "OCR failed: \(error.localizedDescription)"
+        }
+    }
+
+    private func exportJSON() {
+        let panel = NSSavePanel()
+        panel.allowedContentTypes = [.json]
+        panel.nameFieldStringValue = "\(course.id).json"
+
+        guard panel.runModal() == .OK, let url = panel.url else { return }
+
+        do {
+            let encoder = JSONEncoder()
+            encoder.outputFormatting = [.prettyPrinted, .sortedKeys]
+            let data = try encoder.encode(course)
+            try data.write(to: url)
+            statusMessage = "Exported to \(url.lastPathComponent)"
+        } catch {
+            statusMessage = "Export failed: \(error.localizedDescription)"
         }
     }
 

@@ -33,8 +33,8 @@ struct SubCourse: Identifiable, Codable, Equatable, Hashable {
 
 struct TeeDefinition: Codable, Equatable, Hashable, Identifiable {
     var id: String { name }
-    let name: String
-    let color: String
+    var name: String
+    var color: String
 }
 
 struct CourseLocation: Codable, Equatable, Hashable {

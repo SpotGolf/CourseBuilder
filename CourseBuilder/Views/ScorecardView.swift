@@ -12,15 +12,91 @@ struct ScorecardView: View {
     var body: some View {
         VStack(spacing: 0) {
             // Header
-            HStack {
-                Text(course.name)
-                    .font(.title2.bold())
-                Spacer()
-                Button("Import Image...") { showImagePicker = true }
-                Button("Open Map Editor") {
-                    openWindow(id: "map-editor", value: course.id)
+            VStack(alignment: .leading, spacing: 8) {
+                // Action buttons
+                HStack {
+                    Spacer()
+                    Button("Import Image...") { showImagePicker = true }
+                    Button("Open Map Editor") {
+                        openWindow(id: "map-editor", value: course.id)
+                    }
+                    .disabled(course.subCourses.isEmpty)
                 }
-                .disabled(course.subCourses.isEmpty)
+
+                // Course Name and Club Name
+                HStack(spacing: 12) {
+                    VStack(alignment: .leading, spacing: 2) {
+                        Text("Course Name").font(.caption).foregroundStyle(.secondary)
+                        TextField("Course Name", text: $course.name)
+                            .textFieldStyle(.roundedBorder)
+                    }
+                    VStack(alignment: .leading, spacing: 2) {
+                        Text("Club Name").font(.caption).foregroundStyle(.secondary)
+                        TextField("Club Name", text: $course.clubName)
+                            .textFieldStyle(.roundedBorder)
+                    }
+                }
+
+                // Address
+                VStack(alignment: .leading, spacing: 2) {
+                    Text("Address").font(.caption).foregroundStyle(.secondary)
+                    TextField("Address", text: $course.location.address)
+                        .textFieldStyle(.roundedBorder)
+                }
+
+                // City, State, Country
+                HStack(spacing: 12) {
+                    VStack(alignment: .leading, spacing: 2) {
+                        Text("City").font(.caption).foregroundStyle(.secondary)
+                        TextField("City", text: $course.location.city)
+                            .textFieldStyle(.roundedBorder)
+                    }
+                    VStack(alignment: .leading, spacing: 2) {
+                        Text("State").font(.caption).foregroundStyle(.secondary)
+                        TextField("State", text: $course.location.state)
+                            .textFieldStyle(.roundedBorder)
+                            .frame(maxWidth: 100)
+                    }
+                    VStack(alignment: .leading, spacing: 2) {
+                        Text("Country").font(.caption).foregroundStyle(.secondary)
+                        TextField("Country", text: $course.location.country)
+                            .textFieldStyle(.roundedBorder)
+                            .frame(maxWidth: 100)
+                    }
+                }
+
+                // Tee definitions
+                HStack {
+                    Text("Tees").font(.caption).foregroundStyle(.secondary)
+                    Button(action: {
+                        course.tees.append(TeeDefinition(name: "", color: "#FFFFFF"))
+                    }) {
+                        Image(systemName: "plus")
+                    }
+                    .buttonStyle(.borderless)
+                }
+
+                ForEach(course.tees.indices, id: \.self) { index in
+                    HStack(spacing: 8) {
+                        TextField("Tee Name", text: $course.tees[index].name)
+                            .textFieldStyle(.roundedBorder)
+                            .frame(maxWidth: 150)
+                        ColorPicker(
+                            "",
+                            selection: Binding(
+                                get: { Color(hex: course.tees[index].color) ?? .white },
+                                set: { course.tees[index].color = $0.hexString }
+                            )
+                        )
+                        .labelsHidden()
+                        Button(action: {
+                            course.tees.remove(at: index)
+                        }) {
+                            Image(systemName: "minus")
+                        }
+                        .buttonStyle(.borderless)
+                    }
+                }
             }
             .padding()
 
@@ -101,8 +177,9 @@ struct ScorecardTableView: View {
             VStack(alignment: .leading, spacing: 16) {
                 ForEach($course.subCourses) { $subCourse in
                     VStack(alignment: .leading, spacing: 4) {
-                        Text(subCourse.name)
+                        TextField("Sub-course Name", text: $subCourse.name)
                             .font(.headline)
+                            .textFieldStyle(.plain)
                             .padding(.horizontal)
 
                         Grid(alignment: .leading, horizontalSpacing: 4, verticalSpacing: 2) {
@@ -146,5 +223,29 @@ struct ScorecardTableView: View {
             }
             .padding()
         }
+    }
+}
+
+// MARK: - Color Hex Helpers
+
+extension Color {
+    init?(hex: String) {
+        var hexSanitized = hex.trimmingCharacters(in: .whitespacesAndNewlines)
+        hexSanitized = hexSanitized.hasPrefix("#") ? String(hexSanitized.dropFirst()) : hexSanitized
+        guard hexSanitized.count == 6,
+              let rgb = UInt64(hexSanitized, radix: 16) else { return nil }
+        self.init(
+            red: Double((rgb >> 16) & 0xFF) / 255.0,
+            green: Double((rgb >> 8) & 0xFF) / 255.0,
+            blue: Double(rgb & 0xFF) / 255.0
+        )
+    }
+
+    var hexString: String {
+        guard let components = NSColor(self).usingColorSpace(.sRGB) else { return "#000000" }
+        let r = Int(components.redComponent * 255)
+        let g = Int(components.greenComponent * 255)
+        let b = Int(components.blueComponent * 255)
+        return String(format: "#%02X%02X%02X", r, g, b)
     }
 }

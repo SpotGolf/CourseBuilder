@@ -117,28 +117,10 @@ class ScorecardImporter: ObservableObject {
 
         if allHoles.count > 1 && midpoint > 0 {
             let frontHoles = Array(allHoles.prefix(midpoint)).enumerated().map { (index, hole) in
-                Hole(
-                    number: index + 1,
-                    par: hole.par,
-                    maleHandicap: hole.maleHandicap,
-                    femaleHandicap: hole.femaleHandicap,
-                    yardages: hole.yardages,
-                    tees: hole.tees,
-                    green: hole.green,
-                    features: hole.features
-                )
+                hole.renumbered(to: index + 1)
             }
             let backHoles = Array(allHoles.suffix(from: midpoint)).enumerated().map { (index, hole) in
-                Hole(
-                    number: index + 1,
-                    par: hole.par,
-                    maleHandicap: hole.maleHandicap,
-                    femaleHandicap: hole.femaleHandicap,
-                    yardages: hole.yardages,
-                    tees: hole.tees,
-                    green: hole.green,
-                    features: hole.features
-                )
+                hole.renumbered(to: index + 1)
             }
             subCourses = [
                 SubCourse(name: "Front", holes: frontHoles),

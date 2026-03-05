@@ -38,4 +38,17 @@ struct Hole: Identifiable, Codable, Equatable, Hashable {
         self.green = green
         self.features = features
     }
+
+    func renumbered(to newNumber: Int) -> Hole {
+        Hole(
+            number: newNumber,
+            par: par,
+            maleHandicap: maleHandicap,
+            femaleHandicap: femaleHandicap,
+            yardages: yardages,
+            tees: tees,
+            green: green,
+            features: features
+        )
+    }
 }

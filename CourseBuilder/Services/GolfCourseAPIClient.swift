@@ -319,16 +319,7 @@ actor GolfCourseAPIClient {
 
                 // Renumber holes 1-based within each sub-course
                 let renumberedHoles = group.holes.enumerated().map { (index, hole) in
-                    Hole(
-                        number: index + 1,
-                        par: hole.par,
-                        maleHandicap: hole.maleHandicap,
-                        femaleHandicap: hole.femaleHandicap,
-                        yardages: hole.yardages,
-                        tees: hole.tees,
-                        green: hole.green,
-                        features: hole.features
-                    )
+                    hole.renumbered(to: index + 1)
                 }
 
                 // Build sub-course tees

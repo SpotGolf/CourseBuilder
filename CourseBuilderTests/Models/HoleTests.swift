@@ -60,6 +60,23 @@ final class HoleTests: XCTestCase {
         XCTAssertEqual(decoded.features.count, 1)
     }
 
+    func testRenumbered() {
+        let hole = Hole(
+            number: 7,
+            par: 5,
+            maleHandicap: 3,
+            femaleHandicap: 5,
+            yardages: ["Blue": 545]
+        )
+        let renumbered = hole.renumbered(to: 1)
+        XCTAssertEqual(renumbered.number, 1)
+        XCTAssertEqual(renumbered.par, 5)
+        XCTAssertEqual(renumbered.maleHandicap, 3)
+        XCTAssertEqual(renumbered.femaleHandicap, 5)
+        XCTAssertEqual(renumbered.yardages["Blue"], 545)
+        XCTAssertNotEqual(renumbered.id, hole.id) // new identity
+    }
+
     func testEmptyHole() {
         let hole = Hole(number: 5, par: 3, maleHandicap: 7)
         XCTAssertTrue(hole.yardages.isEmpty)

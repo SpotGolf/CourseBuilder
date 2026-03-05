@@ -92,7 +92,7 @@ struct ScorecardView: View {
                         Button(action: {
                             course.tees.remove(at: index)
                         }) {
-                            Image(systemName: "minus")
+                            Image(systemName: "xmark")
                         }
                         .buttonStyle(.borderless)
                     }
@@ -113,17 +113,6 @@ struct ScorecardView: View {
             // Scorecard table
             ScorecardTableView(course: $course)
 
-            Divider()
-
-            // Save bar
-            HStack {
-                Spacer()
-                Button("Save") {
-                    try? store.save(course)
-                    statusMessage = "Saved"
-                }
-            }
-            .padding()
         }
         .fileImporter(isPresented: $showImagePicker, allowedContentTypes: [.image, .pdf]) { result in
             if case .success(let url) = result {
@@ -134,6 +123,9 @@ struct ScorecardView: View {
             if let latest = store.courses.first(where: { $0.id == course.id }) {
                 course = latest
             }
+        }
+        .onChange(of: course) { _, newValue in
+            try? store.save(newValue)
         }
     }
 

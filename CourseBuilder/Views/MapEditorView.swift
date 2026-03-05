@@ -180,10 +180,6 @@ struct MapEditorView: View {
             Button("Export JSON...") {
                 exportJSON()
             }
-
-            Button("Save") {
-                saveCourse()
-            }
         }
         .padding(.horizontal)
         .padding(.vertical, 6)

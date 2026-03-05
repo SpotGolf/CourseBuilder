@@ -167,7 +167,9 @@ actor GolfCourseAPIClient {
     }
 
     func fetchCourse(id: Int) async throws -> CourseDetail {
-        let url = baseURL.appendingPathComponent("courses/\(id)")
+        guard let url = URLComponents(url: baseURL.appendingPathComponent("courses/\(id)"), resolvingAgainstBaseURL: false)?.url else {
+            throw APIError.invalidURL
+        }
 
         var request = URLRequest(url: url)
         request.setValue("Key \(apiKey)", forHTTPHeaderField: "Authorization")
@@ -176,12 +178,14 @@ actor GolfCourseAPIClient {
 
         let (data, response) = try await session.data(for: request)
 
+        if let httpResponse = response as? HTTPURLResponse, !(200...299).contains(httpResponse.statusCode) {
+            throw APIError.httpError(httpResponse.statusCode)
+        }
         if let httpResponse = response as? HTTPURLResponse {
             logger.debug("FetchCourse response status: \(httpResponse.statusCode, privacy: .public)")
         }
         let bodyString = String(data: data, encoding: .utf8) ?? "<non-utf8>"
         logger.debug("FetchCourse response body: \(bodyString, privacy: .public)")
-        print("[GolfCourseAPI] FetchCourse response body: \(bodyString)")
 
         do {
             let wrapper = try JSONDecoder().decode(CourseDetailResponse.self, from: data)
@@ -195,14 +199,14 @@ actor GolfCourseAPIClient {
     // MARK: - Conversion
 
     /// Convert a single CourseDetail into a Course with sub-courses.
-    static func convertToCourse(detail: CourseDetail) -> Course {
-        return convertToCourse(details: [detail])
+    static func convertToCourse(detail: CourseDetail) throws -> Course {
+        return try convertToCourse(details: [detail])
     }
 
     /// Convert multiple CourseDetail results into a single Course with merged sub-courses.
-    static func convertToCourse(details: [CourseDetail]) -> Course {
+    static func convertToCourse(details: [CourseDetail]) throws -> Course {
         guard let first = details.first else {
-            fatalError("convertToCourse requires at least one CourseDetail")
+            throw APIError.emptyDetails
         }
 
         let location = CourseLocation(

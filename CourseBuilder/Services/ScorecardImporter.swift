@@ -46,7 +46,7 @@ class ScorecardImporter: ObservableObject {
                 if let match = response.courses.first {
                     status = "Fetching scorecard data..."
                     let detail = try await apiClient.fetchCourse(id: match.id)
-                    let course = GolfCourseAPIClient.convertToCourse(detail: detail)
+                    let course = try GolfCourseAPIClient.convertToCourse(detail: detail)
                     status = "Imported from API"
                     return course
                 }

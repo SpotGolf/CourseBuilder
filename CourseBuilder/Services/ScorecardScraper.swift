@@ -109,7 +109,10 @@ enum ScorecardScraper {
 
     /// Fetches HTML from the given URL via URLSession, then parses it.
     static func fetchAndParse(url: URL) async throws -> ScorecardData {
-        let (data, _) = try await URLSession.shared.data(from: url)
+        let (data, response) = try await URLSession.shared.data(from: url)
+        if let httpResponse = response as? HTTPURLResponse, !(200...299).contains(httpResponse.statusCode) {
+            throw ScraperError.parseError("HTTP \(httpResponse.statusCode)")
+        }
         guard let html = String(data: data, encoding: .utf8) else {
             throw ScraperError.parseError("Could not decode HTML as UTF-8")
         }

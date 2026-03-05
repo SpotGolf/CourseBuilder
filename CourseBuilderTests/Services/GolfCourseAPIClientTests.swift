@@ -99,7 +99,7 @@ final class GolfCourseAPIClientTests: XCTestCase {
         """.data(using: .utf8)!
 
         let detail = try JSONDecoder().decode(GolfCourseAPIClient.CourseDetail.self, from: json)
-        let course = GolfCourseAPIClient.convertToCourse(detail: detail)
+        let course = try GolfCourseAPIClient.convertToCourse(detail: detail)
 
         XCTAssertEqual(course.name, "Broadlands Golf Course")
         XCTAssertEqual(course.clubName, "The Broadlands Golf Club")
@@ -158,7 +158,7 @@ final class GolfCourseAPIClientTests: XCTestCase {
         let firstResult = try XCTUnwrap(response.courses.first)
 
         let detail = try await client.fetchCourse(id: firstResult.id)
-        let course = GolfCourseAPIClient.convertToCourse(detail: detail)
+        let course = try GolfCourseAPIClient.convertToCourse(detail: detail)
 
         XCTAssertFalse(course.name.isEmpty)
         XCTAssertFalse(course.subCourses.isEmpty, "Expected sub-courses")
@@ -167,6 +167,12 @@ final class GolfCourseAPIClientTests: XCTestCase {
         print("Converted: \(course.name), \(course.subCourses.count) sub-courses, \(course.tees.count) tees")
         for sub in course.subCourses {
             print("  \(sub.name): \(sub.holes.count) holes")
+        }
+    }
+
+    func testConvertToCourseEmptyDetailsThrows() {
+        XCTAssertThrowsError(try GolfCourseAPIClient.convertToCourse(details: [])) { error in
+            XCTAssertTrue(error is GolfCourseAPIClient.APIError)
         }
     }
 }

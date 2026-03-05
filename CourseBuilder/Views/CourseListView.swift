@@ -430,7 +430,7 @@ struct AddCourseSheet: View {
                     let detail = try await client.fetchCourse(id: result.id)
                     details.append(detail)
                 }
-                let course = GolfCourseAPIClient.convertToCourse(details: details)
+                let course = try GolfCourseAPIClient.convertToCourse(details: details)
                 onCreate(course)
             } catch {
                 fetchErrorMessage = "Failed to fetch course: \(error.localizedDescription)"

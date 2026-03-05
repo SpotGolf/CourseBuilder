@@ -25,7 +25,7 @@ Search for course (MKLocalSearch, .golf POI filter)
   "id": "A5F3B2C1-1234-4567-89AB-CDEF01234567",
   "name": "The Broadlands Golf Course",
   "clubName": "The Broadlands Golf Club",
-  "golfCourseAPIId": 19198,
+  "golfCourseAPIIds": [19198],
   "location": {
     "address": "4380 W 144th Ave",
     "city": "Broomfield",
@@ -34,55 +34,68 @@ Search for course (MKLocalSearch, .golf POI filter)
     "coordinate": { "latitude": 39.9397, "longitude": -105.0267 }
   },
   "tees": [
-    {
-      "name": "Black", "color": "#000000",
-      "male": {
-        "courseRating": 73.5, "slopeRating": 137,
-        "frontCourseRating": 37.6, "frontSlopeRating": 134,
-        "backCourseRating": 38.1, "backSlopeRating": 129,
-        "totalYards": 7289, "parTotal": 72
-      }
-    },
-    {
-      "name": "Red", "color": "#FF0000",
-      "female": {
-        "courseRating": 69.1, "slopeRating": 121,
-        "frontCourseRating": 34.2, "frontSlopeRating": 118,
-        "backCourseRating": 34.9, "backSlopeRating": 124,
-        "totalYards": 5200, "parTotal": 72
-      }
-    }
+    { "id": "B1C2D3E4-0001-0000-0000-000000000000", "name": "Black", "color": "#000000" },
+    { "id": "B1C2D3E4-0002-0000-0000-000000000000", "name": "Gold", "color": "#FFD700" },
+    { "id": "B1C2D3E4-0003-0000-0000-000000000000", "name": "Blue", "color": "#0000FF" },
+    { "id": "B1C2D3E4-0004-0000-0000-000000000000", "name": "Red", "color": "#FF0000" }
   ],
-  "holes": [
+  "subCourses": [
     {
-      "number": 1,
-      "par": 4,
-      "maleHandicap": 13,
-      "femaleHandicap": 11,
-      "yardages": { "Black": 401, "Gold": 378, "Blue": 355, "Red": 298 },
+      "id": "C2D3E4F5-0001-0000-0000-000000000000",
+      "name": "Front",
       "tees": {
-        "Black": { "latitude": 39.9401, "longitude": -105.0271 },
-        "Gold": { "latitude": 39.9400, "longitude": -105.0270 },
-        "Blue": { "latitude": 39.9399, "longitude": -105.0269 },
-        "Red": { "latitude": 39.9398, "longitude": -105.0268 }
-      },
-      "green": {
-        "front": { "latitude": 39.9386, "longitude": -105.0246 },
-        "middle": { "latitude": 39.9385, "longitude": -105.0245 },
-        "back": { "latitude": 39.9384, "longitude": -105.0244 }
-      },
-      "features": [
-        {
-          "type": "bunker",
-          "front": { "latitude": 39.9387, "longitude": -105.0249 },
-          "back": { "latitude": 39.9388, "longitude": -105.0248 }
+        "Black": {
+          "male": { "rating": 37.6, "slope": 134, "totalYards": 3644, "parTotal": 36 }
         },
+        "Red": {
+          "female": { "rating": 34.2, "slope": 118, "totalYards": 2600, "parTotal": 36 }
+        }
+      },
+      "holes": [
         {
-          "type": "water",
-          "front": { "latitude": 39.9394, "longitude": -105.0261 },
-          "back": { "latitude": 39.9392, "longitude": -105.0259 }
+          "number": 1,
+          "par": 4,
+          "maleHandicap": 13,
+          "femaleHandicap": 11,
+          "yardages": { "Black": 401, "Gold": 378, "Blue": 355, "Red": 298 },
+          "tees": {
+            "Black": { "latitude": 39.9401, "longitude": -105.0271 },
+            "Gold": { "latitude": 39.9400, "longitude": -105.0270 },
+            "Blue": { "latitude": 39.9399, "longitude": -105.0269 },
+            "Red": { "latitude": 39.9398, "longitude": -105.0268 }
+          },
+          "green": {
+            "front": { "latitude": 39.9386, "longitude": -105.0246 },
+            "middle": { "latitude": 39.9385, "longitude": -105.0245 },
+            "back": { "latitude": 39.9384, "longitude": -105.0244 }
+          },
+          "features": [
+            {
+              "type": "bunker",
+              "front": { "latitude": 39.9387, "longitude": -105.0249 },
+              "back": { "latitude": 39.9388, "longitude": -105.0248 }
+            },
+            {
+              "type": "water",
+              "front": { "latitude": 39.9394, "longitude": -105.0261 },
+              "back": { "latitude": 39.9392, "longitude": -105.0259 }
+            }
+          ]
         }
       ]
+    },
+    {
+      "id": "C2D3E4F5-0002-0000-0000-000000000000",
+      "name": "Back",
+      "tees": {
+        "Black": {
+          "male": { "rating": 38.1, "slope": 129, "totalYards": 3645, "parTotal": 36 }
+        },
+        "Red": {
+          "female": { "rating": 34.9, "slope": 124, "totalYards": 2600, "parTotal": 36 }
+        }
+      },
+      "holes": []
     }
   ]
 }
@@ -91,10 +104,14 @@ Search for course (MKLocalSearch, .golf POI filter)
 ### Key data model decisions
 
 - One JSON file per course, named by UUID
-- `id` is a random UUID v4, `golfCourseAPIId` stores the external API identifier
+- `id` is a random UUID v4, `golfCourseAPIIds` (plural) stores an array of external API identifiers (supports courses that span multiple API entries)
 - `clubName` is the facility/club name; `name` is the specific course name
 - `location` includes `address` and `country` in addition to city/state/coordinate
-- Tee rating/slope data is grouped into `TeeInformation` structs under `male`/`female` on each tee definition, including front/back nine splits (`frontCourseRating`, `frontSlopeRating`, `backCourseRating`, `backSlopeRating`), `totalYards`, and `parTotal`
+- Course-level `tees` is an array of `TeeDefinition` objects with `id` (UUID), `name`, and `color` only — no ratings at this level
+- `subCourses` is an array of `SubCourse` objects, each representing a 9-hole segment (e.g. "Front", "Back", or named nines like "Lakes", "Hills", "Forest" for 27-hole courses)
+- `SubCourse` has: `id` (UUID), `name` (String), `holes` ([Hole]), `tees` ([String: SubCourseTee])
+- `SubCourseTee` has: `male` (TeeInformation?), `female` (TeeInformation?) — this is where ratings/slope/yardage totals live, scoped per sub-course
+- `TeeInformation` has: `rating` (Double?), `slope` (Int?), `totalYards` (Int?), `parTotal` (Int?)
 - `tees` on each hole is an object keyed by tee name — keys match the course-level tee definitions and `yardages` keys
 - `green` is a top-level hole property with `front`, `middle`, `back` coordinates
 - `features` only contains hazards (bunkers, water) — each with `front` and `back` coordinates relative to line of play (front = closer to tee, back = far side)
@@ -175,19 +192,23 @@ Search for course (MKLocalSearch, .golf POI filter)
 ## File Structure
 
 ```
-CourseData/
-├── CourseData.xcodeproj
-├── CourseData/
+CourseBuilder/
+├── CourseBuilder.xcodeproj
+├── CourseBuilder/
 │   ├── App/
-│   │   └── CourseDataApp.swift
+│   │   └── CourseBuilderApp.swift
 │   ├── Models/
 │   │   ├── Course.swift
 │   │   ├── Hole.swift
+│   │   ├── Coordinate.swift
 │   │   └── Feature.swift
 │   ├── Views/
+│   │   ├── ContentView.swift
 │   │   ├── CourseListView.swift
-│   │   ├── ScorecardImportView.swift
-│   │   └── MapEditorView.swift
+│   │   ├── ScorecardView.swift
+│   │   ├── MapEditorView.swift
+│   │   ├── PinEditorView.swift
+│   │   └── SettingsView.swift
 │   ├── Services/
 │   │   ├── CourseSearchService.swift
 │   │   ├── ScorecardImporter.swift
@@ -197,5 +218,5 @@ CourseData/
 │   │   ├── FeatureDetector.swift
 │   │   └── CourseStore.swift
 │   └── Resources/
-└── CourseDataTests/
+└── CourseBuilderTests/
 ```

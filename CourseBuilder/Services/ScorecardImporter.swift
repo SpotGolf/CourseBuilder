@@ -58,11 +58,15 @@ class ScorecardImporter: ObservableObject {
         // Try scraping GolfLink
         do {
             status = "Trying GolfLink..."
-            let slug = "\(city)/\(courseName)"
+            let citySlug = city
                 .lowercased()
                 .replacing(/[^a-z0-9\s]/, with: "")
                 .replacing(/\s+/, with: "-")
-            let url = URL(string: "https://www.golflink.com/golf-courses/\(state.lowercased())/\(slug)")!
+            let courseSlug = courseName
+                .lowercased()
+                .replacing(/[^a-z0-9\s]/, with: "")
+                .replacing(/\s+/, with: "-")
+            let url = URL(string: "https://www.golflink.com/golf-courses/\(state.lowercased())/\(citySlug)/\(courseSlug)")!
             let data = try await ScorecardScraper.fetchAndParse(url: url)
             let course = buildCourse(from: data, name: courseName, city: city, state: state)
             status = "Imported from GolfLink"
@@ -102,7 +106,7 @@ class ScorecardImporter: ObservableObject {
         )
     }
 
-    private func buildCourse(from data: ScorecardData, name: String, city: String, state: String) -> Course {
+    func buildCourse(from data: ScorecardData, name: String, city: String, state: String) -> Course {
         let tees = data.teeNames.map { teeName in
             TeeDefinition(
                 name: teeName,

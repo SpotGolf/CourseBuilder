@@ -106,7 +106,7 @@ class ScorecardImporter: ObservableObject {
         let tees = data.teeNames.map { teeName in
             TeeDefinition(
                 name: teeName,
-                color: defaultColor(for: teeName)
+                color: TeeDefinition.defaultColor(for: teeName)
             )
         }
 
@@ -138,15 +138,4 @@ class ScorecardImporter: ObservableObject {
         )
     }
 
-    private func defaultColor(for teeName: String) -> String {
-        switch teeName.lowercased() {
-        case "black": return "#000000"
-        case "gold": return "#FFD700"
-        case "blue": return "#0000FF"
-        case "white": return "#FFFFFF"
-        case "silver": return "#C0C0C0"
-        case "red": return "#FF0000"
-        default: return "#808080"
-        }
-    }
 }

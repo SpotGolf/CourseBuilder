@@ -35,6 +35,19 @@ struct TeeDefinition: Codable, Equatable, Hashable, Identifiable {
     var id: String { name }
     var name: String
     var color: String
+
+    static func defaultColor(for teeName: String) -> String {
+        switch teeName.lowercased() {
+        case "black": "#000000"
+        case "gold": "#FFD700"
+        case "blue": "#0000FF"
+        case "white": "#FFFFFF"
+        case "silver": "#C0C0C0"
+        case "red": "#FF0000"
+        case "green": "#008000"
+        default: "#808080"
+        }
+    }
 }
 
 struct CourseLocation: Codable, Equatable, Hashable {

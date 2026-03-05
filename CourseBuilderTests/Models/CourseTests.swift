@@ -44,6 +44,17 @@ final class CourseTests: XCTestCase {
         XCTAssertEqual(course.subCourses[0].tees["Black"]?.male?.rating, 37.6)
     }
 
+    func testDefaultTeeColors() {
+        XCTAssertEqual(TeeDefinition.defaultColor(for: "Black"), "#000000")
+        XCTAssertEqual(TeeDefinition.defaultColor(for: "BLUE"), "#0000FF")
+        XCTAssertEqual(TeeDefinition.defaultColor(for: "Red"), "#FF0000")
+        XCTAssertEqual(TeeDefinition.defaultColor(for: "White"), "#FFFFFF")
+        XCTAssertEqual(TeeDefinition.defaultColor(for: "Gold"), "#FFD700")
+        XCTAssertEqual(TeeDefinition.defaultColor(for: "Silver"), "#C0C0C0")
+        XCTAssertEqual(TeeDefinition.defaultColor(for: "Green"), "#008000")
+        XCTAssertEqual(TeeDefinition.defaultColor(for: "Unknown"), "#808080")
+    }
+
     func testEmptyCourse() {
         let course = Course(
             name: "Test Course",

@@ -4,6 +4,22 @@ import os
 private let logger = Logger(subsystem: "com.spotgolf.CourseBuilder", category: "GolfCourseAPI")
 
 actor GolfCourseAPIClient {
+    // MARK: - Errors
+
+    enum APIError: LocalizedError {
+        case emptyDetails
+        case httpError(Int)
+        case invalidURL
+
+        var errorDescription: String? {
+            switch self {
+            case .emptyDetails: "convertToCourse requires at least one CourseDetail"
+            case .httpError(let code): "HTTP error \(code)"
+            case .invalidURL: "Invalid URL"
+            }
+        }
+    }
+
     // MARK: - Configuration
 
     private let apiKey: String
@@ -118,16 +134,24 @@ actor GolfCourseAPIClient {
     // MARK: - Network Methods
 
     func search(query: String) async throws -> SearchResponse {
-        var components = URLComponents(url: baseURL.appendingPathComponent("search"), resolvingAgainstBaseURL: false)!
+        guard var components = URLComponents(url: baseURL.appendingPathComponent("search"), resolvingAgainstBaseURL: false) else {
+            throw APIError.invalidURL
+        }
         components.queryItems = [URLQueryItem(name: "search_query", value: query)]
 
-        var request = URLRequest(url: components.url!)
+        guard let url = components.url else {
+            throw APIError.invalidURL
+        }
+        var request = URLRequest(url: url)
         request.setValue("Key \(apiKey)", forHTTPHeaderField: "Authorization")
 
         logger.debug("Search request: \(request.httpMethod ?? "GET", privacy: .public) \(request.url?.absoluteString ?? "nil", privacy: .public)")
 
         let (data, response) = try await session.data(for: request)
 
+        if let httpResponse = response as? HTTPURLResponse, !(200...299).contains(httpResponse.statusCode) {
+            throw APIError.httpError(httpResponse.statusCode)
+        }
         if let httpResponse = response as? HTTPURLResponse {
             logger.debug("Search response status: \(httpResponse.statusCode, privacy: .public)")
         }
@@ -223,7 +247,7 @@ actor GolfCourseAPIClient {
                 for teeSet in maleTees {
                     allTeeDefinitions[teeSet.teeName] = TeeDefinition(
                         name: teeSet.teeName,
-                        color: defaultColor(for: teeSet.teeName)
+                        color: TeeDefinition.defaultColor(for: teeSet.teeName)
                     )
                     maleTeeData.append(TeeAPIData(
                         teeName: teeSet.teeName,
@@ -257,7 +281,7 @@ actor GolfCourseAPIClient {
                     if allTeeDefinitions[teeSet.teeName] == nil {
                         allTeeDefinitions[teeSet.teeName] = TeeDefinition(
                             name: teeSet.teeName,
-                            color: defaultColor(for: teeSet.teeName)
+                            color: TeeDefinition.defaultColor(for: teeSet.teeName)
                         )
                     }
                     femaleTeeData.append(TeeAPIData(
@@ -402,26 +426,4 @@ actor GolfCourseAPIClient {
         return ["Front", "Back"]
     }
 
-    // MARK: - Helpers
-
-    private static func defaultColor(for teeName: String) -> String {
-        switch teeName.lowercased() {
-        case "black":
-            return "#000000"
-        case "gold":
-            return "#FFD700"
-        case "blue":
-            return "#0000FF"
-        case "white":
-            return "#FFFFFF"
-        case "silver":
-            return "#C0C0C0"
-        case "red":
-            return "#FF0000"
-        case "green":
-            return "#008000"
-        default:
-            return "#808080"
-        }
-    }
 }

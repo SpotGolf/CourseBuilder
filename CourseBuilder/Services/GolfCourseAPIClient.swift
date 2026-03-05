@@ -326,29 +326,14 @@ actor GolfCourseAPIClient {
                 )
             }
 
-            // Split holes into sub-courses
-            let midpoint = allHoles.count / 2
-            let holeGroups: [(name: String, holes: [Hole])]
-            if subCourseNames.count == 2 && allHoles.count > 1 {
-                let frontHoles = Array(allHoles.prefix(midpoint))
-                let backHoles = Array(allHoles.suffix(from: midpoint))
-                holeGroups = [
-                    (subCourseNames[0], frontHoles),
-                    (subCourseNames[1], backHoles),
-                ]
-            } else {
-                holeGroups = [(subCourseNames[0], allHoles)]
-            }
+            let holeGroups = Hole.splitIntoSubCourses(allHoles, names: subCourseNames)
 
             // Build sub-courses with tee information
             for (groupIndex, group) in holeGroups.enumerated() {
                 guard !seenSubCourseNames.contains(group.name) else { continue }
                 seenSubCourseNames.insert(group.name)
 
-                // Renumber holes 1-based within each sub-course
-                let renumberedHoles = group.holes.enumerated().map { (index, hole) in
-                    hole.renumbered(to: index + 1)
-                }
+                let renumberedHoles = group.holes
 
                 // Build sub-course tees
                 var subCourseTees: [String: SubCourseTee] = [:]

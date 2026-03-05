@@ -84,4 +84,42 @@ final class HoleTests: XCTestCase {
         XCTAssertNil(hole.green)
         XCTAssertTrue(hole.features.isEmpty)
     }
+
+    func testSplitIntoSubCourses18Holes() {
+        let holes = (1...18).map { Hole(number: $0, par: $0 <= 9 ? 4 : 5) }
+        let groups = Hole.splitIntoSubCourses(holes, names: ["Front", "Back"])
+        XCTAssertEqual(groups.count, 2)
+        XCTAssertEqual(groups[0].name, "Front")
+        XCTAssertEqual(groups[0].holes.count, 9)
+        XCTAssertEqual(groups[0].holes[0].number, 1)
+        XCTAssertEqual(groups[0].holes[0].par, 4)
+        XCTAssertEqual(groups[1].name, "Back")
+        XCTAssertEqual(groups[1].holes.count, 9)
+        XCTAssertEqual(groups[1].holes[0].number, 1)
+        XCTAssertEqual(groups[1].holes[0].par, 5)
+    }
+
+    func testSplitIntoSubCourses9Holes() {
+        let holes = (1...9).map { Hole(number: $0, par: 4) }
+        let groups = Hole.splitIntoSubCourses(holes, names: ["Front", "Back"])
+        // 9 holes should NOT split — single sub-course
+        XCTAssertEqual(groups.count, 1)
+        XCTAssertEqual(groups[0].name, "Front")
+        XCTAssertEqual(groups[0].holes.count, 9)
+    }
+
+    func testSplitIntoSubCourses27HolesThreeNames() {
+        let holes = (1...27).map { Hole(number: $0, par: 4) }
+        let groups = Hole.splitIntoSubCourses(holes, names: ["Eldorado", "Vista", "Conquistador"])
+        XCTAssertEqual(groups.count, 3)
+        XCTAssertEqual(groups[0].name, "Eldorado")
+        XCTAssertEqual(groups[0].holes.count, 9)
+        XCTAssertEqual(groups[1].name, "Vista")
+        XCTAssertEqual(groups[1].holes.count, 9)
+        XCTAssertEqual(groups[2].name, "Conquistador")
+        XCTAssertEqual(groups[2].holes.count, 9)
+        // All holes renumbered 1-9
+        XCTAssertEqual(groups[2].holes[0].number, 1)
+        XCTAssertEqual(groups[2].holes[8].number, 9)
+    }
 }

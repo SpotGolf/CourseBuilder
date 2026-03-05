@@ -110,25 +110,8 @@ class ScorecardImporter: ObservableObject {
             )
         }
 
-        // Split holes at midpoint into Front and Back sub-courses
-        let allHoles = data.holes
-        let midpoint = allHoles.count / 2
-        let subCourses: [SubCourse]
-
-        if allHoles.count > 1 && midpoint > 0 {
-            let frontHoles = Array(allHoles.prefix(midpoint)).enumerated().map { (index, hole) in
-                hole.renumbered(to: index + 1)
-            }
-            let backHoles = Array(allHoles.suffix(from: midpoint)).enumerated().map { (index, hole) in
-                hole.renumbered(to: index + 1)
-            }
-            subCourses = [
-                SubCourse(name: "Front", holes: frontHoles),
-                SubCourse(name: "Back", holes: backHoles),
-            ]
-        } else {
-            subCourses = [SubCourse(name: "Front", holes: allHoles)]
-        }
+        let holeGroups = Hole.splitIntoSubCourses(data.holes, names: ["Front", "Back"])
+        let subCourses = holeGroups.map { SubCourse(name: $0.name, holes: $0.holes) }
 
         return Course(
             name: name,

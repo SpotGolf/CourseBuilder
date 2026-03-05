@@ -15,7 +15,7 @@ struct CourseListView: View {
                         Text("\(course.location.city), \(course.location.state)")
                             .font(.caption)
                             .foregroundStyle(.secondary)
-                        Text("\(course.holes.count) holes")
+                        Text("\(course.subCourses.reduce(0) { $0 + $1.holes.count }) holes")
                             .font(.caption2)
                             .foregroundStyle(.tertiary)
                     }
@@ -36,7 +36,8 @@ struct CourseListView: View {
             }
         } detail: {
             if let course = selectedCourse {
-                ScorecardImportView(course: course)
+                ScorecardView(course: course)
+                    .id(course.id)
             } else {
                 Text("Select a course or create a new one")
                     .foregroundStyle(.secondary)
@@ -69,7 +70,7 @@ struct AddCourseSheet: View {
     @AppStorage("golfCourseAPIKey") private var apiKey: String = ""
     @State private var searchQuery = ""
     @State private var searchResults: [GolfCourseAPIClient.CourseSearchResult] = []
-    @State private var selectedResult: GolfCourseAPIClient.CourseSearchResult?
+    @State private var selectedResultIDs: Set<Int> = []
     @State private var isSearching = false
     @State private var searchError = ""
     @State private var isFetching = false
@@ -88,7 +89,7 @@ struct AddCourseSheet: View {
     private var canAdd: Bool {
         switch selectedTab {
         case .search:
-            return selectedResult != nil
+            return !selectedResultIDs.isEmpty
         case .manualEntry:
             return !name.isEmpty && !city.isEmpty && !state.isEmpty
         }
@@ -105,7 +106,8 @@ struct AddCourseSheet: View {
                     .tabItem { Label("Manual Entry", systemImage: "square.and.pencil") }
                     .tag(Tab.manualEntry)
             }
-            .frame(width: 450, height: 350)
+            .padding(.top, 8)
+            .frame(width: 450, height: 370)
 
             Divider()
 
@@ -182,7 +184,7 @@ struct AddCourseSheet: View {
                     .foregroundStyle(.secondary)
                 Spacer()
             } else {
-                List(searchResults, id: \.id, selection: $selectedResult) { result in
+                List(searchResults, id: \.id, selection: $selectedResultIDs) { result in
                     VStack(alignment: .leading) {
                         Text(result.courseName)
                             .font(.headline)
@@ -199,9 +201,17 @@ struct AddCourseSheet: View {
     private func addCourse() {
         switch selectedTab {
         case .search:
-            guard let result = selectedResult else { return }
-            fetchAndAddCourse(result)
+            guard !selectedResultIDs.isEmpty else { return }
+            let selected = searchResults.filter { selectedResultIDs.contains($0.id) }
+            fetchAndAddCourses(selected)
         case .manualEntry:
+            let holesPerSub = holeCount == 9 ? holeCount : holeCount / 2
+            let frontHoles = (1...holesPerSub).map { Hole(number: $0, par: 4) }
+            var subCourses = [SubCourse(name: "Front", holes: frontHoles)]
+            if holeCount > 9 {
+                let backHoles = (1...holesPerSub).map { Hole(number: $0, par: 4) }
+                subCourses.append(SubCourse(name: "Back", holes: backHoles))
+            }
             let course = Course(
                 name: name,
                 clubName: clubName,
@@ -212,7 +222,7 @@ struct AddCourseSheet: View {
                     country: country,
                     coordinate: Coordinate(latitude: 0, longitude: 0)
                 ),
-                holes: (1...holeCount).map { Hole(number: $0, par: 4) }
+                subCourses: subCourses
             )
             onCreate(course)
         }
@@ -223,7 +233,7 @@ struct AddCourseSheet: View {
         isSearching = true
         searchError = ""
         searchResults = []
-        selectedResult = nil
+        selectedResultIDs = []
         Task {
             do {
                 let client = GolfCourseAPIClient(apiKey: apiKey)
@@ -236,13 +246,17 @@ struct AddCourseSheet: View {
         }
     }
 
-    private func fetchAndAddCourse(_ result: GolfCourseAPIClient.CourseSearchResult) {
+    private func fetchAndAddCourses(_ results: [GolfCourseAPIClient.CourseSearchResult]) {
         isFetching = true
         Task {
             do {
                 let client = GolfCourseAPIClient(apiKey: apiKey)
-                let detail = try await client.fetchCourse(id: result.id)
-                let course = GolfCourseAPIClient.convertToCourse(detail: detail)
+                var details: [GolfCourseAPIClient.CourseDetail] = []
+                for result in results {
+                    let detail = try await client.fetchCourse(id: result.id)
+                    details.append(detail)
+                }
+                let course = GolfCourseAPIClient.convertToCourse(details: details)
                 onCreate(course)
             } catch {
                 fetchErrorMessage = "Failed to fetch course: \(error.localizedDescription)"

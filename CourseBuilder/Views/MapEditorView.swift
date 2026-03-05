@@ -81,6 +81,10 @@ struct MapEditorView: View {
             deleteSelectedPin()
             return .handled
         }
+        .onKeyPress(KeyEquivalent("\u{7F}")) {
+            deleteSelectedPin()
+            return .handled
+        }
         .navigationTitle("\(course.name) — \(course.location.city), \(course.location.state)")
         .onAppear {
             if let latest = store.courses.first(where: { $0.id == course.id }) {
@@ -309,8 +313,9 @@ struct MapEditorView: View {
             .simultaneousGesture(
                 SpatialTapGesture()
                     .onEnded { tap in
-                        guard activeTool != .select else { return }
-                        if let coord = proxy.convert(tap.location, from: .local) {
+                        if activeTool == .select {
+                            selectedPinID = nil
+                        } else if let coord = proxy.convert(tap.location, from: .local) {
                             placePin(at: Coordinate(coord))
                         }
                     }
@@ -348,6 +353,8 @@ struct MapEditorView: View {
             .stroke(isSelected ? Color.white : Color.clear, lineWidth: 2)
             .frame(width: 16, height: 16)
             .shadow(radius: 2)
+            .padding(10)
+            .contentShape(Circle())
             .offset(isSelected && isDraggingPin ? dragOffset : .zero)
             .onTapGesture {
                 selectedPinID = pin.id

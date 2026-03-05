@@ -1,7 +1,7 @@
 import Foundation
 import os
 
-private let logger = Logger(subsystem: "com.spotgolf.CourseBuilder", category: "GolfCourseAPI")
+private let logger = Logger(subsystem: "golf.spot.CourseBuilder", category: "GolfCourseAPI")
 
 actor GolfCourseAPIClient {
     // MARK: - Errors

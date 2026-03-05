@@ -1,6 +1,6 @@
 name: CourseBuilder
 options:
-  bundleIdPrefix: com.spotgolf
+  bundleIdPrefix: golf.spot
   deploymentTarget:
     macOS: "14.0"
   xcodeVersion: "15.0"

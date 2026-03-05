@@ -209,7 +209,7 @@ struct ScorecardTableView: View {
 
     var body: some View {
         ScrollView {
-            VStack(alignment: .leading, spacing: 16) {
+            VStack(alignment: .leading, spacing: 24) {
                 ForEach(Array(course.subCourses.enumerated()), id: \.element.id) { index, _ in
                     VStack(alignment: .leading, spacing: 4) {
                         HStack {
@@ -226,7 +226,6 @@ struct ScorecardTableView: View {
                             }
                             .buttonStyle(.borderless)
                         }
-                        .padding(.horizontal)
 
                         Grid(alignment: .leading, horizontalSpacing: 4, verticalSpacing: 2) {
                             GridRow {

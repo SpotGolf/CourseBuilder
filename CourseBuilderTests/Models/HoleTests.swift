@@ -1,5 +1,5 @@
 import XCTest
-@testable import CourseData
+@testable import CourseBuilder
 
 final class FeatureTests: XCTestCase {
     func testBunkerCodableRoundTrip() throws {

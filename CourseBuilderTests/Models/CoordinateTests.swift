@@ -1,6 +1,6 @@
 import XCTest
 import CoreLocation
-@testable import CourseData
+@testable import CourseBuilder
 
 final class CoordinateTests: XCTestCase {
     func testCodableRoundTrip() throws {

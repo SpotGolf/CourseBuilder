@@ -1,5 +1,5 @@
 import XCTest
-@testable import CourseData
+@testable import CourseBuilder
 
 final class ScorecardScraperTests: XCTestCase {
     func testParseGolfLinkHTML() throws {

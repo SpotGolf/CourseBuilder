@@ -10,7 +10,7 @@ class CourseStore: ObservableObject {
             self.directory = directory
         } else {
             let appSupport = FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask)[0]
-            self.directory = appSupport.appendingPathComponent("CourseData/courses", isDirectory: true)
+            self.directory = appSupport.appendingPathComponent("CourseBuilder/courses", isDirectory: true)
         }
         try? FileManager.default.createDirectory(at: self.directory, withIntermediateDirectories: true)
     }

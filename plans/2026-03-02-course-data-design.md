@@ -1,4 +1,4 @@
-# CourseData Design
+# CourseBuilder Design
 
 ## Overview
 

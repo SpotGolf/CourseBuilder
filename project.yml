@@ -1,4 +1,4 @@
-name: CourseData
+name: CourseBuilder
 options:
   bundleIdPrefix: com.spotgolf
   deploymentTarget:
@@ -9,27 +9,27 @@ settings:
   base:
     SWIFT_VERSION: "5.9"
 targets:
-  CourseData:
+  CourseBuilder:
     type: application
     platform: macOS
     sources:
-      - CourseData
+      - CourseBuilder
     settings:
       base:
-        CODE_SIGN_ENTITLEMENTS: CourseData/Resources/CourseData.entitlements
+        CODE_SIGN_ENTITLEMENTS: CourseBuilder/Resources/CourseBuilder.entitlements
         ASSETCATALOG_COMPILER_APPICON_NAME: AppIcon
         GENERATE_INFOPLIST_FILE: YES
-        INFOPLIST_KEY_NSLocationUsageDescription: "CourseData uses your location for testing course distances"
+        INFOPLIST_KEY_NSLocationUsageDescription: "CourseBuilder uses your location for course distance verification"
     scheme:
       testTargets:
-        - CourseDataTests
-  CourseDataTests:
+        - CourseBuilderTests
+  CourseBuilderTests:
     type: bundle.unit-test
     platform: macOS
     sources:
-      - CourseDataTests
+      - CourseBuilderTests
     settings:
       base:
         GENERATE_INFOPLIST_FILE: YES
     dependencies:
-      - target: CourseData
+      - target: CourseBuilder

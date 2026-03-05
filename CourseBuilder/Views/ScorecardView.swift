@@ -45,7 +45,7 @@ struct ScorecardView: View {
                         .textFieldStyle(.roundedBorder)
                 }
 
-                // City, State, Country
+                // City, State, Country, Lat/Lng
                 HStack(spacing: 12) {
                     VStack(alignment: .leading, spacing: 2) {
                         Text("City").font(.caption).foregroundStyle(.secondary)
@@ -63,6 +63,18 @@ struct ScorecardView: View {
                         TextField("Country", text: $course.location.country)
                             .textFieldStyle(.roundedBorder)
                             .frame(maxWidth: 100)
+                    }
+                    VStack(alignment: .leading, spacing: 2) {
+                        Text("Latitude").font(.caption).foregroundStyle(.secondary)
+                        TextField("Latitude", value: $course.location.coordinate.latitude, format: .number)
+                            .textFieldStyle(.roundedBorder)
+                            .frame(maxWidth: 120)
+                    }
+                    VStack(alignment: .leading, spacing: 2) {
+                        Text("Longitude").font(.caption).foregroundStyle(.secondary)
+                        TextField("Longitude", value: $course.location.coordinate.longitude, format: .number)
+                            .textFieldStyle(.roundedBorder)
+                            .frame(maxWidth: 120)
                     }
                 }
 
@@ -161,7 +173,12 @@ struct ScorecardView: View {
     private func exportJSON() {
         let panel = NSSavePanel()
         panel.allowedContentTypes = [.json]
-        panel.nameFieldStringValue = "\(course.id).json"
+        let fileName = course.name
+            .components(separatedBy: .alphanumerics.inverted)
+            .filter { !$0.isEmpty }
+            .map { $0.capitalized }
+            .joined(separator: "-")
+        panel.nameFieldStringValue = "\(fileName).json"
 
         guard panel.runModal() == .OK, let url = panel.url else { return }
 
@@ -182,16 +199,28 @@ struct ScorecardView: View {
 
 struct ScorecardTableView: View {
     @Binding var course: Course
+    @State private var subCourseToDelete: Int?
 
     var body: some View {
         ScrollView {
             VStack(alignment: .leading, spacing: 16) {
-                ForEach($course.subCourses) { $subCourse in
+                ForEach(Array(course.subCourses.enumerated()), id: \.element.id) { index, _ in
                     VStack(alignment: .leading, spacing: 4) {
-                        TextField("Sub-course Name", text: $subCourse.name)
-                            .font(.headline)
-                            .textFieldStyle(.plain)
-                            .padding(.horizontal)
+                        HStack {
+                            VStack(alignment: .leading, spacing: 2) {
+                                Text("Sub-course Name").font(.caption).foregroundStyle(.secondary)
+                                TextField("Sub-course Name", text: $course.subCourses[index].name)
+                                    .textFieldStyle(.roundedBorder)
+                            }
+                            Button {
+                                subCourseToDelete = index
+                            } label: {
+                                Image(systemName: "xmark")
+                                    .foregroundStyle(.red)
+                            }
+                            .buttonStyle(.borderless)
+                        }
+                        .padding(.horizontal)
 
                         Grid(alignment: .leading, horizontalSpacing: 4, verticalSpacing: 2) {
                             GridRow {
@@ -205,7 +234,7 @@ struct ScorecardTableView: View {
                             }
                             Divider()
 
-                            ForEach($subCourse.holes) { $hole in
+                            ForEach($course.subCourses[index].holes) { $hole in
                                 GridRow {
                                     Text("\(hole.number)").frame(width: 50)
                                     TextField("", value: $hole.par, format: .number)
@@ -231,8 +260,37 @@ struct ScorecardTableView: View {
                         }
                     }
                 }
+
+                Button {
+                    let holes = (1...9).map { Hole(number: $0, par: 4) }
+                    course.subCourses.append(SubCourse(name: "New", holes: holes))
+                } label: {
+                    Label("Add Sub-course", systemImage: "plus")
+                }
+                .buttonStyle(.borderless)
+                .padding(.horizontal)
             }
             .padding()
+        }
+        .confirmationDialog(
+            "Delete \(subCourseToDelete.flatMap { course.subCourses.indices.contains($0) ? course.subCourses[$0].name : nil } ?? "this sub-course")?",
+            isPresented: Binding(
+                get: { subCourseToDelete != nil },
+                set: { if !$0 { subCourseToDelete = nil } }
+            ),
+            titleVisibility: .visible
+        ) {
+            Button("Delete", role: .destructive) {
+                if let index = subCourseToDelete {
+                    course.subCourses.remove(at: index)
+                    subCourseToDelete = nil
+                }
+            }
+            Button("Cancel", role: .cancel) {
+                subCourseToDelete = nil
+            }
+        } message: {
+            Text("This will remove all holes in this sub-course.")
         }
     }
 }

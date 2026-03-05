@@ -3,6 +3,7 @@ import SwiftUI
 struct CourseListView: View {
     @EnvironmentObject var store: CourseStore
     @State private var showNewCourse = false
+    @State private var showDeleteConfirmation = false
     @State private var selectedCourse: Course?
 
     var body: some View {
@@ -23,14 +24,28 @@ struct CourseListView: View {
             }
             .navigationTitle("Courses")
             .safeAreaInset(edge: .bottom) {
-                Button {
-                    showNewCourse = true
-                } label: {
-                    Image(systemName: "plus")
-                        .frame(maxWidth: .infinity)
-                        .padding(.vertical, 6)
+                HStack(spacing: 0) {
+                    Button {
+                        showNewCourse = true
+                    } label: {
+                        Image(systemName: "plus")
+                            .frame(maxWidth: .infinity)
+                            .padding(.vertical, 6)
+                    }
+                    .buttonStyle(.borderless)
+
+                    Divider().frame(height: 20)
+
+                    Button {
+                        showDeleteConfirmation = true
+                    } label: {
+                        Image(systemName: "minus")
+                            .frame(maxWidth: .infinity)
+                            .padding(.vertical, 6)
+                    }
+                    .buttonStyle(.borderless)
+                    .disabled(selectedCourse == nil)
                 }
-                .buttonStyle(.borderless)
                 .padding(.horizontal, 12)
                 .padding(.bottom, 8)
             }
@@ -50,6 +65,21 @@ struct CourseListView: View {
                 showNewCourse = false
             }
         }
+        .confirmationDialog(
+            "Delete \(selectedCourse?.name ?? "this course")?",
+            isPresented: $showDeleteConfirmation,
+            titleVisibility: .visible
+        ) {
+            Button("Delete", role: .destructive) {
+                if let course = selectedCourse {
+                    try? store.delete(id: course.id)
+                    selectedCourse = nil
+                }
+            }
+            Button("Cancel", role: .cancel) {}
+        } message: {
+            Text("This action cannot be undone.")
+        }
         .onAppear {
             try? store.loadAll()
         }
@@ -60,7 +90,7 @@ struct AddCourseSheet: View {
     let onCreate: (Course) -> Void
 
     enum Tab: Hashable {
-        case search, manualEntry
+        case search, manualEntry, importFile
     }
 
     @Environment(\.dismiss) private var dismiss
@@ -78,6 +108,10 @@ struct AddCourseSheet: View {
     @State private var showFetchError = false
     @State private var fetchErrorMessage = ""
 
+    // Import fields
+    @State private var importedCourse: Course?
+    @State private var importError = ""
+
     // Manual entry fields
     @State private var clubName = ""
     @State private var name = ""
@@ -85,6 +119,8 @@ struct AddCourseSheet: View {
     @State private var city = ""
     @State private var state = ""
     @State private var country = ""
+    @State private var latitude = ""
+    @State private var longitude = ""
     @State private var holeCount = 18
 
     private var groupedResults: [(clubName: String, courses: [GolfCourseAPIClient.CourseSearchResult])] {
@@ -105,6 +141,8 @@ struct AddCourseSheet: View {
             return !checkedResultIDs.isEmpty
         case .manualEntry:
             return !name.isEmpty && !city.isEmpty && !state.isEmpty
+        case .importFile:
+            return importedCourse != nil
         }
     }
 
@@ -118,6 +156,10 @@ struct AddCourseSheet: View {
                 manualEntryTab
                     .tabItem { Label("Manual Entry", systemImage: "square.and.pencil") }
                     .tag(Tab.manualEntry)
+
+                importTab
+                    .tabItem { Label("Import", systemImage: "square.and.arrow.down") }
+                    .tag(Tab.importFile)
             }
             .padding(.top, 8)
             .frame(width: 450, height: 370)
@@ -153,13 +195,60 @@ struct AddCourseSheet: View {
             TextField("City", text: $city)
             TextField("State", text: $state)
             TextField("Country", text: $country)
+            HStack {
+                TextField("Latitude", text: $latitude)
+                TextField("Longitude", text: $longitude)
+            }
             Picker("Holes", selection: $holeCount) {
                 Text("9").tag(9)
                 Text("18").tag(18)
+                Text("27").tag(27)
             }
             .pickerStyle(.segmented)
         }
         .formStyle(.grouped)
+        .padding()
+    }
+
+    private var importTab: some View {
+        VStack(spacing: 16) {
+            Spacer()
+            if let course = importedCourse {
+                VStack(spacing: 8) {
+                    Image(systemName: "checkmark.circle.fill")
+                        .font(.largeTitle)
+                        .foregroundStyle(.green)
+                    Text(course.name)
+                        .font(.headline)
+                    Text("\(course.location.city), \(course.location.state)")
+                        .font(.subheadline)
+                        .foregroundStyle(.secondary)
+                    let holeCount = course.subCourses.reduce(0) { $0 + $1.holes.count }
+                    Text("\(holeCount) holes · \(course.tees.count) tees")
+                        .font(.caption)
+                        .foregroundStyle(.tertiary)
+                }
+            } else if !importError.isEmpty {
+                VStack(spacing: 8) {
+                    Image(systemName: "xmark.circle.fill")
+                        .font(.largeTitle)
+                        .foregroundStyle(.red)
+                    Text(importError)
+                        .font(.callout)
+                        .foregroundStyle(.secondary)
+                        .multilineTextAlignment(.center)
+                }
+            } else {
+                Image(systemName: "doc.badge.arrow.up")
+                    .font(.largeTitle)
+                    .foregroundStyle(.secondary)
+                Text("Select a CourseBuilder JSON file")
+                    .font(.callout)
+                    .foregroundStyle(.secondary)
+            }
+            Button("Choose File...") { chooseImportFile() }
+            Spacer()
+        }
         .padding()
     }
 
@@ -259,13 +348,26 @@ struct AddCourseSheet: View {
             guard !checkedResultIDs.isEmpty else { return }
             let selected = searchResults.filter { checkedResultIDs.contains($0.id) }
             fetchAndAddCourses(selected)
+        case .importFile:
+            if let course = importedCourse {
+                // Assign a new ID so it doesn't collide with any existing course
+                let newCourse = Course(
+                    name: course.name,
+                    clubName: course.clubName,
+                    golfCourseAPIIds: course.golfCourseAPIIds,
+                    location: course.location,
+                    tees: course.tees,
+                    subCourses: course.subCourses
+                )
+                onCreate(newCourse)
+            }
         case .manualEntry:
-            let holesPerSub = holeCount == 9 ? holeCount : holeCount / 2
-            let frontHoles = (1...holesPerSub).map { Hole(number: $0, par: 4) }
-            var subCourses = [SubCourse(name: "Front", holes: frontHoles)]
-            if holeCount > 9 {
-                let backHoles = (1...holesPerSub).map { Hole(number: $0, par: 4) }
-                subCourses.append(SubCourse(name: "Back", holes: backHoles))
+            let subCourseCount = holeCount / 9
+            let subCourseNames = ["Front", "Back", "Third"]
+            var subCourses: [SubCourse] = []
+            for i in 0..<subCourseCount {
+                let holes = (1...9).map { Hole(number: $0, par: 4) }
+                subCourses.append(SubCourse(name: subCourseNames[i], holes: holes))
             }
             let course = Course(
                 name: name,
@@ -275,11 +377,27 @@ struct AddCourseSheet: View {
                     city: city,
                     state: state,
                     country: country,
-                    coordinate: Coordinate(latitude: 0, longitude: 0)
+                    coordinate: Coordinate(latitude: Double(latitude) ?? 0, longitude: Double(longitude) ?? 0)
                 ),
                 subCourses: subCourses
             )
             onCreate(course)
+        }
+    }
+
+    private func chooseImportFile() {
+        let panel = NSOpenPanel()
+        panel.allowedContentTypes = [.json]
+        panel.allowsMultipleSelection = false
+        guard panel.runModal() == .OK, let url = panel.url else { return }
+
+        do {
+            let data = try Data(contentsOf: url)
+            importedCourse = try JSONDecoder().decode(Course.self, from: data)
+            importError = ""
+        } catch {
+            importedCourse = nil
+            importError = "Invalid CourseBuilder file: \(error.localizedDescription)"
         }
     }
 

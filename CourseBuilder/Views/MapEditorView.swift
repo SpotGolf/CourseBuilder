@@ -2,6 +2,18 @@ import SwiftUI
 import MapKit
 import CoreLocation
 
+enum MapStyleMode: String, CaseIterable {
+    case satellite = "Satellite"
+    case hybrid = "Hybrid"
+    case standard = "Standard"
+
+    var next: MapStyleMode {
+        let all = Self.allCases
+        let idx = all.firstIndex(of: self)!
+        return all[(idx + 1) % all.count]
+    }
+}
+
 struct MapEditorView: View {
     @EnvironmentObject var store: CourseStore
     @State var course: Course
@@ -11,10 +23,21 @@ struct MapEditorView: View {
     @State private var selectedHole: Int = 1
     @State private var selectedPinID: UUID?
     @State private var mapPosition: MapCameraPosition = .automatic
-    @State private var mapStyle: MapStyle = .standard
+    @State private var mapStyleMode: MapStyleMode = .satellite
+    private var mapStyle: MapStyle {
+        switch mapStyleMode {
+        case .satellite: .imagery(elevation: .realistic)
+        case .hybrid: .hybrid(elevation: .realistic)
+        case .standard: .standard
+        }
+    }
     @State private var activeTool: ToolMode = .select
     @State private var statusMessage = ""
     @State private var toolClickIndex: Int = 0
+    @State private var isDraggingPin = false
+    @State private var dragOffset: CGSize = .zero
+    @State private var visibleRegion: MKCoordinateRegion?
+    @State private var mapViewSize: CGSize = .zero
     @FocusState private var isMapFocused: Bool
 
     var body: some View {
@@ -44,6 +67,14 @@ struct MapEditorView: View {
                 return .handled
             }
             return .ignored
+        }
+        .onKeyPress(characters: CharacterSet(charactersIn: "v")) { _ in
+            mapStyleMode = mapStyleMode.next
+            return .handled
+        }
+        .onKeyPress(.escape) {
+            selectedPinID = nil
+            return .handled
         }
         .onKeyPress(.delete) {
             deleteSelectedPin()
@@ -223,7 +254,7 @@ struct MapEditorView: View {
 
     private var mapArea: some View {
         MapReader { proxy in
-            Map(position: $mapPosition) {
+            Map(position: $mapPosition, interactionModes: isDraggingPin ? [.zoom, .rotate, .pitch] : .all) {
                 ForEach(pinsForCurrentHole) { pin in
                     Annotation(pin.pinType.rawValue, coordinate: pin.coordinate.clCoordinate) {
                         pinMarker(for: pin)
@@ -235,20 +266,49 @@ struct MapEditorView: View {
                 MapZoomStepper()
                 MapPitchToggle()
             }
-            .overlay {
-                // Transparent overlay for placement tool taps
-                Color.clear
-                    .contentShape(Rectangle())
-                    .allowsHitTesting(activeTool != .select)
-                    .gesture(
-                        SpatialTapGesture()
-                            .onEnded { tap in
-                                if let coord = proxy.convert(tap.location, from: .local) {
-                                    placePin(at: Coordinate(coord))
-                                }
-                            }
-                    )
+            .onMapCameraChange(frequency: .continuous) { context in
+                visibleRegion = context.region
             }
+            .overlay {
+                GeometryReader { geometry in
+                    Color.clear
+                        .onAppear { mapViewSize = geometry.size }
+                        .onChange(of: geometry.size) { _, newSize in mapViewSize = newSize }
+                }
+            }
+            .overlay {
+                // Drag handle positioned over the selected pin
+                if activeTool == .select,
+                   let pinID = selectedPinID,
+                   let pin = pinsForCurrentHole.first(where: { $0.id == pinID }),
+                   let screenPoint = proxy.convert(pin.coordinate.clCoordinate, to: .local) {
+                    Color.clear
+                        .frame(width: 44, height: 44)
+                        .contentShape(Circle())
+                        .position(screenPoint)
+                        .gesture(
+                            DragGesture(minimumDistance: 2)
+                                .onChanged { value in
+                                    isDraggingPin = true
+                                    dragOffset = value.translation
+                                }
+                                .onEnded { value in
+                                    applyDrag(to: pinID, translation: value.translation)
+                                    dragOffset = .zero
+                                    isDraggingPin = false
+                                }
+                        )
+                }
+            }
+            .simultaneousGesture(
+                SpatialTapGesture()
+                    .onEnded { tap in
+                        guard activeTool != .select else { return }
+                        if let coord = proxy.convert(tap.location, from: .local) {
+                            placePin(at: Coordinate(coord))
+                        }
+                    }
+            )
             .overlay(alignment: .topTrailing) {
                 mapStylePicker
                     .padding(8)
@@ -258,24 +318,31 @@ struct MapEditorView: View {
 
     private var mapStylePicker: some View {
         Menu {
-            Button("Satellite") { mapStyle = .imagery(elevation: .realistic) }
-            Button("Hybrid") { mapStyle = .hybrid(elevation: .realistic) }
-            Button("Standard") { mapStyle = .standard }
+            ForEach(MapStyleMode.allCases, id: \.self) { mode in
+                Button(mode.rawValue) { mapStyleMode = mode }
+            }
         } label: {
-            Image(systemName: "map")
-                .padding(8)
-                .background(.regularMaterial, in: RoundedRectangle(cornerRadius: 8))
+            HStack(spacing: 4) {
+                Image(systemName: "map")
+                Text("(\(mapStyleMode.rawValue.prefix(3).lowercased()))")
+                    .font(.system(size: 9, design: .monospaced))
+            }
+            .padding(8)
+            .background(.regularMaterial, in: RoundedRectangle(cornerRadius: 8))
         }
         .menuStyle(.borderlessButton)
         .fixedSize()
     }
 
     private func pinMarker(for pin: EditablePin) -> some View {
-        Circle()
+        let isSelected = selectedPinID == pin.id
+
+        return Circle()
             .fill(colorForPinType(pin.pinType))
-            .stroke(selectedPinID == pin.id ? Color.white : Color.clear, lineWidth: 2)
+            .stroke(isSelected ? Color.white : Color.clear, lineWidth: 2)
             .frame(width: 16, height: 16)
             .shadow(radius: 2)
+            .offset(isSelected && isDraggingPin ? dragOffset : .zero)
             .onTapGesture {
                 selectedPinID = pin.id
                 activeTool = .select
@@ -372,7 +439,7 @@ struct MapEditorView: View {
 
     private var toolHint: String {
         switch activeTool {
-        case .select: "Click pin to select | Delete to remove"
+        case .select: "Click pin to select | Hold+drag to move | Esc to deselect | Del to remove"
         case .tee: "Click map to place tee"
         case .green:
             switch toolClickIndex {
@@ -446,6 +513,15 @@ struct MapEditorView: View {
         case .water:
             return toolClickIndex == 0 ? .waterFront : .waterBack
         }
+    }
+
+    private func applyDrag(to pinID: UUID, translation: CGSize) {
+        guard let region = visibleRegion, mapViewSize.width > 0, mapViewSize.height > 0,
+              let index = pins.firstIndex(where: { $0.id == pinID }) else { return }
+        let degreesPerPixelLat = region.span.latitudeDelta / mapViewSize.height
+        let degreesPerPixelLng = region.span.longitudeDelta / mapViewSize.width
+        pins[index].coordinate.latitude -= translation.height * degreesPerPixelLat
+        pins[index].coordinate.longitude += translation.width * degreesPerPixelLng
     }
 
     private func deleteSelectedPin() {

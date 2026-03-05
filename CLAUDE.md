@@ -4,7 +4,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## Project
 
-CourseData — a macOS SwiftUI desktop app for creating golf course GPS data files. Part of the SpotGolf project. Produces JSON files with tee, green, and hazard coordinates for each hole.
+CourseBuilder — a macOS SwiftUI desktop app for creating golf course GPS data files. Part of the SpotGolf project. Produces JSON files with tee, green, and hazard coordinates for each hole.
 
 ## Build & Test
 
@@ -12,8 +12,8 @@ Requires xcodegen (`brew install xcodegen`).
 
 ```bash
 xcodegen generate
-xcodebuild -scheme CourseData -destination 'platform=macOS' build
-xcodebuild -scheme CourseData -destination 'platform=macOS' test
+xcodebuild -scheme CourseBuilder -destination 'platform=macOS' build
+xcodebuild -scheme CourseBuilder -destination 'platform=macOS' test
 ```
 
 ## Architecture

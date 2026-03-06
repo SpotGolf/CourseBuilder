@@ -6,11 +6,15 @@ CourseBuilder produces JSON files containing tee, green, and hazard coordinates 
 
 ## Features
 
-- **Course Search** — Find golf courses using MapKit search
 - **Scorecard Import** — Pull scorecard data from GolfCourseAPI.com, web scraping, or image OCR
 - **Satellite Map Editor** — Place and adjust pins for tees, greens, bunkers, and water hazards on a satellite map
-- **Distance Verification** — Compare measured tee-to-green distances against scorecard yardages
 - **JSON Export** — Export course data as a single JSON file per course
+
+## Future Features
+
+- **Distance Verification** — Compare measured tee-to-green distances against scorecard yardages
+
+If you would like to help with the project and any future features, open a PR. We'll review your PR and add you to the project if it looks good.
 
 ## Requirements
 

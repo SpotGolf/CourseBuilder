@@ -2,6 +2,14 @@
 
 > **For Claude:** REQUIRED SUB-SKILL: Use superpowers:executing-plans to implement this plan task-by-task.
 
+> **Note (2026-03-04):** The data model has been updated since this plan was written. Code snippets below reflect the original model. Key changes:
+> - `Course.id` is now `UUID` (was `String` from `generateID()`); `generateID()` removed
+> - `Course` gained `clubName: String` and `golfCourseAPIId: Int?`
+> - `CourseLocation` gained `address: String` and `country: String`
+> - `TeeDefinition` now uses `male: TeeInformation?` and `female: TeeInformation?` instead of flat `maleRating/maleSlope/femaleRating/femaleSlope`
+> - `TeeInformation` struct contains: `courseRating`, `slopeRating`, `frontCourseRating`, `frontSlopeRating`, `backCourseRating`, `backSlopeRating`, `totalYards`, `parTotal`
+> - See `plans/2026-03-02-course-data-design.md` for the current JSON schema
+
 **Goal:** Build a macOS SwiftUI app that creates golf course GPS data files (tees, greens, hazards) by combining scorecard APIs, satellite imagery analysis, and a manual map editor.
 
 **Architecture:** Native macOS 14+ SwiftUI app using MapKit for satellite display and pin editing, CoreImage for green/tee detection from satellite snapshots, Vision for scorecard OCR, and URLSession for API/scraping. Data persisted as one JSON file per course.

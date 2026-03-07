@@ -107,7 +107,13 @@ class ScorecardImporter: ObservableObject {
     }
 
     func buildCourse(from data: ScorecardData, name: String, city: String, state: String) -> Course {
-        let tees = data.teeNames.map { teeName in
+        // Sort tees by descending total yardage so longest tees appear first
+        let sortedTeeNames = data.teeNames.sorted { a, b in
+            let totalA = data.holes.reduce(0) { $0 + ($1.yardages[a] ?? 0) }
+            let totalB = data.holes.reduce(0) { $0 + ($1.yardages[b] ?? 0) }
+            return totalA > totalB
+        }
+        let tees = sortedTeeNames.map { teeName in
             TeeDefinition(
                 name: teeName,
                 color: TeeDefinition.defaultColor(for: teeName)

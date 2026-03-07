@@ -238,6 +238,71 @@ final class GolfCourseAPIClientTests: XCTestCase {
         XCTAssertFalse(course.subCourses.isEmpty)
     }
 
+    func testConvertToCourseSortsTeesByDescendingTotalYardage() throws {
+        // Create a course with three male tees where the shortest tee appears first
+        let json = """
+        {
+            "id": 99,
+            "course_name": "Sort Test Course",
+            "club_name": "Sort Test Club",
+            "location": { "address": "", "city": "Denver", "state": "CO", "country": "US", "zip_code": "" },
+            "tees": {
+                "male": [
+                    {
+                        "tee_name": "Red",
+                        "course_rating": 65.0, "slope_rating": 110,
+                        "front_course_rating": 32.0, "front_slope_rating": 108,
+                        "back_course_rating": 33.0, "back_slope_rating": 112,
+                        "total_yards": 5000, "par_total": 72,
+                        "holes": [
+                            { "par": 4, "yardage": 300, "handicap": 1 },
+                            { "par": 4, "yardage": 310, "handicap": 2 },
+                            { "par": 4, "yardage": 280, "handicap": 3 },
+                            { "par": 4, "yardage": 290, "handicap": 4 }
+                        ]
+                    },
+                    {
+                        "tee_name": "Blue",
+                        "course_rating": 72.0, "slope_rating": 130,
+                        "front_course_rating": 36.0, "front_slope_rating": 128,
+                        "back_course_rating": 36.0, "back_slope_rating": 132,
+                        "total_yards": 6800, "par_total": 72,
+                        "holes": [
+                            { "par": 4, "yardage": 420, "handicap": 1 },
+                            { "par": 4, "yardage": 430, "handicap": 2 },
+                            { "par": 4, "yardage": 400, "handicap": 3 },
+                            { "par": 4, "yardage": 410, "handicap": 4 }
+                        ]
+                    },
+                    {
+                        "tee_name": "White",
+                        "course_rating": 69.0, "slope_rating": 120,
+                        "front_course_rating": 34.0, "front_slope_rating": 118,
+                        "back_course_rating": 35.0, "back_slope_rating": 122,
+                        "total_yards": 6200, "par_total": 72,
+                        "holes": [
+                            { "par": 4, "yardage": 370, "handicap": 1 },
+                            { "par": 4, "yardage": 380, "handicap": 2 },
+                            { "par": 4, "yardage": 350, "handicap": 3 },
+                            { "par": 4, "yardage": 360, "handicap": 4 }
+                        ]
+                    }
+                ],
+                "female": []
+            }
+        }
+        """.data(using: .utf8)!
+
+        let detail = try JSONDecoder().decode(GolfCourseAPIClient.CourseDetail.self, from: json)
+        let course = try GolfCourseAPIClient.convertToCourse(detail: detail)
+
+        XCTAssertEqual(course.tees.count, 3)
+        // Should be sorted by descending total yardage: Blue (1660), White (1460), Red (1180)
+        XCTAssertEqual(course.tees[0].name, "Blue")
+        XCTAssertEqual(course.tees[1].name, "White")
+        XCTAssertEqual(course.tees[2].name, "Red")
+    }
+
     func testConvertToCourseEmptyDetailsThrows() {
         XCTAssertThrowsError(try GolfCourseAPIClient.convertToCourse(details: [])) { error in
             XCTAssertTrue(error is GolfCourseAPIClient.APIError)

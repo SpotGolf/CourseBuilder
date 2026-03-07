@@ -400,7 +400,12 @@ actor GolfCourseAPIClient {
             clubName: first.clubName,
             golfCourseAPIIds: golfCourseAPIIds,
             location: location,
-            tees: Array(allTeeDefinitions.values),
+            tees: Array(allTeeDefinitions.values).sorted { teeA, teeB in
+                let allHoles = allSubCourses.flatMap(\.holes)
+                let totalA = allHoles.compactMap { $0.yardages[teeA.name] }.reduce(0, +)
+                let totalB = allHoles.compactMap { $0.yardages[teeB.name] }.reduce(0, +)
+                return totalA > totalB
+            },
             subCourses: allSubCourses
         )
     }

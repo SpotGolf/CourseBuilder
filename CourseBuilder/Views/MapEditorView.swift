@@ -35,6 +35,7 @@ struct MapEditorView: View {
     @State private var statusMessage = ""
     @State private var toolClickIndex: Int = 0
     @State private var saveTask: Task<Void, Never>?
+    @State private var statusTask: Task<Void, Never>?
     @State private var isDraggingPin = false
     @State private var dragOffset: CGSize = .zero
     @State private var visibleRegion: MKCoordinateRegion?
@@ -528,6 +529,7 @@ struct MapEditorView: View {
                 activeTool = .select
                 toolClickIndex = 0
                 statusMessage = "All tees placed"
+                clearStatusAfterDelay()
             }
         case .green:
             if toolClickIndex >= 3 { toolClickIndex = 0 }
@@ -764,13 +766,21 @@ struct MapEditorView: View {
         }
     }
 
+    private func clearStatusAfterDelay() {
+        statusTask?.cancel()
+        statusTask = Task {
+            try? await Task.sleep(for: .seconds(3))
+            guard !Task.isCancelled else { return }
+            statusMessage = ""
+        }
+    }
+
     // MARK: - Save
 
     private func saveCourse() {
         applyPinsToCourse()
         do {
             try store.save(course)
-            statusMessage = "Saved"
         } catch {
             statusMessage = "Save failed: \(error.localizedDescription)"
         }

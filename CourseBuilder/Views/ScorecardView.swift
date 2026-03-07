@@ -92,6 +92,24 @@ struct ScorecardView: View {
 
                 ForEach(course.tees.indices, id: \.self) { index in
                     HStack(spacing: 8) {
+                        Button {
+                            guard index > 0 else { return }
+                            course.tees.swapAt(index, index - 1)
+                        } label: {
+                            Image(systemName: "chevron.up")
+                        }
+                        .buttonStyle(.borderless)
+                        .disabled(index == 0)
+
+                        Button {
+                            guard index < course.tees.count - 1 else { return }
+                            course.tees.swapAt(index, index + 1)
+                        } label: {
+                            Image(systemName: "chevron.down")
+                        }
+                        .buttonStyle(.borderless)
+                        .disabled(index == course.tees.count - 1)
+
                         TextField("Tee Name", text: $course.tees[index].name)
                             .textFieldStyle(.roundedBorder)
                             .frame(maxWidth: 150)

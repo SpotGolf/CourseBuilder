@@ -453,7 +453,16 @@ struct MapEditorView: View {
     private var toolHint: String {
         switch activeTool {
         case .select: "Click pin to select | Hold+drag to move | Esc to deselect | Del to remove"
-        case .tee: "Click map to place tee"
+        case .tee:
+            if let next = remainingTeesForCurrentHole().first {
+                if let yards = next.yards {
+                    "Click to place \(next.name) tee (\(yards) yds)"
+                } else {
+                    "Click to place \(next.name) tee"
+                }
+            } else {
+                "All tees placed for this hole"
+            }
         case .green:
             switch toolClickIndex {
             case 0: "Click map: green front"
@@ -486,11 +495,25 @@ struct MapEditorView: View {
 
     private func placePin(at coordinate: Coordinate) {
         let pinType = pinTypeForCurrentClick()
+
+        // For tee tool, determine the tee name from the sequence
+        let teeName: String? = {
+            if pinType == .tee {
+                return remainingTeesForCurrentHole().first?.name
+            }
+            return nil
+        }()
+
+        // If tee tool but no remaining tees, do nothing
+        if activeTool == .tee && teeName == nil {
+            return
+        }
+
         let pin = EditablePin(
             id: UUID(),
             pinType: pinType,
             coordinate: coordinate,
-            teeName: pinType == .tee ? course.tees.first?.name : nil,
+            teeName: teeName,
             subCourseIndex: selectedSubCourseIndex,
             holeNumber: selectedHole
         )
@@ -498,8 +521,14 @@ struct MapEditorView: View {
         selectedPinID = pin.id
         toolClickIndex += 1
 
-        // Reset click index when sequence is complete
+        // Reset click index or auto-switch when sequence is complete
         switch activeTool {
+        case .tee:
+            if remainingTeesForCurrentHole().isEmpty {
+                activeTool = .select
+                toolClickIndex = 0
+                statusMessage = "All tees placed"
+            }
         case .green:
             if toolClickIndex >= 3 { toolClickIndex = 0 }
         case .bunker, .water:
@@ -507,6 +536,42 @@ struct MapEditorView: View {
         default:
             toolClickIndex = 0
         }
+    }
+
+    /// Returns tees still needing placement for the current hole, ordered by descending yardage.
+    /// Tees with yardage data come first (sorted by yards desc), then tees without yardage (in course.tees order).
+    private func remainingTeesForCurrentHole() -> [(name: String, yards: Int?)] {
+        let currentHole: Hole? = {
+            guard selectedSubCourseIndex < course.subCourses.count else { return nil }
+            return course.subCourses[selectedSubCourseIndex].holes.first { $0.number == selectedHole }
+        }()
+
+        // Find tee names already placed for this hole
+        let placedTeeNames = Set(
+            pinsForCurrentHole
+                .filter { $0.pinType == .tee }
+                .compactMap(\.teeName)
+        )
+
+        // Split into tees with yardage and tees without
+        var withYardage: [(name: String, yards: Int)] = []
+        var withoutYardage: [String] = []
+
+        for tee in course.tees {
+            guard !placedTeeNames.contains(tee.name) else { continue }
+            if let yards = currentHole?.yardages[tee.name], yards > 0 {
+                withYardage.append((name: tee.name, yards: yards))
+            } else {
+                withoutYardage.append(tee.name)
+            }
+        }
+
+        // Sort tees with yardage by descending yards
+        withYardage.sort { $0.yards > $1.yards }
+
+        // Combine: yardage tees first, then no-yardage tees in definition order
+        return withYardage.map { (name: $0.name, yards: Optional($0.yards)) }
+             + withoutYardage.map { (name: $0, yards: nil) }
     }
 
     private func pinTypeForCurrentClick() -> PinType {

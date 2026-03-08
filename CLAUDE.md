@@ -34,7 +34,7 @@ One JSON file per course. Holes contain: tees (keyed by name), green (front/midd
 
 ## Git
 
-Default branch is `main`.
+Default branch is `main`. **NEVER commit directly to `main`.** Always create a feature branch before starting any implementation work.
 
 ## Environment
 

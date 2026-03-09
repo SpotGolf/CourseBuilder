@@ -350,16 +350,7 @@ struct AddCourseSheet: View {
             fetchAndAddCourses(selected)
         case .importFile:
             if let course = importedCourse {
-                // Assign a new ID so it doesn't collide with any existing course
-                let newCourse = Course(
-                    name: course.name,
-                    clubName: course.clubName,
-                    golfCourseAPIIds: course.golfCourseAPIIds,
-                    location: course.location,
-                    tees: course.tees,
-                    subCourses: course.subCourses
-                )
-                onCreate(newCourse)
+                onCreate(course)
             }
         case .manualEntry:
             let subCourseCount = holeCount / 9

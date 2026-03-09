@@ -45,6 +45,7 @@ struct EditablePin: Identifiable, Equatable {
     var coordinate: Coordinate
     var teeName: String?
     var featureIndex: Int?
+    var featureID: UUID?
     var subCourseIndex: Int
     var holeNumber: Int
 

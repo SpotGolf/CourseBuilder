@@ -667,6 +667,7 @@ struct MapEditorView: View {
                             pinType: .bunkerFront,
                             coordinate: feature.front,
                             featureIndex: featureIdx,
+                            featureID: feature.id,
                             subCourseIndex: subIdx,
                             holeNumber: hole.number
                         ))
@@ -675,6 +676,7 @@ struct MapEditorView: View {
                             pinType: .bunkerBack,
                             coordinate: feature.back,
                             featureIndex: featureIdx,
+                            featureID: feature.id,
                             subCourseIndex: subIdx,
                             holeNumber: hole.number
                         ))
@@ -684,6 +686,7 @@ struct MapEditorView: View {
                             pinType: .waterFront,
                             coordinate: feature.front,
                             featureIndex: featureIdx,
+                            featureID: feature.id,
                             subCourseIndex: subIdx,
                             holeNumber: hole.number
                         ))
@@ -692,6 +695,7 @@ struct MapEditorView: View {
                             pinType: .waterBack,
                             coordinate: feature.back,
                             featureIndex: featureIdx,
+                            featureID: feature.id,
                             subCourseIndex: subIdx,
                             holeNumber: hole.number
                         ))
@@ -739,13 +743,15 @@ struct MapEditorView: View {
                 let bunkerFronts = holePins.filter { $0.pinType == .bunkerFront }
                 let bunkerBacks = holePins.filter { $0.pinType == .bunkerBack }
                 for (front, back) in zip(bunkerFronts, bunkerBacks) {
-                    features.append(Feature(type: .bunker, front: front.coordinate, back: back.coordinate))
+                    let featureID = front.featureID ?? UUID()
+                    features.append(Feature(id: featureID, type: .bunker, front: front.coordinate, back: back.coordinate))
                 }
 
                 let waterFronts = holePins.filter { $0.pinType == .waterFront }
                 let waterBacks = holePins.filter { $0.pinType == .waterBack }
                 for (front, back) in zip(waterFronts, waterBacks) {
-                    features.append(Feature(type: .water, front: front.coordinate, back: back.coordinate))
+                    let featureID = front.featureID ?? UUID()
+                    features.append(Feature(id: featureID, type: .water, front: front.coordinate, back: back.coordinate))
                 }
 
                 course.subCourses[subIdx].holes[holeIdx].features = features

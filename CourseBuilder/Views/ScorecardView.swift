@@ -8,6 +8,7 @@ struct ScorecardView: View {
     @State private var statusMessage = ""
     @State private var showImagePicker = false
     @State private var saveTask: Task<Void, Never>?
+    @State private var exportWarnings: [String]?
     @Environment(\.openWindow) private var openWindow
 
     var body: some View {
@@ -151,8 +152,26 @@ struct ScorecardView: View {
                 importFromImage(url: url)
             }
         }
+        .sheet(
+            isPresented: Binding(
+                get: { exportWarnings != nil },
+                set: { if !$0 { exportWarnings = nil } }
+            )
+        ) {
+            ExportWarningsSheet(warnings: exportWarnings ?? []) {
+                exportWarnings = nil
+            } onExportAnyway: {
+                exportWarnings = nil
+                showSavePanelAndExport()
+            }
+        }
         .onAppear {
             if let latest = store.courses.first(where: { $0.id == course.id }) {
+                course = latest
+            }
+        }
+        .onChange(of: store.courses) { _, newCourses in
+            if let latest = newCourses.first(where: { $0.id == course.id }), latest != course {
                 course = latest
             }
         }
@@ -195,6 +214,18 @@ struct ScorecardView: View {
     }
 
     private func exportJSON() {
+        if let latest = store.courses.first(where: { $0.id == course.id }) {
+            course = latest
+        }
+        let warnings = validateCourse()
+        if warnings.isEmpty {
+            showSavePanelAndExport()
+        } else {
+            exportWarnings = warnings
+        }
+    }
+
+    private func showSavePanelAndExport() {
         let panel = NSSavePanel()
         panel.allowedContentTypes = [.json]
         let fileName = course.name
@@ -205,7 +236,43 @@ struct ScorecardView: View {
         panel.nameFieldStringValue = "\(fileName).json"
 
         guard panel.runModal() == .OK, let url = panel.url else { return }
+        writeExport(to: url)
+    }
 
+    private func validateCourse() -> [String] {
+        var warnings: [String] = []
+        let teeNames = course.tees.map(\.name)
+        var holeOffset = 0
+
+        for subCourse in course.subCourses {
+            for hole in subCourse.holes {
+                let holeLabel = "Hole \(holeOffset + hole.number)"
+
+                let missingTees = teeNames.filter { hole.tees[$0] == nil }
+                if !missingTees.isEmpty {
+                    warnings.append("\(holeLabel): missing tee location for \(missingTees.joined(separator: ", "))")
+                }
+
+                if let green = hole.green {
+                    let zero = Coordinate(latitude: 0, longitude: 0)
+                    var missingParts: [String] = []
+                    if green.front == zero { missingParts.append("front") }
+                    if green.middle == zero { missingParts.append("middle") }
+                    if green.back == zero { missingParts.append("back") }
+                    if !missingParts.isEmpty {
+                        warnings.append("\(holeLabel): green missing \(missingParts.joined(separator: ", "))")
+                    }
+                } else {
+                    warnings.append("\(holeLabel): missing green")
+                }
+            }
+            holeOffset += subCourse.holes.count
+        }
+
+        return warnings
+    }
+
+    private func writeExport(to url: URL) {
         do {
             let encoder = JSONEncoder()
             encoder.outputFormatting = [.prettyPrinted, .sortedKeys]
@@ -217,6 +284,40 @@ struct ScorecardView: View {
         }
     }
 
+}
+
+// MARK: - ExportWarningsSheet
+
+struct ExportWarningsSheet: View {
+    let warnings: [String]
+    let onCancel: () -> Void
+    let onExportAnyway: () -> Void
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 12) {
+            Text("Export Warnings")
+                .font(.headline)
+
+            Text("The following issues were found:")
+                .font(.subheadline)
+                .foregroundStyle(.secondary)
+
+            List(Array(warnings.enumerated()), id: \.offset) { _, warning in
+                Text(warning)
+                    .font(.body)
+            }
+            .frame(height: 280)
+
+            HStack {
+                Spacer()
+                Button("Cancel", role: .cancel, action: onCancel)
+                    .keyboardShortcut(.cancelAction)
+                Button("Export Anyway", action: onExportAnyway)
+            }
+        }
+        .padding()
+        .frame(width: 450)
+    }
 }
 
 // MARK: - ScorecardTableView

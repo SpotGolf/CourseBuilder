@@ -18,10 +18,17 @@ struct MapEditorView: View {
     @EnvironmentObject var store: CourseStore
     @State var course: Course
 
-    @State private var pins: [EditablePin] = []
+    // Selection state
     @State private var selectedSubCourseIndex: Int = 0
     @State private var selectedHole: Int = 1
-    @State private var selectedPinID: UUID?
+    @State private var selectedFeatureID: Int?
+    @State private var selectedVertexIndex: Int?
+
+    // Drawing state
+    @State private var drawingVertices: [Coordinate] = []
+    @State private var pendingFeatureType: FeatureType = .fairway
+
+    // Map state
     @State private var mapPosition: MapCameraPosition = .automatic
     @State private var mapStyleMode: MapStyleMode = .satellite
     private var mapStyle: MapStyle {
@@ -33,14 +40,17 @@ struct MapEditorView: View {
     }
     @State private var activeTool: ToolMode = .select
     @State private var statusMessage = ""
-    @State private var toolClickIndex: Int = 0
     @State private var saveTask: Task<Void, Never>?
     @State private var statusTask: Task<Void, Never>?
-    @State private var isDraggingPin = false
+    @State private var isDraggingVertex = false
     @State private var dragOffset: CGSize = .zero
     @State private var visibleRegion: MKCoordinateRegion?
     @State private var mapViewSize: CGSize = .zero
     @FocusState private var isMapFocused: Bool
+
+    // OSM import state
+    @State private var isImportingOSM = false
+    @State private var osmImportStatus = ""
 
     var body: some View {
         VStack(spacing: 0) {
@@ -62,10 +72,9 @@ struct MapEditorView: View {
         }
         .focusable()
         .focused($isMapFocused)
-        .onKeyPress(characters: CharacterSet(charactersIn: "stgbw")) { press in
+        .onKeyPress(characters: CharacterSet(charactersIn: "spc")) { press in
             if let mode = ToolMode.allCases.first(where: { $0.shortcutKey == press.characters.first }) {
-                activeTool = mode
-                toolClickIndex = 0
+                switchTool(to: mode)
                 return .handled
             }
             return .ignored
@@ -75,15 +84,26 @@ struct MapEditorView: View {
             return .handled
         }
         .onKeyPress(.escape) {
-            selectedPinID = nil
+            if !drawingVertices.isEmpty {
+                drawingVertices = []
+                statusMessage = "Drawing cancelled"
+                clearStatusAfterDelay()
+            } else {
+                selectedFeatureID = nil
+                selectedVertexIndex = nil
+            }
             return .handled
         }
         .onKeyPress(.delete) {
-            deleteSelectedPin()
+            deleteSelectedFeature()
             return .handled
         }
         .onKeyPress(KeyEquivalent("\u{7F}")) {
-            deleteSelectedPin()
+            deleteSelectedFeature()
+            return .handled
+        }
+        .onKeyPress(.return) {
+            finishDrawing()
             return .handled
         }
         .navigationTitle("\(course.name) — \(course.location.city), \(course.location.state)")
@@ -91,11 +111,10 @@ struct MapEditorView: View {
             if let latest = store.courses.first(where: { $0.id == course.id }) {
                 course = latest
             }
-            loadPinsFromCourse()
             centerMapOnCourse()
             isMapFocused = true
         }
-        .onChange(of: pins) {
+        .onChange(of: course) {
             saveTask?.cancel()
             saveTask = Task {
                 try? await Task.sleep(for: .milliseconds(500))
@@ -103,6 +122,25 @@ struct MapEditorView: View {
                 saveCourse()
             }
         }
+    }
+
+    // MARK: - Current Hole Helpers
+
+    private var currentHole: Hole? {
+        guard selectedSubCourseIndex < course.subCourses.count else { return nil }
+        return course.subCourses[selectedSubCourseIndex].holes.first { $0.number == selectedHole }
+    }
+
+    private var currentHoleFeatures: [Feature] {
+        guard let hole = currentHole else { return [] }
+        return hole.featureIDs.compactMap { id in
+            course.features.first { $0.id == id }
+        }
+    }
+
+    private var unassociatedFeatures: [Feature] {
+        let allAssigned = Set(course.subCourses.flatMap(\.holes).flatMap(\.featureIDs))
+        return course.features.filter { !allAssigned.contains($0.id) }
     }
 
     // MARK: - Hole Sidebar
@@ -120,14 +158,14 @@ struct MapEditorView: View {
                             Button {
                                 selectedSubCourseIndex = subIdx
                                 selectedHole = hole.number
-                                selectedPinID = nil
+                                selectedFeatureID = nil
+                                selectedVertexIndex = nil
                             } label: {
                                 HStack {
                                     Text("Hole \(hole.number)")
                                         .fontWeight(selectedSubCourseIndex == subIdx && selectedHole == hole.number ? .bold : .regular)
                                     Spacer()
-                                    let count = pins.filter { $0.subCourseIndex == subIdx && $0.holeNumber == hole.number }.count
-                                    Text("\(count) pins")
+                                    Text("\(hole.featureIDs.count) features")
                                         .font(.caption)
                                         .foregroundStyle(.secondary)
                                 }
@@ -140,36 +178,68 @@ struct MapEditorView: View {
 
             Divider()
 
-            // Pin list for selected hole
-            let holePins = pins.filter { $0.subCourseIndex == selectedSubCourseIndex && $0.holeNumber == selectedHole }
-            if !holePins.isEmpty {
+            // Feature list for selected hole
+            let holeFeatures = currentHoleFeatures
+            if !holeFeatures.isEmpty {
                 VStack(alignment: .leading, spacing: 4) {
-                    Text("Pins - Hole \(selectedHole)")
+                    Text("Features - Hole \(selectedHole)")
                         .font(.subheadline.bold())
                         .padding(.horizontal)
                         .padding(.top, 8)
 
-                    List(holePins) { pin in
+                    List(holeFeatures) { feature in
                         Button {
-                            selectedPinID = pin.id
+                            selectedFeatureID = feature.id
+                            selectedVertexIndex = nil
                             activeTool = .select
                         } label: {
                             HStack {
                                 Circle()
-                                    .fill(colorForPinType(pin.pinType))
+                                    .fill(colorForFeatureType(feature.type))
                                     .frame(width: 10, height: 10)
-                                Text(pin.pinType.rawValue)
+                                Text(feature.type.rawValue.capitalized)
                                     .font(.caption)
-                                if let teeName = pin.teeName, pin.pinType == .tee {
-                                    Text("(\(teeName))")
-                                        .font(.caption2)
-                                        .foregroundStyle(.secondary)
-                                }
+                                Text("#\(feature.id)")
+                                    .font(.caption2)
+                                    .foregroundStyle(.secondary)
                             }
                         }
                         .buttonStyle(.plain)
                     }
-                    .frame(maxHeight: 200)
+                    .frame(maxHeight: 150)
+                }
+            }
+
+            // Unassociated features
+            let unassociated = unassociatedFeatures
+            if !unassociated.isEmpty {
+                Divider()
+                VStack(alignment: .leading, spacing: 4) {
+                    Text("Unassociated (\(unassociated.count))")
+                        .font(.subheadline.bold())
+                        .padding(.horizontal)
+                        .padding(.top, 4)
+
+                    List(unassociated) { feature in
+                        Button {
+                            selectedFeatureID = feature.id
+                            selectedVertexIndex = nil
+                            activeTool = .select
+                        } label: {
+                            HStack {
+                                Circle()
+                                    .fill(colorForFeatureType(feature.type))
+                                    .frame(width: 10, height: 10)
+                                Text(feature.type.rawValue.capitalized)
+                                    .font(.caption)
+                                Text("#\(feature.id)")
+                                    .font(.caption2)
+                                    .foregroundStyle(.secondary)
+                            }
+                        }
+                        .buttonStyle(.plain)
+                    }
+                    .frame(maxHeight: 100)
                 }
             }
         }
@@ -184,8 +254,7 @@ struct MapEditorView: View {
             HStack(spacing: 2) {
                 ForEach(ToolMode.allCases, id: \.self) { mode in
                     Button {
-                        activeTool = mode
-                        toolClickIndex = 0
+                        switchTool(to: mode)
                         isMapFocused = true
                     } label: {
                         VStack(spacing: 1) {
@@ -207,6 +276,16 @@ struct MapEditorView: View {
                 }
             }
 
+            // Feature type picker (for drawing)
+            if activeTool == .drawPolygon {
+                Picker("Type", selection: $pendingFeatureType) {
+                    ForEach(FeatureType.allCases, id: \.self) { type in
+                        Text(type.rawValue.capitalized).tag(type)
+                    }
+                }
+                .frame(width: 120)
+            }
+
             Spacer()
 
             // Course name + distance (center)
@@ -218,7 +297,19 @@ struct MapEditorView: View {
 
             Spacer()
 
-            Spacer().frame(width: 0)
+            // Import OSM button
+            Button {
+                Task { await importFromOSM() }
+            } label: {
+                HStack(spacing: 4) {
+                    if isImportingOSM {
+                        ProgressView()
+                            .scaleEffect(0.6)
+                    }
+                    Text("Import OSM")
+                }
+            }
+            .disabled(isImportingOSM)
         }
         .padding(.horizontal)
         .padding(.vertical, 6)
@@ -228,20 +319,20 @@ struct MapEditorView: View {
 
     private var distanceReadout: some View {
         Group {
-            let holePins = pins.filter { $0.subCourseIndex == selectedSubCourseIndex && $0.holeNumber == selectedHole }
-            let firstTee = holePins.first { $0.pinType == .tee }
-            let greenMiddle = holePins.first { $0.pinType == .greenMiddle }
+            let holeFeatures = currentHoleFeatures
+            let teeFeature = holeFeatures.first { $0.type == .tee }
+            let greenFeature = holeFeatures.first { $0.type == .green }
 
-            if let tee = firstTee, let green = greenMiddle {
-                let teeLocation = CLLocation(latitude: tee.coordinate.latitude, longitude: tee.coordinate.longitude)
-                let greenLocation = CLLocation(latitude: green.coordinate.latitude, longitude: green.coordinate.longitude)
+            if let tee = teeFeature, let green = greenFeature {
+                let teeCentroid = PolygonGeometry.centroid(of: tee.polygon)
+                let greenCentroid = PolygonGeometry.centroid(of: green.polygon)
+                let teeLocation = CLLocation(latitude: teeCentroid.latitude, longitude: teeCentroid.longitude)
+                let greenLocation = CLLocation(latitude: greenCentroid.latitude, longitude: greenCentroid.longitude)
                 let meters = teeLocation.distance(from: greenLocation)
                 let yards = Int(meters * 1.09361)
                 let scorecardYardage: Int = {
-                    guard selectedSubCourseIndex < course.subCourses.count else { return 0 }
-                    return course.subCourses[selectedSubCourseIndex]
-                        .holes.first(where: { $0.number == selectedHole })?
-                        .yardages.values.first ?? 0
+                    guard let hole = currentHole else { return 0 }
+                    return hole.yardages.values.first ?? 0
                 }()
 
                 HStack(spacing: 4) {
@@ -254,7 +345,7 @@ struct MapEditorView: View {
                     }
                 }
             } else {
-                Text("Place tee + green pins for distance")
+                Text("Place tee + green polygons for distance")
                     .font(.caption)
                     .foregroundStyle(.secondary)
             }
@@ -265,10 +356,57 @@ struct MapEditorView: View {
 
     private var mapArea: some View {
         MapReader { proxy in
-            Map(position: $mapPosition, interactionModes: isDraggingPin ? [.zoom, .rotate, .pitch] : .all) {
-                ForEach(pinsForCurrentHole) { pin in
-                    Annotation(pin.pinType.rawValue, coordinate: pin.coordinate.clCoordinate) {
-                        pinMarker(for: pin)
+            Map(position: $mapPosition, interactionModes: isDraggingVertex ? [.zoom, .rotate, .pitch] : .all) {
+                // Render feature polygons for current hole
+                ForEach(currentHoleFeatures) { feature in
+                    let isSelected = selectedFeatureID == feature.id
+                    MapPolygon(coordinates: feature.polygon.map(\.clCoordinate))
+                        .foregroundStyle(colorForFeatureType(feature.type).opacity(isSelected ? 0.5 : 0.3))
+                        .stroke(colorForFeatureType(feature.type), lineWidth: isSelected ? 3 : 1.5)
+                }
+
+                // Render centerline for current hole
+                if let hole = currentHole, hole.centerline.count >= 2 {
+                    MapPolyline(coordinates: hole.centerline.map(\.clCoordinate))
+                        .stroke(.white, lineWidth: 2)
+                }
+
+                // Render vertex handles for selected feature
+                if let featureID = selectedFeatureID,
+                   let feature = course.features.first(where: { $0.id == featureID }) {
+                    ForEach(Array(feature.polygon.enumerated()), id: \.offset) { index, coord in
+                        Annotation("", coordinate: coord.clCoordinate) {
+                            Circle()
+                                .fill(selectedVertexIndex == index ? Color.white : Color.accentColor)
+                                .stroke(Color.white, lineWidth: 1.5)
+                                .frame(width: 12, height: 12)
+                                .offset(selectedVertexIndex == index && isDraggingVertex ? dragOffset : .zero)
+                                .onTapGesture {
+                                    selectedVertexIndex = index
+                                }
+                        }
+                    }
+                }
+
+                // Render in-progress drawing
+                if drawingVertices.count >= 2 {
+                    if activeTool == .drawPolygon {
+                        MapPolygon(coordinates: drawingVertices.map(\.clCoordinate))
+                            .foregroundStyle(colorForFeatureType(pendingFeatureType).opacity(0.2))
+                            .stroke(colorForFeatureType(pendingFeatureType), style: StrokeStyle(lineWidth: 2, dash: [5, 3]))
+                    } else {
+                        MapPolyline(coordinates: drawingVertices.map(\.clCoordinate))
+                            .stroke(.white, style: StrokeStyle(lineWidth: 2, dash: [5, 3]))
+                    }
+                }
+
+                // Drawing vertex dots
+                ForEach(Array(drawingVertices.enumerated()), id: \.offset) { _, coord in
+                    Annotation("", coordinate: coord.clCoordinate) {
+                        Circle()
+                            .fill(Color.yellow)
+                            .stroke(Color.white, lineWidth: 1)
+                            .frame(width: 8, height: 8)
                     }
                 }
             }
@@ -288,11 +426,13 @@ struct MapEditorView: View {
                 }
             }
             .overlay {
-                // Drag handle positioned over the selected pin
+                // Drag handle for selected vertex
                 if activeTool == .select,
-                   let pinID = selectedPinID,
-                   let pin = pinsForCurrentHole.first(where: { $0.id == pinID }),
-                   let screenPoint = proxy.convert(pin.coordinate.clCoordinate, to: .local) {
+                   let featureID = selectedFeatureID,
+                   let vertexIdx = selectedVertexIndex,
+                   let feature = course.features.first(where: { $0.id == featureID }),
+                   vertexIdx < feature.polygon.count,
+                   let screenPoint = proxy.convert(feature.polygon[vertexIdx].clCoordinate, to: .local) {
                     Color.clear
                         .frame(width: 44, height: 44)
                         .contentShape(Circle())
@@ -300,13 +440,13 @@ struct MapEditorView: View {
                         .gesture(
                             DragGesture(minimumDistance: 2)
                                 .onChanged { value in
-                                    isDraggingPin = true
+                                    isDraggingVertex = true
                                     dragOffset = value.translation
                                 }
                                 .onEnded { value in
-                                    applyDrag(to: pinID, translation: value.translation)
+                                    applyVertexDrag(featureID: featureID, vertexIndex: vertexIdx, translation: value.translation)
                                     dragOffset = .zero
-                                    isDraggingPin = false
+                                    isDraggingVertex = false
                                 }
                         )
                 }
@@ -314,11 +454,9 @@ struct MapEditorView: View {
             .simultaneousGesture(
                 SpatialTapGesture()
                     .onEnded { tap in
-                        if activeTool == .select {
-                            selectedPinID = nil
-                        } else if let coord = proxy.convert(tap.location, from: .local) {
-                            placePin(at: Coordinate(coord))
-                        }
+                        guard let coord = proxy.convert(tap.location, from: .local) else { return }
+                        let tapped = Coordinate(coord)
+                        handleMapTap(at: tapped)
                     }
             )
             .overlay(alignment: .topTrailing) {
@@ -346,27 +484,6 @@ struct MapEditorView: View {
         .fixedSize()
     }
 
-    private func pinMarker(for pin: EditablePin) -> some View {
-        let isSelected = selectedPinID == pin.id
-
-        return Circle()
-            .fill(colorForPinType(pin.pinType))
-            .stroke(isSelected ? Color.white : Color.clear, lineWidth: 2)
-            .frame(width: 16, height: 16)
-            .shadow(radius: 2)
-            .padding(10)
-            .contentShape(Circle())
-            .offset(isSelected && isDraggingPin ? dragOffset : .zero)
-            .onTapGesture {
-                selectedPinID = pin.id
-                activeTool = .select
-            }
-    }
-
-    private var pinsForCurrentHole: [EditablePin] {
-        pins.filter { $0.subCourseIndex == selectedSubCourseIndex && $0.holeNumber == selectedHole }
-    }
-
     // MARK: - Inspector Panel
 
     private var inspectorPanel: some View {
@@ -377,33 +494,40 @@ struct MapEditorView: View {
 
             Divider()
 
-            if let selectedPinID, let index = pins.firstIndex(where: { $0.id == selectedPinID }) {
-                PinEditorView(
-                    pin: $pins[index],
-                    teeNames: course.tees.map(\.name),
+            if let featureID = selectedFeatureID,
+               let featureIndex = course.features.firstIndex(where: { $0.id == featureID }) {
+                FeatureEditorView(
+                    feature: $course.features[featureIndex],
                     onDelete: {
-                        deletePin(at: index)
+                        deleteFeature(id: featureID)
                     }
                 )
                 .frame(maxHeight: .infinity, alignment: .top)
             } else {
                 VStack(spacing: 8) {
-                    Image(systemName: "mappin.slash")
+                    Image(systemName: activeTool == .select ? "cursorarrow.click" : "pencil.and.outline")
                         .font(.largeTitle)
                         .foregroundStyle(.quaternary)
-                    Text("No pin selected")
+                    Text(inspectorHelpText)
                         .font(.subheadline)
                         .foregroundStyle(.secondary)
-                    Text(activeTool != .select
-                         ? "Click map to place \(activeTool.rawValue.lowercased()) pin"
-                         : "Click a pin to select it")
-                        .font(.caption)
-                        .foregroundStyle(.tertiary)
+                        .multilineTextAlignment(.center)
                 }
                 .frame(maxWidth: .infinity, maxHeight: .infinity)
             }
         }
         .background(Color(.windowBackgroundColor))
+    }
+
+    private var inspectorHelpText: String {
+        switch activeTool {
+        case .select:
+            "Click a polygon to select it.\nDrag vertices to reshape."
+        case .drawPolygon:
+            "Click to place vertices.\nPress Enter to finish polygon."
+        case .drawCenterline:
+            "Click to place waypoints.\nPress Enter to finish centerline."
+        }
     }
 
     // MARK: - Status Bar
@@ -438,11 +562,18 @@ struct MapEditorView: View {
                     .foregroundStyle(.secondary)
             }
 
-            // Hole + pin count
+            // OSM import status
+            if !osmImportStatus.isEmpty {
+                Text(osmImportStatus)
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+            }
+
+            // Hole + feature count
             let subName = course.subCourses.indices.contains(selectedSubCourseIndex) ? course.subCourses[selectedSubCourseIndex].name : ""
             Text("\(subName) Hole \(selectedHole)")
                 .font(.caption)
-            Text("\(pinsForCurrentHole.count) pins")
+            Text("\(currentHoleFeatures.count) features")
                 .font(.caption)
                 .foregroundStyle(.secondary)
         }
@@ -453,179 +584,220 @@ struct MapEditorView: View {
 
     private var toolHint: String {
         switch activeTool {
-        case .select: "Click pin to select | Hold+drag to move | Esc to deselect | Del to remove"
-        case .tee:
-            if let next = remainingTeesForCurrentHole().first {
-                if let yards = next.yards {
-                    "Click to place \(next.name) tee (\(yards) yds)"
-                } else {
-                    "Click to place \(next.name) tee"
-                }
+        case .select:
+            if selectedFeatureID != nil && selectedVertexIndex != nil {
+                "Drag vertex to move | Esc to deselect | Del to remove feature"
+            } else if selectedFeatureID != nil {
+                "Click vertex to select | Esc to deselect | Del to remove feature"
             } else {
-                "All tees placed for this hole"
+                "Click polygon to select | Esc to deselect"
             }
-        case .green:
-            switch toolClickIndex {
-            case 0: "Click map: green front"
-            case 1: "Click map: green middle"
-            default: "Click map: green back"
-            }
-        case .bunker:
-            toolClickIndex == 0 ? "Click map: bunker front" : "Click map: bunker back"
-        case .water:
-            toolClickIndex == 0 ? "Click map: water front" : "Click map: water back"
-        }
-    }
-
-    // MARK: - Pin Colors
-
-    private func colorForPinType(_ pinType: PinType) -> Color {
-        switch pinType {
-        case .tee:
-            return .blue
-        case .greenFront, .greenMiddle, .greenBack:
-            return .green
-        case .bunkerFront, .bunkerBack:
-            return .yellow
-        case .waterFront, .waterBack:
-            return .cyan
-        }
-    }
-
-    // MARK: - Pin Management
-
-    private func placePin(at coordinate: Coordinate) {
-        let pinType = pinTypeForCurrentClick()
-
-        // For tee tool, determine the tee name from the sequence
-        let teeName: String? = {
-            if pinType == .tee {
-                return remainingTeesForCurrentHole().first?.name
-            }
-            return nil
-        }()
-
-        // If tee tool but no remaining tees, do nothing
-        if activeTool == .tee && teeName == nil {
-            return
-        }
-
-        let pin = EditablePin(
-            id: UUID(),
-            pinType: pinType,
-            coordinate: coordinate,
-            teeName: teeName,
-            subCourseIndex: selectedSubCourseIndex,
-            holeNumber: selectedHole
-        )
-        pins.append(pin)
-        selectedPinID = pin.id
-        toolClickIndex += 1
-
-        // Reset click index or auto-switch when sequence is complete
-        switch activeTool {
-        case .tee:
-            if remainingTeesForCurrentHole().isEmpty {
-                activeTool = .select
-                toolClickIndex = 0
-                statusMessage = "All tees placed"
-                clearStatusAfterDelay()
-            }
-        case .green:
-            if toolClickIndex >= 3 { toolClickIndex = 0 }
-        case .bunker, .water:
-            if toolClickIndex >= 2 { toolClickIndex = 0 }
-        default:
-            toolClickIndex = 0
-        }
-    }
-
-    /// Returns tees still needing placement for the current hole, ordered by descending yardage.
-    /// Tees with yardage data come first (sorted by yards desc), then tees without yardage (in course.tees order).
-    private func remainingTeesForCurrentHole() -> [(name: String, yards: Int?)] {
-        let currentHole: Hole? = {
-            guard selectedSubCourseIndex < course.subCourses.count else { return nil }
-            return course.subCourses[selectedSubCourseIndex].holes.first { $0.number == selectedHole }
-        }()
-
-        // Find tee names already placed for this hole
-        let placedTeeNames = Set(
-            pinsForCurrentHole
-                .filter { $0.pinType == .tee }
-                .compactMap(\.teeName)
-        )
-
-        // Split into tees with yardage and tees without
-        var withYardage: [(name: String, yards: Int)] = []
-        var withoutYardage: [String] = []
-
-        for tee in course.tees {
-            guard !placedTeeNames.contains(tee.name) else { continue }
-            if let yards = currentHole?.yardages[tee.name], yards > 0 {
-                withYardage.append((name: tee.name, yards: yards))
+        case .drawPolygon:
+            if drawingVertices.isEmpty {
+                "Click to place first vertex"
             } else {
-                withoutYardage.append(tee.name)
+                "\(drawingVertices.count) vertices | Click to add | Enter to finish | Esc to cancel"
+            }
+        case .drawCenterline:
+            if drawingVertices.isEmpty {
+                "Click to place first waypoint"
+            } else {
+                "\(drawingVertices.count) waypoints | Click to add | Enter to finish | Esc to cancel"
             }
         }
-
-        // Sort tees with yardage by descending yards
-        withYardage.sort { $0.yards > $1.yards }
-
-        // Combine: yardage tees first, then no-yardage tees in definition order
-        return withYardage.map { (name: $0.name, yards: Optional($0.yards)) }
-             + withoutYardage.map { (name: $0, yards: nil) }
     }
 
-    private func pinTypeForCurrentClick() -> PinType {
+    // MARK: - Feature Colors
+
+    private func colorForFeatureType(_ type: FeatureType) -> Color {
+        switch type {
+        case .fairway: .green
+        case .green: .mint
+        case .tee: .blue
+        case .bunker: .yellow
+        case .water: .cyan
+        case .rough: .brown
+        }
+    }
+
+    // MARK: - Tool Switching
+
+    private func switchTool(to mode: ToolMode) {
+        if !drawingVertices.isEmpty {
+            drawingVertices = []
+        }
+        activeTool = mode
+        if mode != .select {
+            selectedFeatureID = nil
+            selectedVertexIndex = nil
+        }
+    }
+
+    // MARK: - Map Tap Handling
+
+    private func handleMapTap(at coordinate: Coordinate) {
         switch activeTool {
         case .select:
-            return .tee
-        case .tee:
-            return .tee
-        case .green:
-            switch toolClickIndex {
-            case 0: return .greenFront
-            case 1: return .greenMiddle
-            default: return .greenBack
-            }
-        case .bunker:
-            return toolClickIndex == 0 ? .bunkerFront : .bunkerBack
-        case .water:
-            return toolClickIndex == 0 ? .waterFront : .waterBack
+            selectFeatureAt(coordinate)
+        case .drawPolygon:
+            drawingVertices.append(coordinate)
+        case .drawCenterline:
+            drawingVertices.append(coordinate)
         }
     }
 
-    private func applyDrag(to pinID: UUID, translation: CGSize) {
+    private func selectFeatureAt(_ point: Coordinate) {
+        // First check if tapping near a vertex of the selected feature
+        if let featureID = selectedFeatureID,
+           let feature = course.features.first(where: { $0.id == featureID }) {
+            // Check if tap is near any vertex
+            for (index, vertex) in feature.polygon.enumerated() {
+                if isClose(point, to: vertex) {
+                    selectedVertexIndex = index
+                    return
+                }
+            }
+        }
+
+        // Check if tap is inside any feature polygon of the current hole
+        for feature in currentHoleFeatures {
+            if PolygonGeometry.contains(point, in: feature.polygon) {
+                selectedFeatureID = feature.id
+                selectedVertexIndex = nil
+                return
+            }
+        }
+
+        // Check unassociated features too
+        for feature in unassociatedFeatures {
+            if PolygonGeometry.contains(point, in: feature.polygon) {
+                selectedFeatureID = feature.id
+                selectedVertexIndex = nil
+                return
+            }
+        }
+
+        // Nothing hit, deselect
+        selectedFeatureID = nil
+        selectedVertexIndex = nil
+    }
+
+    private func isClose(_ a: Coordinate, to b: Coordinate) -> Bool {
+        guard let region = visibleRegion else { return false }
+        // Consider "close" as within ~20 pixels worth of degrees
+        let threshold = region.span.latitudeDelta / (mapViewSize.height / 20.0)
+        return abs(a.latitude - b.latitude) < threshold && abs(a.longitude - b.longitude) < threshold
+    }
+
+    // MARK: - Finish Drawing
+
+    private func finishDrawing() {
+        switch activeTool {
+        case .drawPolygon:
+            guard drawingVertices.count >= 3 else {
+                statusMessage = "Need at least 3 vertices for a polygon"
+                clearStatusAfterDelay()
+                return
+            }
+            let newFeature = Feature(id: course.nextFeatureID, type: pendingFeatureType, polygon: drawingVertices)
+            course.features.append(newFeature)
+
+            // Associate with current hole
+            if selectedSubCourseIndex < course.subCourses.count {
+                if let holeIdx = course.subCourses[selectedSubCourseIndex].holes.firstIndex(where: { $0.number == selectedHole }) {
+                    course.subCourses[selectedSubCourseIndex].holes[holeIdx].featureIDs.append(newFeature.id)
+                }
+            }
+
+            selectedFeatureID = newFeature.id
+            selectedVertexIndex = nil
+            drawingVertices = []
+            statusMessage = "Created \(pendingFeatureType.rawValue) feature #\(newFeature.id)"
+            clearStatusAfterDelay()
+
+        case .drawCenterline:
+            guard drawingVertices.count >= 2 else {
+                statusMessage = "Need at least 2 waypoints for a centerline"
+                clearStatusAfterDelay()
+                return
+            }
+            if selectedSubCourseIndex < course.subCourses.count {
+                if let holeIdx = course.subCourses[selectedSubCourseIndex].holes.firstIndex(where: { $0.number == selectedHole }) {
+                    course.subCourses[selectedSubCourseIndex].holes[holeIdx].centerline = drawingVertices
+                }
+            }
+            drawingVertices = []
+            statusMessage = "Centerline set for hole \(selectedHole)"
+            clearStatusAfterDelay()
+
+        case .select:
+            break
+        }
+    }
+
+    // MARK: - Vertex Dragging
+
+    private func applyVertexDrag(featureID: Int, vertexIndex: Int, translation: CGSize) {
         guard let region = visibleRegion, mapViewSize.width > 0, mapViewSize.height > 0,
-              let index = pins.firstIndex(where: { $0.id == pinID }) else { return }
+              let featureIndex = course.features.firstIndex(where: { $0.id == featureID }),
+              vertexIndex < course.features[featureIndex].polygon.count else { return }
         let degreesPerPixelLat = region.span.latitudeDelta / mapViewSize.height
         let degreesPerPixelLng = region.span.longitudeDelta / mapViewSize.width
-        pins[index].coordinate.latitude -= translation.height * degreesPerPixelLat
-        pins[index].coordinate.longitude += translation.width * degreesPerPixelLng
+        course.features[featureIndex].polygon[vertexIndex].latitude -= translation.height * degreesPerPixelLat
+        course.features[featureIndex].polygon[vertexIndex].longitude += translation.width * degreesPerPixelLng
     }
 
-    private func deleteSelectedPin() {
-        guard let selectedPinID,
-              let index = pins.firstIndex(where: { $0.id == selectedPinID }) else { return }
-        deletePin(at: index)
+    // MARK: - Feature Management
+
+    private func deleteSelectedFeature() {
+        guard let featureID = selectedFeatureID else { return }
+        deleteFeature(id: featureID)
     }
 
-    private func deletePin(at index: Int) {
-        pins.remove(at: index)
-        selectedPinID = nil
+    private func deleteFeature(id: Int) {
+        // Remove from course features
+        course.features.removeAll { $0.id == id }
+        // Remove from all hole featureIDs
+        for subIdx in course.subCourses.indices {
+            for holeIdx in course.subCourses[subIdx].holes.indices {
+                course.subCourses[subIdx].holes[holeIdx].featureIDs.removeAll { $0 == id }
+            }
+        }
+        selectedFeatureID = nil
+        selectedVertexIndex = nil
     }
 
-    // MARK: - Load Pins from Course
+    // MARK: - OSM Import
 
-    private func loadPinsFromCourse() {
-        // TODO: Rewrite pin loading for featureIDs/centerline model
-        pins = []
-    }
-
-    // MARK: - Apply Pins to Course
-
-    private func applyPinsToCourse() {
-        // TODO: Rewrite pin application for featureIDs/centerline model
+    private func importFromOSM() async {
+        isImportingOSM = true
+        osmImportStatus = "Querying OpenStreetMap..."
+        let client = OverpassAPIClient()
+        let clubhouseCoord = course.location.coordinate
+        let searchBBox = OverpassAPIClient.boundingBox(around: clubhouseCoord, radiusMeters: 1000)
+        do {
+            let result = try await client.fetchFeatures(bbox: searchBBox)
+            if let boundary = result.courseBoundary, boundary.count >= 3 {
+                let lats = boundary.map(\.latitude)
+                let lons = boundary.map(\.longitude)
+                let bbox = OverpassAPIClient.BoundingBox(
+                    south: lats.min()!, west: lons.min()!,
+                    north: lats.max()!, east: lons.max()!
+                ).padded(by: 0.25)
+                osmImportStatus = "Fetching features within course boundary..."
+                let fullResult = try await client.fetchFeatures(bbox: bbox)
+                OSMImporter.applyParsedResult(fullResult, to: &course)
+                osmImportStatus = "Imported \(fullResult.features.count) features"
+            } else {
+                OSMImporter.applyParsedResult(result, to: &course)
+                osmImportStatus = "Imported \(result.features.count) features"
+            }
+            try? store.save(course)
+        } catch {
+            osmImportStatus = "Import failed: \(error.localizedDescription)"
+        }
+        isImportingOSM = false
+        clearOSMStatusAfterDelay()
     }
 
     // MARK: - Center Map
@@ -650,10 +822,16 @@ struct MapEditorView: View {
         }
     }
 
+    private func clearOSMStatusAfterDelay() {
+        Task {
+            try? await Task.sleep(for: .seconds(5))
+            osmImportStatus = ""
+        }
+    }
+
     // MARK: - Save
 
     private func saveCourse() {
-        applyPinsToCourse()
         do {
             try store.save(course)
         } catch {

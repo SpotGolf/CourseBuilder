@@ -1,7 +1,7 @@
 import Foundation
 import CoreLocation
 
-struct Coordinate: Codable, Equatable, Hashable {
+struct Coordinate: Equatable, Hashable {
     var latitude: Double
     var longitude: Double
 
@@ -21,5 +21,19 @@ struct Coordinate: Codable, Equatable, Hashable {
 
     var clLocation: CLLocation {
         CLLocation(latitude: latitude, longitude: longitude)
+    }
+}
+
+extension Coordinate: Codable {
+    init(from decoder: Decoder) throws {
+        var container = try decoder.unkeyedContainer()
+        latitude = try container.decode(Double.self)
+        longitude = try container.decode(Double.self)
+    }
+
+    func encode(to encoder: Encoder) throws {
+        var container = encoder.unkeyedContainer()
+        try container.encode(latitude)
+        try container.encode(longitude)
     }
 }

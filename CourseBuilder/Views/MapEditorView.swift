@@ -618,88 +618,14 @@ struct MapEditorView: View {
     // MARK: - Load Pins from Course
 
     private func loadPinsFromCourse() {
+        // TODO: Rewrite pin loading for featureIDs/centerline model
         pins = []
-        for (subIdx, subCourse) in course.subCourses.enumerated() {
-            for hole in subCourse.holes {
-                // Tee pins
-                for (teeName, coord) in hole.tees {
-                    pins.append(EditablePin(
-                        id: UUID(),
-                        pinType: .tee,
-                        coordinate: coord,
-                        teeName: teeName,
-                        subCourseIndex: subIdx,
-                        holeNumber: hole.number
-                    ))
-                }
-
-                // Green pins
-                if let green = hole.green {
-                    pins.append(EditablePin(
-                        id: UUID(),
-                        pinType: .greenFront,
-                        coordinate: green.front,
-                        subCourseIndex: subIdx,
-                        holeNumber: hole.number
-                    ))
-                    pins.append(EditablePin(
-                        id: UUID(),
-                        pinType: .greenMiddle,
-                        coordinate: green.middle,
-                        subCourseIndex: subIdx,
-                        holeNumber: hole.number
-                    ))
-                    pins.append(EditablePin(
-                        id: UUID(),
-                        pinType: .greenBack,
-                        coordinate: green.back,
-                        subCourseIndex: subIdx,
-                        holeNumber: hole.number
-                    ))
-                }
-
-                // TODO: Update in Task 3 — Feature pins disabled during polygon migration
-                // Features now use polygon model instead of front/back points
-            }
-        }
     }
 
     // MARK: - Apply Pins to Course
 
     private func applyPinsToCourse() {
-        for subIdx in course.subCourses.indices {
-            for holeIdx in course.subCourses[subIdx].holes.indices {
-                let holeNumber = course.subCourses[subIdx].holes[holeIdx].number
-                let holePins = pins.filter { $0.subCourseIndex == subIdx && $0.holeNumber == holeNumber }
-
-                // Tees
-                var tees: [String: Coordinate] = [:]
-                for pin in holePins where pin.pinType == .tee {
-                    if let teeName = pin.teeName {
-                        tees[teeName] = pin.coordinate
-                    }
-                }
-                course.subCourses[subIdx].holes[holeIdx].tees = tees
-
-                // Green
-                let greenFront = holePins.first { $0.pinType == .greenFront }
-                let greenMiddle = holePins.first { $0.pinType == .greenMiddle }
-                let greenBack = holePins.first { $0.pinType == .greenBack }
-
-                if let front = greenFront, let middle = greenMiddle, let back = greenBack {
-                    course.subCourses[subIdx].holes[holeIdx].green = Green(
-                        front: front.coordinate,
-                        middle: middle.coordinate,
-                        back: back.coordinate
-                    )
-                } else {
-                    course.subCourses[subIdx].holes[holeIdx].green = nil
-                }
-
-                // TODO: Update in Task 3 — Feature apply disabled during polygon migration
-                // Features now use polygon model instead of front/back points
-            }
-        }
+        // TODO: Rewrite pin application for featureIDs/centerline model
     }
 
     // MARK: - Center Map

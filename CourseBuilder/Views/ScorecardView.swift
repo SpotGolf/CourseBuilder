@@ -240,36 +240,8 @@ struct ScorecardView: View {
     }
 
     private func validateCourse() -> [String] {
-        var warnings: [String] = []
-        let teeNames = course.tees.map(\.name)
-        var holeOffset = 0
-
-        for subCourse in course.subCourses {
-            for hole in subCourse.holes {
-                let holeLabel = "Hole \(holeOffset + hole.number)"
-
-                let missingTees = teeNames.filter { hole.tees[$0] == nil }
-                if !missingTees.isEmpty {
-                    warnings.append("\(holeLabel): missing tee location for \(missingTees.joined(separator: ", "))")
-                }
-
-                if let green = hole.green {
-                    let zero = Coordinate(latitude: 0, longitude: 0)
-                    var missingParts: [String] = []
-                    if green.front == zero { missingParts.append("front") }
-                    if green.middle == zero { missingParts.append("middle") }
-                    if green.back == zero { missingParts.append("back") }
-                    if !missingParts.isEmpty {
-                        warnings.append("\(holeLabel): green missing \(missingParts.joined(separator: ", "))")
-                    }
-                } else {
-                    warnings.append("\(holeLabel): missing green")
-                }
-            }
-            holeOffset += subCourse.holes.count
-        }
-
-        return warnings
+        // TODO: Rewrite validation for featureIDs/centerline model
+        return []
     }
 
     private func writeExport(to url: URL) {

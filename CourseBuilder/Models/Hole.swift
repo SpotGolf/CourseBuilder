@@ -1,11 +1,5 @@
 import Foundation
 
-struct Green: Codable, Equatable, Hashable {
-    var front: Coordinate
-    var middle: Coordinate
-    var back: Coordinate
-}
-
 struct Hole: Identifiable, Codable, Equatable, Hashable {
     let id: UUID
     let number: Int
@@ -13,9 +7,8 @@ struct Hole: Identifiable, Codable, Equatable, Hashable {
     var maleHandicap: Int
     var femaleHandicap: Int
     var yardages: [String: Int]
-    var tees: [String: Coordinate]
-    var green: Green?
-    var features: [Feature]
+    var featureIDs: [Int]
+    var centerline: [Coordinate]
 
     init(
         id: UUID = UUID(),
@@ -24,9 +17,8 @@ struct Hole: Identifiable, Codable, Equatable, Hashable {
         maleHandicap: Int = 0,
         femaleHandicap: Int = 0,
         yardages: [String: Int] = [:],
-        tees: [String: Coordinate] = [:],
-        green: Green? = nil,
-        features: [Feature] = []
+        featureIDs: [Int] = [],
+        centerline: [Coordinate] = []
     ) {
         self.id = id
         self.number = number
@@ -34,9 +26,8 @@ struct Hole: Identifiable, Codable, Equatable, Hashable {
         self.maleHandicap = maleHandicap
         self.femaleHandicap = femaleHandicap
         self.yardages = yardages
-        self.tees = tees
-        self.green = green
-        self.features = features
+        self.featureIDs = featureIDs
+        self.centerline = centerline
     }
 
     func renumbered(to newNumber: Int) -> Hole {
@@ -46,9 +37,8 @@ struct Hole: Identifiable, Codable, Equatable, Hashable {
             maleHandicap: maleHandicap,
             femaleHandicap: femaleHandicap,
             yardages: yardages,
-            tees: tees,
-            green: green,
-            features: features
+            featureIDs: featureIDs,
+            centerline: centerline
         )
     }
 

@@ -21,8 +21,7 @@ final class CourseTests: XCTestCase {
                     name: "Front",
                     holes: [
                         Hole(number: 1, par: 4, maleHandicap: 13,
-                             yardages: ["Black": 401],
-                             tees: ["Black": Coordinate(latitude: 39.9401, longitude: -105.0271)])
+                             yardages: ["Black": 401])
                     ],
                     tees: ["Black": SubCourseTee(male: TeeInformation(rating: 37.6, slope: 134))]
                 )

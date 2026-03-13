@@ -32,14 +32,17 @@ struct SubCourse: Identifiable, Codable, Equatable, Hashable {
 }
 
 struct TeeDefinition: Codable, Equatable, Hashable, Identifiable {
-    let id: UUID
+    var id: String { name }
     var name: String
     var color: String
 
-    init(id: UUID = UUID(), name: String, color: String) {
-        self.id = id
+    init(name: String, color: String) {
         self.name = name
         self.color = color
+    }
+
+    enum CodingKeys: String, CodingKey {
+        case name, color
     }
 
     static func defaultColor(for teeName: String) -> String {
@@ -62,6 +65,11 @@ struct CourseLocation: Codable, Equatable, Hashable {
     var state: String
     var country: String
     var coordinate: Coordinate
+
+    enum CodingKeys: String, CodingKey {
+        case address, city, state, country
+        case coordinate = "coordinates"
+    }
 }
 
 struct Course: Identifiable, Codable, Equatable, Hashable {
@@ -71,7 +79,12 @@ struct Course: Identifiable, Codable, Equatable, Hashable {
     var golfCourseAPIIds: [Int]
     var location: CourseLocation
     var tees: [TeeDefinition]
+    var features: [Feature]
     var subCourses: [SubCourse]
+
+    var nextFeatureID: Int {
+        (features.map(\.id).max() ?? 0) + 1
+    }
 
     init(
         id: UUID = UUID(),
@@ -80,6 +93,7 @@ struct Course: Identifiable, Codable, Equatable, Hashable {
         golfCourseAPIIds: [Int] = [],
         location: CourseLocation,
         tees: [TeeDefinition] = [],
+        features: [Feature] = [],
         subCourses: [SubCourse] = []
     ) {
         self.id = id
@@ -88,6 +102,7 @@ struct Course: Identifiable, Codable, Equatable, Hashable {
         self.golfCourseAPIIds = golfCourseAPIIds
         self.location = location
         self.tees = tees
+        self.features = features
         self.subCourses = subCourses
     }
 }

@@ -658,49 +658,8 @@ struct MapEditorView: View {
                     ))
                 }
 
-                // Feature pins
-                for (featureIdx, feature) in hole.features.enumerated() {
-                    switch feature.type {
-                    case .bunker:
-                        pins.append(EditablePin(
-                            id: UUID(),
-                            pinType: .bunkerFront,
-                            coordinate: feature.front,
-                            featureIndex: featureIdx,
-                            featureID: feature.id,
-                            subCourseIndex: subIdx,
-                            holeNumber: hole.number
-                        ))
-                        pins.append(EditablePin(
-                            id: UUID(),
-                            pinType: .bunkerBack,
-                            coordinate: feature.back,
-                            featureIndex: featureIdx,
-                            featureID: feature.id,
-                            subCourseIndex: subIdx,
-                            holeNumber: hole.number
-                        ))
-                    case .water:
-                        pins.append(EditablePin(
-                            id: UUID(),
-                            pinType: .waterFront,
-                            coordinate: feature.front,
-                            featureIndex: featureIdx,
-                            featureID: feature.id,
-                            subCourseIndex: subIdx,
-                            holeNumber: hole.number
-                        ))
-                        pins.append(EditablePin(
-                            id: UUID(),
-                            pinType: .waterBack,
-                            coordinate: feature.back,
-                            featureIndex: featureIdx,
-                            featureID: feature.id,
-                            subCourseIndex: subIdx,
-                            holeNumber: hole.number
-                        ))
-                    }
-                }
+                // TODO: Update in Task 3 — Feature pins disabled during polygon migration
+                // Features now use polygon model instead of front/back points
             }
         }
     }
@@ -737,24 +696,8 @@ struct MapEditorView: View {
                     course.subCourses[subIdx].holes[holeIdx].green = nil
                 }
 
-                // Features
-                var features: [Feature] = []
-
-                let bunkerFronts = holePins.filter { $0.pinType == .bunkerFront }
-                let bunkerBacks = holePins.filter { $0.pinType == .bunkerBack }
-                for (front, back) in zip(bunkerFronts, bunkerBacks) {
-                    let featureID = front.featureID ?? UUID()
-                    features.append(Feature(id: featureID, type: .bunker, front: front.coordinate, back: back.coordinate))
-                }
-
-                let waterFronts = holePins.filter { $0.pinType == .waterFront }
-                let waterBacks = holePins.filter { $0.pinType == .waterBack }
-                for (front, back) in zip(waterFronts, waterBacks) {
-                    let featureID = front.featureID ?? UUID()
-                    features.append(Feature(id: featureID, type: .water, front: front.coordinate, back: back.coordinate))
-                }
-
-                course.subCourses[subIdx].holes[holeIdx].features = features
+                // TODO: Update in Task 3 — Feature apply disabled during polygon migration
+                // Features now use polygon model instead of front/back points
             }
         }
     }

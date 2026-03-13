@@ -1,20 +1,22 @@
 import Foundation
 
 enum FeatureType: String, Codable, CaseIterable, Hashable {
+    case fairway
+    case green
+    case tee
     case bunker
     case water
+    case rough
 }
 
 struct Feature: Identifiable, Codable, Equatable, Hashable {
-    let id: UUID
+    let id: Int
     let type: FeatureType
-    var front: Coordinate
-    var back: Coordinate
+    var polygon: [Coordinate]
 
-    init(id: UUID = UUID(), type: FeatureType, front: Coordinate, back: Coordinate) {
+    init(id: Int, type: FeatureType, polygon: [Coordinate]) {
         self.id = id
         self.type = type
-        self.front = front
-        self.back = back
+        self.polygon = polygon
     }
 }

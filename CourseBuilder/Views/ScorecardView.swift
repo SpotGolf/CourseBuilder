@@ -240,8 +240,36 @@ struct ScorecardView: View {
     }
 
     private func validateCourse() -> [String] {
-        // TODO: Rewrite validation for featureIDs/centerline model
-        return []
+        var warnings: [String] = []
+        var holeOffset = 0
+
+        for subCourse in course.subCourses {
+            for hole in subCourse.holes {
+                let holeLabel = "Hole \(holeOffset + hole.number)"
+                let holeFeatures = hole.featureIDs.compactMap { id in
+                    course.features.first { $0.id == id }
+                }
+
+                if !holeFeatures.contains(where: { $0.type == .green }) {
+                    warnings.append("\(holeLabel): missing green polygon")
+                }
+
+                if hole.par > 3 && !holeFeatures.contains(where: { $0.type == .fairway }) {
+                    warnings.append("\(holeLabel): missing fairway polygon")
+                }
+
+                if !holeFeatures.contains(where: { $0.type == .tee }) {
+                    warnings.append("\(holeLabel): missing tee polygon")
+                }
+
+                if hole.centerline.isEmpty {
+                    warnings.append("\(holeLabel): missing centerline")
+                }
+            }
+            holeOffset += subCourse.holes.count
+        }
+
+        return warnings
     }
 
     private func writeExport(to url: URL) {

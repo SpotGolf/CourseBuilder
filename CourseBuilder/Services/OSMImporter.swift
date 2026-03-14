@@ -2,11 +2,9 @@ import Foundation
 import CoreLocation
 
 enum OSMImporter {
-    /// Apply parsed OSM data to a course using four phases:
-    /// 1. Anchor greens 1:1 to holes via centerline endpoint proximity
-    /// 2. Anchor tees to holes via centerline lateral proximity + directional filter
-    /// 3. Associate remaining features via nearest centerline with directional filter
-    /// 4. Assign tee names per-hole using distance-rank zipping or yardage clustering
+    /// Apply parsed OSM data to a course. Runs Phases 1-4 on holes with centerlines first,
+    /// then synthesizes centerlines for remaining holes from leftover features and runs
+    /// Phases 1-4 again on those.
     static func applyParsedResult(_ result: OverpassAPIClient.ParsedResult, to course: inout Course) {
         // Create Feature objects with auto-incremented IDs
         var nextID = course.nextFeatureID
@@ -34,8 +32,18 @@ enum OSMImporter {
             }
         }
 
-        // Synthesize centerlines for holes that are missing them by pairing
-        // the nearest unassigned tee with the nearest unassigned green.
+        // Run Phases 1-4 on holes that have centerlines
+        let holesWithCenterlines = holeSlots.filter { slot in
+            !course.subCourses[slot.sub].holes[slot.hole].centerline.isEmpty
+        }
+        var assignedIDs: Set<Int> = []
+        if !holesWithCenterlines.isEmpty {
+            assignedIDs = associateFeatures(
+                features, course: &course, holeSlots: holesWithCenterlines
+            )
+        }
+
+        // For holes still missing centerlines, synthesize from leftover features
         let holesWithoutCenterlines = holeSlots.filter { slot in
             course.subCourses[slot.sub].holes[slot.hole].centerline.isEmpty
         }
@@ -43,33 +51,47 @@ enum OSMImporter {
             synthesizeCenterlines(
                 for: holesWithoutCenterlines,
                 features: features,
+                alreadyAssigned: assignedIDs,
                 course: &course
             )
-        }
 
-        let holesWithCenterlines = holeSlots.filter { slot in
-            !course.subCourses[slot.sub].holes[slot.hole].centerline.isEmpty
+            // Run Phases 1-4 on the newly-centerlined holes
+            let nowHaveCenterlines = holesWithoutCenterlines.filter { slot in
+                !course.subCourses[slot.sub].holes[slot.hole].centerline.isEmpty
+            }
+            if !nowHaveCenterlines.isEmpty {
+                let unassigned = features.filter { !assignedIDs.contains($0.id) }
+                _ = associateFeatures(
+                    unassigned, course: &course, holeSlots: nowHaveCenterlines
+                )
+            }
         }
-        guard !holesWithCenterlines.isEmpty else { return }
+    }
 
+    /// Phases 1-4: Anchor greens, anchor tees, associate remaining features, assign tee names.
+    /// Returns the set of feature IDs that were assigned to holes.
+    @discardableResult
+    private static func associateFeatures(
+        _ features: [Feature],
+        course: inout Course,
+        holeSlots: [(sub: Int, hole: Int, global: Int)]
+    ) -> Set<Int> {
         let metersPerYard = 0.9144
         let thresholdMeters = 35.0 * metersPerYard
+        var assignedIDs: Set<Int> = []
 
         // Phase 1: Anchor greens — each green goes to the hole whose centerline
-        // endpoint is closest. Greedy 1:1 assignment (one green per hole).
+        // endpoint is closest. Greedy closest-pair 1:1 assignment.
         let greenFeatures = features.filter { $0.type == .green }
-        var assignedGreenIDs: Set<Int> = []
 
         var holeCenterlineEnds: [(slot: (sub: Int, hole: Int, global: Int), end: Coordinate)] = []
-        for slot in holesWithCenterlines {
+        for slot in holeSlots {
             let cl = course.subCourses[slot.sub].holes[slot.hole].centerline
             if let end = cl.last {
                 holeCenterlineEnds.append((slot, end))
             }
         }
 
-        // Build all (hole, green, distance) candidates and sort by distance so the
-        // closest pairs are matched first (prevents a far hole from stealing a green).
         var greenCandidates: [(holeIdx: Int, greenID: Int, dist: Double)] = []
         for (hIdx, holeEnd) in holeCenterlineEnds.enumerated() {
             for green in greenFeatures {
@@ -82,78 +104,79 @@ enum OSMImporter {
 
         var assignedHoleIndices: Set<Int> = []
         for candidate in greenCandidates {
-            guard !assignedGreenIDs.contains(candidate.greenID),
+            guard !assignedIDs.contains(candidate.greenID),
                   !assignedHoleIndices.contains(candidate.holeIdx) else { continue }
             let slot = holeCenterlineEnds[candidate.holeIdx].slot
             course.subCourses[slot.sub].holes[slot.hole].features.append(candidate.greenID)
-            assignedGreenIDs.insert(candidate.greenID)
+            assignedIDs.insert(candidate.greenID)
             assignedHoleIndices.insert(candidate.holeIdx)
         }
 
-        // Phase 2: Anchor tees — a tee must be within 35 yards laterally of the
-        // centerline AND forward of its start. This allows tees spread along the
-        // hole (e.g., junior tees 200 yards forward) while excluding adjacent holes.
+        // Phase 2: Anchor tees — must be within 35 yards laterally of the
+        // centerline AND forward of its start.
         let teeFeatures = features.filter { $0.type == .tee }
-        var assignedTeeIDs: Set<Int> = []
 
-        for slot in holesWithCenterlines {
+        for slot in holeSlots {
             let cl = course.subCourses[slot.sub].holes[slot.hole].centerline
 
-            for tee in teeFeatures where !assignedTeeIDs.contains(tee.id) {
+            for tee in teeFeatures where !assignedIDs.contains(tee.id) {
                 let centroid = PolygonGeometry.centroid(of: tee.polygon)
                 guard isForwardOfStart(point: centroid, centerline: cl) else { continue }
                 let lateralDist = distanceToPolyline(from: centroid, polyline: cl)
                 if lateralDist <= thresholdMeters {
                     course.subCourses[slot.sub].holes[slot.hole].features.append(tee.id)
-                    assignedTeeIDs.insert(tee.id)
+                    assignedIDs.insert(tee.id)
                 }
             }
         }
 
         // Phase 3: Associate remaining features (fairways, bunkers, water, rough)
         // with the nearest hole's centerline, filtered by the directional check.
-        let remainingFeatures = features.filter {
-            !assignedGreenIDs.contains($0.id) && !assignedTeeIDs.contains($0.id)
+        let remainingFeatures = features.filter { !assignedIDs.contains($0.id) }
+        for feature in remainingFeatures {
+            let centroid = PolygonGeometry.centroid(of: feature.polygon)
+            var bestSlot: (sub: Int, hole: Int, global: Int)?
+            var bestDist = Double.greatestFiniteMagnitude
+
+            for slot in holeSlots {
+                let cl = course.subCourses[slot.sub].holes[slot.hole].centerline
+                guard isForwardOfStart(point: centroid, centerline: cl) else { continue }
+                if shouldAssociate(feature: feature, withCenterline: cl, threshold: thresholdMeters) {
+                    let dist = distanceToPolyline(from: centroid, polyline: cl)
+                    if dist < bestDist {
+                        bestDist = dist
+                        bestSlot = slot
+                    }
+                }
+            }
+
+            if let slot = bestSlot {
+                course.subCourses[slot.sub].holes[slot.hole].features.append(feature.id)
+                assignedIDs.insert(feature.id)
+            }
         }
-        associateRemainingFeatures(
-            remainingFeatures,
-            course: &course,
-            holesWithCenterlines: holesWithCenterlines,
-            threshold: thresholdMeters
-        )
 
         // Phase 4: Assign tee names
         assignTeeNames(course: &course, holeSlots: holeSlots)
+
+        return assignedIDs
     }
 
     /// For holes missing centerlines, synthesize a 2-point centerline by pairing
     /// the nearest unassigned tee (start) with the nearest unassigned green (end).
-    /// Uses the course coordinate as a reference point for finding nearby features,
-    /// offset by the hole's position in the sequence.
     private static func synthesizeCenterlines(
         for slots: [(sub: Int, hole: Int, global: Int)],
         features: [Feature],
+        alreadyAssigned: Set<Int>,
         course: inout Course
     ) {
-        let tees = features.filter { $0.type == .tee }
-        let greens = features.filter { $0.type == .green }
+        let tees = features.filter { $0.type == .tee && !alreadyAssigned.contains($0.id) }
+        let greens = features.filter { $0.type == .green && !alreadyAssigned.contains($0.id) }
         var usedTeeIDs: Set<Int> = []
         var usedGreenIDs: Set<Int> = []
 
-        // Collect tee/green IDs already claimed by holes that have centerlines
-        for subCourse in course.subCourses {
-            for hole in subCourse.holes where !hole.centerline.isEmpty {
-                for featureID in hole.features {
-                    if let f = course.features.first(where: { $0.id == featureID }) {
-                        if f.type == .tee { usedTeeIDs.insert(f.id) }
-                        if f.type == .green { usedGreenIDs.insert(f.id) }
-                    }
-                }
-            }
-        }
-
         for slot in slots {
-            // Find nearest unassigned green
+            // Find nearest unassigned green to the course center
             var bestGreen: Feature?
             var bestGreenDist = Double.greatestFiniteMagnitude
             let ref = course.location.coordinate
@@ -190,39 +213,6 @@ enum OSMImporter {
                 usedGreenIDs.insert(green.id)
             }
             course.subCourses[slot.sub].holes[slot.hole].centerline = centerline
-        }
-    }
-
-    /// Phase 3: Associate non-anchor features with the nearest hole whose centerline
-    /// is within the threshold, excluding features behind the centerline start.
-    private static func associateRemainingFeatures(
-        _ features: [Feature],
-        course: inout Course,
-        holesWithCenterlines: [(sub: Int, hole: Int, global: Int)],
-        threshold: Double
-    ) {
-        for feature in features {
-            let centroid = PolygonGeometry.centroid(of: feature.polygon)
-            var bestSlot: (sub: Int, hole: Int, global: Int)?
-            var bestDist = Double.greatestFiniteMagnitude
-
-            for slot in holesWithCenterlines {
-                let cl = course.subCourses[slot.sub].holes[slot.hole].centerline
-
-                guard isForwardOfStart(point: centroid, centerline: cl) else { continue }
-
-                if shouldAssociate(feature: feature, withCenterline: cl, threshold: threshold) {
-                    let dist = distanceToPolyline(from: centroid, polyline: cl)
-                    if dist < bestDist {
-                        bestDist = dist
-                        bestSlot = slot
-                    }
-                }
-            }
-
-            if let slot = bestSlot {
-                course.subCourses[slot.sub].holes[slot.hole].features.append(feature.id)
-            }
         }
     }
 

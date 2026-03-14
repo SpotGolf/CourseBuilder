@@ -602,6 +602,57 @@ final class OSMImporterTests: XCTestCase {
 
     // MARK: - Directional Filter
 
+    func testFeatureBehindCenterlineStartNotAssociated() {
+        let bunkerBehind = OverpassAPIClient.ParsedFeature(
+            type: .bunker,
+            polygon: [
+                Coordinate(latitude: 39.792, longitude: -74.962),
+                Coordinate(latitude: 39.792, longitude: -74.961),
+                Coordinate(latitude: 39.793, longitude: -74.961),
+                Coordinate(latitude: 39.793, longitude: -74.962)
+            ]
+        )
+        let green = OverpassAPIClient.ParsedFeature(
+            type: .green,
+            polygon: [
+                Coordinate(latitude: 39.784, longitude: -74.955),
+                Coordinate(latitude: 39.784, longitude: -74.953),
+                Coordinate(latitude: 39.785, longitude: -74.953),
+                Coordinate(latitude: 39.785, longitude: -74.955)
+            ]
+        )
+        let cl = OverpassAPIClient.ParsedCenterline(
+            holeNumber: 1,
+            coordinates: [
+                Coordinate(latitude: 39.790, longitude: -74.960),
+                Coordinate(latitude: 39.787, longitude: -74.957),
+                Coordinate(latitude: 39.7845, longitude: -74.954)
+            ]
+        )
+
+        let parsed = OverpassAPIClient.ParsedResult(
+            features: [bunkerBehind, green],
+            centerlines: [cl],
+            courseBoundary: nil
+        )
+
+        var course = Course(
+            name: "Test",
+            location: CourseLocation(address: "", city: "", state: "", country: "",
+                                     coordinate: Coordinate(latitude: 39.787, longitude: -74.957)),
+            subCourses: [
+                SubCourse(name: "Front", holes: [Hole(number: 1, par: 4)])
+            ]
+        )
+
+        OSMImporter.applyParsedResult(parsed, to: &course)
+
+        let hole = course.subCourses[0].holes[0]
+        let bunkerID = course.features.first(where: { $0.type == .bunker })!.id
+        XCTAssertFalse(hole.features.contains(bunkerID))
+        XCTAssertEqual(hole.features.count, 1) // only the green
+    }
+
     func testPointForwardOfCenterlineStart() {
         // Centerline goes south-east: (39.790, -74.960) → (39.784, -74.954)
         let centerline = [

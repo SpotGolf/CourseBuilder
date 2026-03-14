@@ -199,6 +199,24 @@ enum OSMImporter {
         }
     }
 
+    /// Returns true if `point` is not behind the centerline's start.
+    /// Uses the dot product of (point - start) against the centerline direction (start → end).
+    /// Points at or forward of the start (dot product >= 0) return true.
+    /// Returns true if the centerline has fewer than 2 points (no direction to check).
+    static func isForwardOfStart(point: Coordinate, centerline: [Coordinate]) -> Bool {
+        guard centerline.count >= 2 else { return true }
+        let start = centerline.first!
+        let end = centerline.last!
+        // Direction vector (in lat/lon space)
+        let dx = end.longitude - start.longitude
+        let dy = end.latitude - start.latitude
+        // Vector from start to point
+        let px = point.longitude - start.longitude
+        let py = point.latitude - start.latitude
+        // Dot product
+        return (px * dx + py * dy) >= 0
+    }
+
     /// Determines if a feature should be associated with a hole based on three checks:
     /// 1. Does the centerline pass through the polygon? (handles large fairways/greens)
     /// 2. Is any polygon vertex within the threshold of the centerline? (handles offset features)

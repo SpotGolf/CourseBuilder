@@ -445,4 +445,37 @@ final class OSMImporterTests: XCTestCase {
         // All 4 tee names should be assigned
         XCTAssertEqual(hole.tees.count, 4)
     }
+
+    // MARK: - Directional Filter
+
+    func testPointForwardOfCenterlineStart() {
+        // Centerline goes south-east: (39.790, -74.960) → (39.784, -74.954)
+        let centerline = [
+            Coordinate(latitude: 39.790, longitude: -74.960),
+            Coordinate(latitude: 39.784, longitude: -74.954)
+        ]
+        // Point along the centerline direction (south-east of start)
+        let forward = Coordinate(latitude: 39.788, longitude: -74.958)
+        XCTAssertTrue(OSMImporter.isForwardOfStart(point: forward, centerline: centerline))
+    }
+
+    func testPointBehindCenterlineStart() {
+        let centerline = [
+            Coordinate(latitude: 39.790, longitude: -74.960),
+            Coordinate(latitude: 39.784, longitude: -74.954)
+        ]
+        // Point behind start (north-west of start, opposite to centerline direction)
+        let behind = Coordinate(latitude: 39.792, longitude: -74.962)
+        XCTAssertFalse(OSMImporter.isForwardOfStart(point: behind, centerline: centerline))
+    }
+
+    func testPointPerpendicularToCenterline() {
+        let centerline = [
+            Coordinate(latitude: 39.790, longitude: -74.960),
+            Coordinate(latitude: 39.784, longitude: -74.954)
+        ]
+        // Point slightly forward and perpendicular to the centerline direction
+        let perp = Coordinate(latitude: 39.7895, longitude: -74.959)
+        XCTAssertTrue(OSMImporter.isForwardOfStart(point: perp, centerline: centerline))
+    }
 }

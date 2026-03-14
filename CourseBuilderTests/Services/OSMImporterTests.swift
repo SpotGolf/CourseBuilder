@@ -446,6 +446,160 @@ final class OSMImporterTests: XCTestCase {
         XCTAssertEqual(hole.tees.count, 4)
     }
 
+    // MARK: - Phase-Based Association
+
+    func testGreenAnchoredToClosestCenterlineEnd() {
+        let green1 = OverpassAPIClient.ParsedFeature(
+            type: .green,
+            polygon: [
+                Coordinate(latitude: 39.784, longitude: -74.955),
+                Coordinate(latitude: 39.784, longitude: -74.953),
+                Coordinate(latitude: 39.785, longitude: -74.953),
+                Coordinate(latitude: 39.785, longitude: -74.955)
+            ]
+        )
+        let green2 = OverpassAPIClient.ParsedFeature(
+            type: .green,
+            polygon: [
+                Coordinate(latitude: 39.790, longitude: -74.945),
+                Coordinate(latitude: 39.790, longitude: -74.943),
+                Coordinate(latitude: 39.791, longitude: -74.943),
+                Coordinate(latitude: 39.791, longitude: -74.945)
+            ]
+        )
+        let cl1 = OverpassAPIClient.ParsedCenterline(
+            holeNumber: 1,
+            coordinates: [
+                Coordinate(latitude: 39.790, longitude: -74.960),
+                Coordinate(latitude: 39.7845, longitude: -74.954)
+            ]
+        )
+        let cl2 = OverpassAPIClient.ParsedCenterline(
+            holeNumber: 2,
+            coordinates: [
+                Coordinate(latitude: 39.784, longitude: -74.950),
+                Coordinate(latitude: 39.7905, longitude: -74.944)
+            ]
+        )
+
+        let parsed = OverpassAPIClient.ParsedResult(
+            features: [green1, green2],
+            centerlines: [cl1, cl2],
+            courseBoundary: nil
+        )
+
+        var course = Course(
+            name: "Test",
+            location: CourseLocation(address: "", city: "", state: "", country: "",
+                                     coordinate: Coordinate(latitude: 39.787, longitude: -74.950)),
+            subCourses: [
+                SubCourse(name: "Front", holes: [Hole(number: 1, par: 4), Hole(number: 2, par: 4)])
+            ]
+        )
+
+        OSMImporter.applyParsedResult(parsed, to: &course)
+
+        let hole1 = course.subCourses[0].holes[0]
+        let hole2 = course.subCourses[0].holes[1]
+        let green1ID = course.features.first(where: {
+            $0.type == .green && $0.polygon[0].latitude < 39.786
+        })!.id
+        let green2ID = course.features.first(where: {
+            $0.type == .green && $0.polygon[0].latitude > 39.789
+        })!.id
+
+        XCTAssertTrue(hole1.features.contains(green1ID))
+        XCTAssertFalse(hole1.features.contains(green2ID))
+        XCTAssertTrue(hole2.features.contains(green2ID))
+        XCTAssertFalse(hole2.features.contains(green1ID))
+    }
+
+    func testTeesAnchoredAlongCenterline() {
+        let teeAtStart1 = OverpassAPIClient.ParsedFeature(
+            type: .tee,
+            polygon: [
+                Coordinate(latitude: 39.7898, longitude: -74.9602),
+                Coordinate(latitude: 39.7898, longitude: -74.9598),
+                Coordinate(latitude: 39.7902, longitude: -74.9598),
+                Coordinate(latitude: 39.7902, longitude: -74.9602)
+            ]
+        )
+        let teeAtStart2 = OverpassAPIClient.ParsedFeature(
+            type: .tee,
+            polygon: [
+                Coordinate(latitude: 39.7897, longitude: -74.9602),
+                Coordinate(latitude: 39.7897, longitude: -74.9598),
+                Coordinate(latitude: 39.7901, longitude: -74.9598),
+                Coordinate(latitude: 39.7901, longitude: -74.9602)
+            ]
+        )
+        // Junior tee: far forward along the centerline, near midpoint
+        let teeJunior = OverpassAPIClient.ParsedFeature(
+            type: .tee,
+            polygon: [
+                Coordinate(latitude: 39.7868, longitude: -74.9572),
+                Coordinate(latitude: 39.7868, longitude: -74.9568),
+                Coordinate(latitude: 39.7872, longitude: -74.9568),
+                Coordinate(latitude: 39.7872, longitude: -74.9572)
+            ]
+        )
+        // Tee from a different hole — laterally far from this centerline
+        let teeDifferentHole = OverpassAPIClient.ParsedFeature(
+            type: .tee,
+            polygon: [
+                Coordinate(latitude: 39.780, longitude: -74.950),
+                Coordinate(latitude: 39.780, longitude: -74.949),
+                Coordinate(latitude: 39.781, longitude: -74.949),
+                Coordinate(latitude: 39.781, longitude: -74.950)
+            ]
+        )
+        let green = OverpassAPIClient.ParsedFeature(
+            type: .green,
+            polygon: [
+                Coordinate(latitude: 39.784, longitude: -74.955),
+                Coordinate(latitude: 39.784, longitude: -74.953),
+                Coordinate(latitude: 39.785, longitude: -74.953),
+                Coordinate(latitude: 39.785, longitude: -74.955)
+            ]
+        )
+        let cl = OverpassAPIClient.ParsedCenterline(
+            holeNumber: 1,
+            coordinates: [
+                Coordinate(latitude: 39.790, longitude: -74.960),
+                Coordinate(latitude: 39.787, longitude: -74.957),
+                Coordinate(latitude: 39.7845, longitude: -74.954)
+            ]
+        )
+
+        let parsed = OverpassAPIClient.ParsedResult(
+            features: [teeAtStart1, teeAtStart2, teeJunior, teeDifferentHole, green],
+            centerlines: [cl],
+            courseBoundary: nil
+        )
+
+        var course = Course(
+            name: "Test",
+            location: CourseLocation(address: "", city: "", state: "", country: "",
+                                     coordinate: Coordinate(latitude: 39.787, longitude: -74.957)),
+            subCourses: [
+                SubCourse(name: "Front", holes: [Hole(number: 1, par: 4)])
+            ]
+        )
+
+        OSMImporter.applyParsedResult(parsed, to: &course)
+
+        let hole = course.subCourses[0].holes[0]
+        let differentHoleTeeID = course.features.first(where: {
+            $0.type == .tee && $0.polygon[0].latitude < 39.785
+        })!.id
+
+        let holeTeeIDs = hole.features.filter { id in
+            course.features.first { $0.id == id }?.type == .tee
+        }
+        XCTAssertEqual(holeTeeIDs.count, 3)
+        XCTAssertFalse(holeTeeIDs.contains(differentHoleTeeID))
+    }
+
     // MARK: - Directional Filter
 
     func testPointForwardOfCenterlineStart() {

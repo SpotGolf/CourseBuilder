@@ -24,6 +24,8 @@ enum ToolMode: String, CaseIterable {
 
 struct FeatureEditorView: View {
     @Binding var feature: Feature
+    @Binding var hole: Hole
+    var teeNames: [String] = []
     let onDelete: () -> Void
 
     var body: some View {
@@ -36,10 +38,33 @@ struct FeatureEditorView: View {
                 set: { newType in
                     let updated = Feature(id: feature.id, type: newType, polygon: feature.polygon)
                     feature = updated
+                    if newType != .tee {
+                        // Remove from tees if type changed away from tee
+                        for (name, id) in hole.tees where id == feature.id {
+                            hole.tees.removeValue(forKey: name)
+                        }
+                    }
                 }
             )) {
                 ForEach(FeatureType.allCases, id: \.self) { type in
                     Text(type.rawValue.capitalized).tag(type)
+                }
+            }
+
+            if feature.type == .tee, !teeNames.isEmpty {
+                Text("Tees")
+                    .font(.subheadline.bold())
+                ForEach(teeNames, id: \.self) { name in
+                    Toggle(name, isOn: Binding(
+                        get: { hole.tees[name] == feature.id },
+                        set: { isOn in
+                            if isOn {
+                                hole.tees[name] = feature.id
+                            } else {
+                                hole.tees.removeValue(forKey: name)
+                            }
+                        }
+                    ))
                 }
             }
 

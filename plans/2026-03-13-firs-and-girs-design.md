@@ -26,6 +26,7 @@ Scorecard data, feature references, and a playing path.
 - `femaleHandicap: Int`
 - `yardages: [String: Int]` — keyed by tee name
 - `features: [Int]` — array of Feature IDs
+- `tees: [String: Int]` — maps tee name to Feature ID (e.g., `{"Blue": 5, "White": 7}`). Auto-assigned during OSM import by matching tee-to-green distance against yardages, editable in inspector.
 - `centerline: [[Double]]` — polyline of `[lat, lon]` waypoints from tee to pin
 
 ### Course Structure
@@ -90,6 +91,7 @@ Clean break — no backward compatibility, no version number.
           "femaleHandicap": 5,
           "yardages": { "Black": 427, "Gold": 398 },
           "features": [1, 2, 3, 4],
+          "tees": { "Black": 1, "Gold": 5 },
           "centerline": [[39.788, -74.958], [39.786, -74.956]]
         }
       ]

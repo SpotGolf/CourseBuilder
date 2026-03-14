@@ -1,6 +1,9 @@
 import SwiftUI
 import MapKit
 import CoreLocation
+import os
+
+private let logger = Logger(subsystem: "golf.spot.CourseBuilder", category: "MapEditor")
 
 enum MapStyleMode: String, CaseIterable {
     case satellite = "Satellite"
@@ -23,6 +26,7 @@ struct MapEditorView: View {
     @State private var selectedHole: Int = 1
     @State private var selectedFeatureID: Int?
     @State private var selectedVertexIndex: Int?
+    @State private var isEditingFeature = false
 
     // Drawing state
     @State private var drawingVertices: [Coordinate] = []
@@ -52,6 +56,14 @@ struct MapEditorView: View {
     @State private var isImportingOSM = false
     @State private var osmImportStatus = ""
 
+    // Delete confirmation
+    @State private var featureToDelete: Int?
+
+    // Sidebar list heights
+    @State private var holesCollapsed = false
+    @State private var featuresCollapsed = false
+    @State private var unassociatedCollapsed = false
+
     var body: some View {
         VStack(spacing: 0) {
             toolbar
@@ -64,6 +76,11 @@ struct MapEditorView: View {
                 VStack(spacing: 0) {
                     mapArea
                     statusBar
+                }
+                .onHover { hovering in
+                    if hovering {
+                        NSCursor.arrow.set()
+                    }
                 }
 
                 inspectorPanel
@@ -88,9 +105,13 @@ struct MapEditorView: View {
                 drawingVertices = []
                 statusMessage = "Drawing cancelled"
                 clearStatusAfterDelay()
+            } else if isEditingFeature {
+                isEditingFeature = false
+                selectedVertexIndex = nil
             } else {
                 selectedFeatureID = nil
                 selectedVertexIndex = nil
+                isEditingFeature = false
             }
             return .handled
         }
@@ -103,7 +124,11 @@ struct MapEditorView: View {
             return .handled
         }
         .onKeyPress(.return) {
-            finishDrawing()
+            if !drawingVertices.isEmpty {
+                finishDrawing()
+            } else if selectedFeatureID != nil && !isEditingFeature {
+                isEditingFeature = true
+            }
             return .handled
         }
         .navigationTitle("\(course.name) — \(course.location.city), \(course.location.state)")
@@ -133,115 +158,120 @@ struct MapEditorView: View {
 
     private var currentHoleFeatures: [Feature] {
         guard let hole = currentHole else { return [] }
-        return hole.featureIDs.compactMap { id in
+        return hole.features.compactMap { id in
             course.features.first { $0.id == id }
         }
     }
 
     private var unassociatedFeatures: [Feature] {
-        let allAssigned = Set(course.subCourses.flatMap(\.holes).flatMap(\.featureIDs))
+        let allAssigned = Set(course.subCourses.flatMap(\.holes).flatMap(\.features))
         return course.features.filter { !allAssigned.contains($0.id) }
     }
 
     // MARK: - Hole Sidebar
 
     private var holeSidebar: some View {
-        VStack(alignment: .leading, spacing: 0) {
-            Text("Holes")
-                .font(.headline)
-                .padding()
-
-            List {
-                ForEach(Array(course.subCourses.enumerated()), id: \.element.id) { subIdx, subCourse in
-                    Section(subCourse.name) {
-                        ForEach(subCourse.holes) { hole in
-                            Button {
-                                selectedSubCourseIndex = subIdx
-                                selectedHole = hole.number
-                                selectedFeatureID = nil
-                                selectedVertexIndex = nil
-                            } label: {
-                                HStack {
-                                    Text("Hole \(hole.number)")
-                                        .fontWeight(selectedSubCourseIndex == subIdx && selectedHole == hole.number ? .bold : .regular)
-                                    Spacer()
-                                    Text("\(hole.featureIDs.count) features")
-                                        .font(.caption)
-                                        .foregroundStyle(.secondary)
+        VSplitView {
+            // Holes pane
+            VStack(alignment: .leading, spacing: 0) {
+                sectionHeader(title: "Holes", collapsed: $holesCollapsed)
+                if !holesCollapsed {
+                    List {
+                        ForEach(Array(course.subCourses.enumerated()), id: \.element.id) { subIdx, subCourse in
+                            Section(subCourse.name) {
+                                ForEach(subCourse.holes) { hole in
+                                    Button {
+                                        selectedSubCourseIndex = subIdx
+                                        selectedHole = hole.number
+                                        selectedFeatureID = nil
+                                        selectedVertexIndex = nil
+                                        isEditingFeature = false
+                                    } label: {
+                                        HStack {
+                                            Text("Hole \(hole.number)")
+                                                .fontWeight(selectedSubCourseIndex == subIdx && selectedHole == hole.number ? .bold : .regular)
+                                            Spacer()
+                                            Text("\(hole.features.count) features")
+                                                .font(.caption)
+                                                .foregroundStyle(.secondary)
+                                        }
+                                    }
+                                    .buttonStyle(.plain)
                                 }
                             }
-                            .buttonStyle(.plain)
                         }
                     }
                 }
             }
+            .frame(minHeight: 30)
 
-            Divider()
-
-            // Feature list for selected hole
-            let holeFeatures = currentHoleFeatures
-            if !holeFeatures.isEmpty {
-                VStack(alignment: .leading, spacing: 4) {
-                    Text("Features - Hole \(selectedHole)")
-                        .font(.subheadline.bold())
-                        .padding(.horizontal)
-                        .padding(.top, 8)
-
+            // Features pane
+            VStack(alignment: .leading, spacing: 0) {
+                sectionHeader(title: "Features - Hole \(selectedHole)", collapsed: $featuresCollapsed)
+                if !featuresCollapsed {
+                    let holeFeatures = currentHoleFeatures
                     List(holeFeatures) { feature in
-                        Button {
-                            selectedFeatureID = feature.id
-                            selectedVertexIndex = nil
-                            activeTool = .select
-                        } label: {
-                            HStack {
-                                Circle()
-                                    .fill(colorForFeatureType(feature.type))
-                                    .frame(width: 10, height: 10)
-                                Text(feature.type.rawValue.capitalized)
-                                    .font(.caption)
-                                Text("#\(feature.id)")
+                        HStack {
+                            Circle()
+                                .fill(colorForFeatureType(feature.type))
+                                .frame(width: 10, height: 10)
+                            Text(feature.type.rawValue.capitalized)
+                                .font(.caption)
+                            Text("#\(feature.id)")
+                                .font(.caption2)
+                                .foregroundStyle(.secondary)
+                            Spacer()
+                            Button {
+                                disassociateFeature(id: feature.id)
+                            } label: {
+                                Image(systemName: "xmark")
                                     .font(.caption2)
                                     .foregroundStyle(.secondary)
                             }
+                            .buttonStyle(.borderless)
+                            .help("Disassociate from hole")
                         }
-                        .buttonStyle(.plain)
+                        .frame(maxWidth: .infinity, alignment: .leading)
+                        .contentShape(Rectangle())
+                        .onTapGesture {
+                            selectedFeatureID = feature.id
+                            selectedVertexIndex = nil
+                            isEditingFeature = false
+                            activeTool = .select
+                        }
                     }
-                    .frame(maxHeight: 150)
                 }
             }
+            .frame(minHeight: 30)
 
-            // Unassociated features
-            let unassociated = unassociatedFeatures
-            if !unassociated.isEmpty {
-                Divider()
-                VStack(alignment: .leading, spacing: 4) {
-                    Text("Unassociated (\(unassociated.count))")
-                        .font(.subheadline.bold())
-                        .padding(.horizontal)
-                        .padding(.top, 4)
-
+            // Unassociated pane
+            VStack(alignment: .leading, spacing: 0) {
+                sectionHeader(title: "Unassociated (\(unassociatedFeatures.count))", collapsed: $unassociatedCollapsed)
+                if !unassociatedCollapsed {
+                    let unassociated = unassociatedFeatures
                     List(unassociated) { feature in
-                        Button {
+                        HStack {
+                            Circle()
+                                .fill(colorForFeatureType(feature.type))
+                                .frame(width: 10, height: 10)
+                            Text(feature.type.rawValue.capitalized)
+                                .font(.caption)
+                            Text("#\(feature.id)")
+                                .font(.caption2)
+                                .foregroundStyle(.secondary)
+                        }
+                        .frame(maxWidth: .infinity, alignment: .leading)
+                        .contentShape(Rectangle())
+                        .onTapGesture {
                             selectedFeatureID = feature.id
                             selectedVertexIndex = nil
+                            isEditingFeature = false
                             activeTool = .select
-                        } label: {
-                            HStack {
-                                Circle()
-                                    .fill(colorForFeatureType(feature.type))
-                                    .frame(width: 10, height: 10)
-                                Text(feature.type.rawValue.capitalized)
-                                    .font(.caption)
-                                Text("#\(feature.id)")
-                                    .font(.caption2)
-                                    .foregroundStyle(.secondary)
-                            }
                         }
-                        .buttonStyle(.plain)
                     }
-                    .frame(maxHeight: 100)
                 }
             }
+            .frame(minHeight: 30)
         }
         .background(Color(.windowBackgroundColor))
     }
@@ -309,7 +339,7 @@ struct MapEditorView: View {
                     Text("Import OSM")
                 }
             }
-            .disabled(isImportingOSM)
+            .disabled(isImportingOSM || !course.features.isEmpty)
         }
         .padding(.horizontal)
         .padding(.vertical, 6)
@@ -371,8 +401,9 @@ struct MapEditorView: View {
                         .stroke(.white, lineWidth: 2)
                 }
 
-                // Render vertex handles for selected feature
-                if let featureID = selectedFeatureID,
+                // Render vertex handles for selected feature (only in edit mode)
+                if isEditingFeature,
+                   let featureID = selectedFeatureID,
                    let feature = course.features.first(where: { $0.id == featureID }) {
                     ForEach(Array(feature.polygon.enumerated()), id: \.offset) { index, coord in
                         Annotation("", coordinate: coord.clCoordinate) {
@@ -426,8 +457,9 @@ struct MapEditorView: View {
                 }
             }
             .overlay {
-                // Drag handle for selected vertex
+                // Drag handle for selected vertex (only in edit mode)
                 if activeTool == .select,
+                   isEditingFeature,
                    let featureID = selectedFeatureID,
                    let vertexIdx = selectedVertexIndex,
                    let feature = course.features.first(where: { $0.id == featureID }),
@@ -495,13 +527,36 @@ struct MapEditorView: View {
             Divider()
 
             if let featureID = selectedFeatureID,
-               let featureIndex = course.features.firstIndex(where: { $0.id == featureID }) {
-                FeatureEditorView(
-                    feature: $course.features[featureIndex],
-                    onDelete: {
-                        deleteFeature(id: featureID)
+               let featureIndex = course.features.firstIndex(where: { $0.id == featureID }),
+               let holeIndex = course.subCourses[selectedSubCourseIndex].holes.firstIndex(where: { $0.number == selectedHole }) {
+                VStack(alignment: .leading, spacing: 0) {
+                    FeatureEditorView(
+                        feature: $course.features[featureIndex],
+                        hole: $course.subCourses[selectedSubCourseIndex].holes[holeIndex],
+                        teeNames: course.tees.map(\.name),
+                        onDelete: {
+                            featureToDelete = featureID
+                        }
+                    )
+
+                    Divider()
+
+                    // Associate/Disassociate controls
+                    VStack(alignment: .leading, spacing: 8) {
+                        let isAssociated = currentHole?.features.contains(featureID) ?? false
+
+                        if isAssociated {
+                            Button("Disassociate from Hole \(selectedHole)") {
+                                disassociateFeature(id: featureID)
+                            }
+                        } else {
+                            Button("Associate with Hole \(selectedHole)") {
+                                associateFeature(id: featureID)
+                            }
+                        }
                     }
-                )
+                    .padding()
+                }
                 .frame(maxHeight: .infinity, alignment: .top)
             } else {
                 VStack(spacing: 8) {
@@ -517,6 +572,26 @@ struct MapEditorView: View {
             }
         }
         .background(Color(.windowBackgroundColor))
+        .confirmationDialog(
+            "Delete Feature #\(featureToDelete ?? 0)?",
+            isPresented: Binding(
+                get: { featureToDelete != nil },
+                set: { if !$0 { featureToDelete = nil } }
+            ),
+            titleVisibility: .visible
+        ) {
+            Button("Delete", role: .destructive) {
+                if let id = featureToDelete {
+                    deleteFeature(id: id)
+                    featureToDelete = nil
+                }
+            }
+            Button("Cancel", role: .cancel) {
+                featureToDelete = nil
+            }
+        } message: {
+            Text("This will permanently remove this feature from the course and all holes.")
+        }
     }
 
     private var inspectorHelpText: String {
@@ -585,12 +660,14 @@ struct MapEditorView: View {
     private var toolHint: String {
         switch activeTool {
         case .select:
-            if selectedFeatureID != nil && selectedVertexIndex != nil {
-                "Drag vertex to move | Esc to deselect | Del to remove feature"
+            if isEditingFeature && selectedVertexIndex != nil {
+                "Drag vertex to move | Esc to stop editing | Del to remove feature"
+            } else if isEditingFeature {
+                "Click vertex to select | Esc to stop editing"
             } else if selectedFeatureID != nil {
-                "Click vertex to select | Esc to deselect | Del to remove feature"
+                "Click again or Enter to edit | Esc to deselect | Del to remove feature"
             } else {
-                "Click polygon to select | Esc to deselect"
+                "Click polygon to select"
             }
         case .drawPolygon:
             if drawingVertices.isEmpty {
@@ -603,6 +680,29 @@ struct MapEditorView: View {
                 "Click to place first waypoint"
             } else {
                 "\(drawingVertices.count) waypoints | Click to add | Enter to finish | Esc to cancel"
+            }
+        }
+    }
+
+    // MARK: - Section Header
+
+    private func sectionHeader(title: String, collapsed: Binding<Bool>) -> some View {
+        HStack {
+            Image(systemName: collapsed.wrappedValue ? "chevron.right" : "chevron.down")
+                .font(.caption)
+                .foregroundStyle(.secondary)
+                .frame(width: 12)
+            Text(title)
+                .font(.subheadline.bold())
+            Spacer()
+        }
+        .padding(.horizontal)
+        .padding(.vertical, 6)
+        .background(Color(.windowBackgroundColor))
+        .contentShape(Rectangle())
+        .onTapGesture {
+            withAnimation(.easeInOut(duration: 0.15)) {
+                collapsed.wrappedValue.toggle()
             }
         }
     }
@@ -630,6 +730,7 @@ struct MapEditorView: View {
         if mode != .select {
             selectedFeatureID = nil
             selectedVertexIndex = nil
+            isEditingFeature = false
         }
     }
 
@@ -647,10 +748,10 @@ struct MapEditorView: View {
     }
 
     private func selectFeatureAt(_ point: Coordinate) {
-        // First check if tapping near a vertex of the selected feature
-        if let featureID = selectedFeatureID,
+        // In edit mode, check if tapping near a vertex of the selected feature
+        if isEditingFeature,
+           let featureID = selectedFeatureID,
            let feature = course.features.first(where: { $0.id == featureID }) {
-            // Check if tap is near any vertex
             for (index, vertex) in feature.polygon.enumerated() {
                 if isClose(point, to: vertex) {
                     selectedVertexIndex = index
@@ -662,8 +763,14 @@ struct MapEditorView: View {
         // Check if tap is inside any feature polygon of the current hole
         for feature in currentHoleFeatures {
             if PolygonGeometry.contains(point, in: feature.polygon) {
-                selectedFeatureID = feature.id
-                selectedVertexIndex = nil
+                if selectedFeatureID == feature.id && !isEditingFeature {
+                    // Second click on selected polygon enters edit mode
+                    isEditingFeature = true
+                } else {
+                    selectedFeatureID = feature.id
+                    selectedVertexIndex = nil
+                    isEditingFeature = false
+                }
                 return
             }
         }
@@ -671,8 +778,13 @@ struct MapEditorView: View {
         // Check unassociated features too
         for feature in unassociatedFeatures {
             if PolygonGeometry.contains(point, in: feature.polygon) {
-                selectedFeatureID = feature.id
-                selectedVertexIndex = nil
+                if selectedFeatureID == feature.id && !isEditingFeature {
+                    isEditingFeature = true
+                } else {
+                    selectedFeatureID = feature.id
+                    selectedVertexIndex = nil
+                    isEditingFeature = false
+                }
                 return
             }
         }
@@ -680,6 +792,7 @@ struct MapEditorView: View {
         // Nothing hit, deselect
         selectedFeatureID = nil
         selectedVertexIndex = nil
+        isEditingFeature = false
     }
 
     private func isClose(_ a: Coordinate, to b: Coordinate) -> Bool {
@@ -705,7 +818,7 @@ struct MapEditorView: View {
             // Associate with current hole
             if selectedSubCourseIndex < course.subCourses.count {
                 if let holeIdx = course.subCourses[selectedSubCourseIndex].holes.firstIndex(where: { $0.number == selectedHole }) {
-                    course.subCourses[selectedSubCourseIndex].holes[holeIdx].featureIDs.append(newFeature.id)
+                    course.subCourses[selectedSubCourseIndex].holes[holeIdx].features.append(newFeature.id)
                 }
             }
 
@@ -749,22 +862,39 @@ struct MapEditorView: View {
 
     // MARK: - Feature Management
 
+    private func disassociateFeature(id: Int) {
+        guard selectedSubCourseIndex < course.subCourses.count,
+              let holeIdx = course.subCourses[selectedSubCourseIndex].holes.firstIndex(where: { $0.number == selectedHole })
+        else { return }
+        course.subCourses[selectedSubCourseIndex].holes[holeIdx].features.removeAll { $0 == id }
+    }
+
+    private func associateFeature(id: Int) {
+        guard selectedSubCourseIndex < course.subCourses.count,
+              let holeIdx = course.subCourses[selectedSubCourseIndex].holes.firstIndex(where: { $0.number == selectedHole })
+        else { return }
+        if !course.subCourses[selectedSubCourseIndex].holes[holeIdx].features.contains(id) {
+            course.subCourses[selectedSubCourseIndex].holes[holeIdx].features.append(id)
+        }
+    }
+
     private func deleteSelectedFeature() {
         guard let featureID = selectedFeatureID else { return }
-        deleteFeature(id: featureID)
+        featureToDelete = featureID
     }
 
     private func deleteFeature(id: Int) {
         // Remove from course features
         course.features.removeAll { $0.id == id }
-        // Remove from all hole featureIDs
+        // Remove from all hole features
         for subIdx in course.subCourses.indices {
             for holeIdx in course.subCourses[subIdx].holes.indices {
-                course.subCourses[subIdx].holes[holeIdx].featureIDs.removeAll { $0 == id }
+                course.subCourses[subIdx].holes[holeIdx].features.removeAll { $0 == id }
             }
         }
         selectedFeatureID = nil
         selectedVertexIndex = nil
+        isEditingFeature = false
     }
 
     // MARK: - OSM Import
@@ -774,9 +904,11 @@ struct MapEditorView: View {
         osmImportStatus = "Querying OpenStreetMap..."
         let client = OverpassAPIClient()
         let clubhouseCoord = course.location.coordinate
+        logger.info("Starting OSM import for course '\(course.name, privacy: .public)' at \(clubhouseCoord.latitude, privacy: .public), \(clubhouseCoord.longitude, privacy: .public)")
         let searchBBox = OverpassAPIClient.boundingBox(around: clubhouseCoord, radiusMeters: 1000)
         do {
             let result = try await client.fetchFeatures(bbox: searchBBox)
+            logger.info("Initial query: \(result.features.count, privacy: .public) features, \(result.centerlines.count, privacy: .public) centerlines, boundary: \(result.courseBoundary != nil, privacy: .public)")
             if let boundary = result.courseBoundary, boundary.count >= 3 {
                 let lats = boundary.map(\.latitude)
                 let lons = boundary.map(\.longitude)
@@ -786,14 +918,20 @@ struct MapEditorView: View {
                 ).padded(by: 0.25)
                 osmImportStatus = "Fetching features within course boundary..."
                 let fullResult = try await client.fetchFeatures(bbox: bbox)
+                logger.info("Full query: \(fullResult.features.count, privacy: .public) features")
+                let featureCountBefore = course.features.count
                 OSMImporter.applyParsedResult(fullResult, to: &course)
-                osmImportStatus = "Imported \(fullResult.features.count) features"
+                logger.info("After apply: course has \(course.features.count, privacy: .public) features (was \(featureCountBefore, privacy: .public))")
+                osmImportStatus = "Imported \(course.features.count - featureCountBefore) features"
             } else {
+                let featureCountBefore = course.features.count
                 OSMImporter.applyParsedResult(result, to: &course)
-                osmImportStatus = "Imported \(result.features.count) features"
+                logger.info("After apply: course has \(course.features.count, privacy: .public) features (was \(featureCountBefore, privacy: .public))")
+                osmImportStatus = "Imported \(course.features.count - featureCountBefore) features"
             }
             try? store.save(course)
         } catch {
+            logger.error("OSM import failed: \(error, privacy: .public)")
             osmImportStatus = "Import failed: \(error.localizedDescription)"
         }
         isImportingOSM = false

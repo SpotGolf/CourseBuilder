@@ -19,6 +19,7 @@ xcodebuild -scheme CourseBuilder -destination 'platform=macOS' test
 ## Architecture
 
 - macOS 14+ (Sonoma), Swift, SwiftUI, no external packages
+- **No app sandboxing.** `com.apple.security.app-sandbox` must remain `false`. Data is stored in `~/Library/Application Support/CourseBuilder/` and sandboxing causes data loss across rebuilds.
 - MapKit for satellite map display and course search
 - CoreImage for satellite imagery color analysis (green/tee detection)
 - Vision framework for scorecard image OCR
@@ -34,7 +35,7 @@ One JSON file per course. Holes contain: tees (keyed by name), green (front/midd
 
 ## Git
 
-Default branch is `main`. **NEVER commit directly to `main`.** Always create a feature branch before starting any implementation work.
+Default branch is `main`. **NEVER commit directly to `main`.** Always create a feature branch before starting any implementation work. This branch will always be merged back `main` unless the developer specifically states otherwise. 
 
 ## Environment
 

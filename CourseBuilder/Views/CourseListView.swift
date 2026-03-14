@@ -1,4 +1,5 @@
 import SwiftUI
+import UniformTypeIdentifiers
 
 struct CourseListView: View {
     @EnvironmentObject var store: CourseStore
@@ -378,12 +379,16 @@ struct AddCourseSheet: View {
 
     private func chooseImportFile() {
         let panel = NSOpenPanel()
-        panel.allowedContentTypes = [.json]
+        panel.allowedContentTypes = [.json, .gzip]
         panel.allowsMultipleSelection = false
         guard panel.runModal() == .OK, let url = panel.url else { return }
 
         do {
-            let data = try Data(contentsOf: url)
+            var data = try Data(contentsOf: url)
+            // Detect gzip by magic bytes (0x1f 0x8b)
+            if data.count >= 2, data[data.startIndex] == 0x1f, data[data.startIndex + 1] == 0x8b {
+                data = try data.gzipDecompressed()
+            }
             importedCourse = try JSONDecoder().decode(Course.self, from: data)
             importError = ""
         } catch {

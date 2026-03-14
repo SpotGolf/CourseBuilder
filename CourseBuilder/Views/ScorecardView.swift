@@ -227,13 +227,13 @@ struct ScorecardView: View {
 
     private func showSavePanelAndExport() {
         let panel = NSSavePanel()
-        panel.allowedContentTypes = [.json]
+        panel.allowedContentTypes = [.gzip]
         let fileName = course.name
             .components(separatedBy: .alphanumerics.inverted)
             .filter { !$0.isEmpty }
             .map { $0.capitalized }
             .joined(separator: "-")
-        panel.nameFieldStringValue = "\(fileName).json"
+        panel.nameFieldStringValue = "\(fileName).json.gz"
 
         guard panel.runModal() == .OK, let url = panel.url else { return }
         writeExport(to: url)
@@ -246,7 +246,7 @@ struct ScorecardView: View {
         for subCourse in course.subCourses {
             for hole in subCourse.holes {
                 let holeLabel = "Hole \(holeOffset + hole.number)"
-                let holeFeatures = hole.featureIDs.compactMap { id in
+                let holeFeatures = hole.features.compactMap { id in
                     course.features.first { $0.id == id }
                 }
 
@@ -275,10 +275,13 @@ struct ScorecardView: View {
     private func writeExport(to url: URL) {
         do {
             let encoder = JSONEncoder()
-            encoder.outputFormatting = [.prettyPrinted, .sortedKeys]
-            let data = try encoder.encode(course)
-            try data.write(to: url)
-            statusMessage = "Exported to \(url.lastPathComponent)"
+            encoder.outputFormatting = [.sortedKeys]
+            let jsonData = try encoder.encode(course)
+            let gzipData = try jsonData.gzipCompressed()
+
+            try gzipData.write(to: url)
+            let ratio = Int((1.0 - Double(gzipData.count) / Double(jsonData.count)) * 100)
+            statusMessage = "Exported to \(url.lastPathComponent) (\(ratio)% smaller)"
         } catch {
             statusMessage = "Export failed: \(error.localizedDescription)"
         }

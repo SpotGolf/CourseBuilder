@@ -168,20 +168,26 @@ struct MapEditorView: View {
         return course.subCourses[selectedSubCourseIndex].holes[selectedHoleIndex]
     }
 
+    private var allAssignedFeatureIDs: Set<Int> {
+        Set(course.subCourses.flatMap(\.holes).flatMap(\.features))
+    }
+
+    private var currentHoleFeatureIDs: Set<Int> {
+        Set(currentHole?.features ?? [])
+    }
+
     private var currentHoleFeatures: [Feature] {
         guard let hole = currentHole else { return [] }
         return course.features(for: hole)
     }
 
     private var unassociatedFeatures: [Feature] {
-        let allAssigned = Set(course.subCourses.flatMap(\.holes).flatMap(\.features))
-        return course.features.filter { !allAssigned.contains($0.id) }
+        let assigned = allAssignedFeatureIDs
+        return course.features.filter { !assigned.contains($0.id) }
     }
 
     private var otherHoleFeatures: [Feature] {
-        let currentIDs = Set(currentHole?.features ?? [])
-        let allAssigned = Set(course.subCourses.flatMap(\.holes).flatMap(\.features))
-        let otherIDs = allAssigned.subtracting(currentIDs)
+        let otherIDs = allAssignedFeatureIDs.subtracting(currentHoleFeatureIDs)
         return course.features.filter { otherIDs.contains($0.id) }
     }
 
@@ -566,15 +572,8 @@ struct MapEditorView: View {
                         .stroke(colorForFeatureType(feature.type), lineWidth: isSelected ? 3 : 1.5)
                 }
 
-                // Render features from other holes (dimmed)
-                ForEach(otherHoleFeatures) { feature in
-                    let isSelected = selectedFeatureID == feature.id
-                    MapPolygon(coordinates: feature.polygon.map(\.clCoordinate))
-                        .foregroundStyle(colorForFeatureType(feature.type).opacity(isSelected ? 0.5 : 0.1))
-                        .stroke(colorForFeatureType(feature.type).opacity(0.3), lineWidth: isSelected ? 3 : 0.5)
-                }
-
-                // Render unassociated features
+                // Render unassociated features (other-hole features are not rendered
+                // to keep the map responsive with large courses)
                 ForEach(unassociatedFeatures) { feature in
                     let isSelected = selectedFeatureID == feature.id
                     MapPolygon(coordinates: feature.polygon.map(\.clCoordinate))

@@ -58,6 +58,8 @@ struct MapEditorView: View {
     @State private var pendingOSMResult: OverpassAPIClient.ParsedResult?
     @State private var centerlineGroups: [CenterlineGroup] = []
     @State private var selectedMappingGroup: Int?
+    @State private var selectedMappingCenterline: Int? // index into the selected group's centerlines
+    private var isMappingMode: Bool { pendingOSMResult != nil }
 
     // Delete confirmation
     @State private var featureToDelete: Int?
@@ -98,6 +100,7 @@ struct MapEditorView: View {
         .focusable()
         .focused($isMapFocused)
         .onKeyPress(characters: CharacterSet(charactersIn: "spc")) { press in
+            guard !isMappingMode else { return .ignored }
             if let mode = ToolMode.allCases.first(where: { $0.shortcutKey == press.characters.first }) {
                 switchTool(to: mode)
                 return .handled
@@ -238,22 +241,73 @@ struct MapEditorView: View {
 
             Divider()
 
+            // Inspector for selected centerline — allows moving it to a different group
+            if let gIdx = selectedMappingGroup,
+               let clIdx = selectedMappingCenterline,
+               gIdx < centerlineGroups.count,
+               clIdx < centerlineGroups[gIdx].centerlines.count {
+                Divider()
+                VStack(alignment: .leading, spacing: 6) {
+                    let cl = centerlineGroups[gIdx].centerlines[clIdx]
+                    Text("Hole \(cl.holeNumber ?? 0)")
+                        .font(.subheadline.bold())
+                    Text("Currently in: \(centerlineGroups[gIdx].label)")
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+
+                    Picker("Move to", selection: Binding(
+                        get: { gIdx },
+                        set: { newGroupIdx in
+                            moveCenterline(fromGroup: gIdx, index: clIdx, toGroup: newGroupIdx)
+                        }
+                    )) {
+                        ForEach(centerlineGroups.indices, id: \.self) { idx in
+                            HStack {
+                                Circle().fill(groupColor(for: idx)).frame(width: 8, height: 8)
+                                Text(centerlineGroups[idx].label)
+                            }.tag(idx)
+                        }
+                    }
+                }
+                .padding(8)
+            }
+
+            Divider()
+
             HStack {
                 Button("Cancel") {
                     pendingOSMResult = nil
                     centerlineGroups = []
                     selectedMappingGroup = nil
+                    selectedMappingCenterline = nil
                 }
                 Spacer()
                 Button("Import") {
                     applyMappingAndImport()
                     selectedMappingGroup = nil
+                    selectedMappingCenterline = nil
                 }
                 .disabled(!centerlineGroups.allSatisfy { $0.assignedSubCourseIndex != nil })
             }
             .padding(8)
         }
         .background(Color(.windowBackgroundColor))
+    }
+
+    private func moveCenterline(fromGroup: Int, index: Int, toGroup: Int) {
+        guard fromGroup != toGroup,
+              fromGroup < centerlineGroups.count,
+              toGroup < centerlineGroups.count,
+              index < centerlineGroups[fromGroup].centerlines.count else { return }
+
+        let cl = centerlineGroups[fromGroup].centerlines[index]
+        centerlineGroups[fromGroup].centerlines.remove(at: index)
+        centerlineGroups[toGroup].centerlines.append(cl)
+        // Update label counts
+        centerlineGroups[fromGroup].label = "\(centerlineGroups[fromGroup].centerlines.count) holes (group \(fromGroup + 1))"
+        centerlineGroups[toGroup].label = "\(centerlineGroups[toGroup].centerlines.count) holes (group \(toGroup + 1))"
+        selectedMappingGroup = toGroup
+        selectedMappingCenterline = nil
     }
 
     private func groupColor(for index: Int) -> Color {
@@ -406,6 +460,7 @@ struct MapEditorView: View {
                         )
                     }
                     .buttonStyle(.plain)
+                    .disabled(isMappingMode && mode != .select)
                 }
             }
 
@@ -487,14 +542,18 @@ struct MapEditorView: View {
         MapReader { proxy in
             Map(position: $mapPosition, interactionModes: isDraggingVertex ? [.zoom, .rotate, .pitch] : .all) {
                 // Render centerline groups during mapping mode
-                if pendingOSMResult != nil {
+                if isMappingMode {
                     ForEach(Array(centerlineGroups.enumerated()), id: \.offset) { groupIdx, group in
-                        let isSelected = selectedMappingGroup == groupIdx
+                        let isGroupSelected = selectedMappingGroup == groupIdx
                         let color = groupColor(for: groupIdx)
                         ForEach(group.centerlines.indices, id: \.self) { clIdx in
                             let cl = group.centerlines[clIdx]
+                            let isCLSelected = isGroupSelected && selectedMappingCenterline == clIdx
                             MapPolyline(coordinates: cl.coordinates.map(\.clCoordinate))
-                                .stroke(color, lineWidth: isSelected ? 4 : 2)
+                                .stroke(
+                                    isCLSelected ? .white : color,
+                                    lineWidth: isCLSelected ? 5 : (isGroupSelected ? 3 : 1.5)
+                                )
                         }
                     }
                 }
@@ -876,6 +935,12 @@ struct MapEditorView: View {
     }
 
     private func selectFeatureAt(_ point: Coordinate) {
+        // In mapping mode, find the nearest centerline
+        if isMappingMode {
+            selectCenterlineAt(point)
+            return
+        }
+
         // In edit mode, check if tapping near a vertex of the selected feature
         if isEditingFeature,
            let featureID = selectedFeatureID,
@@ -928,6 +993,31 @@ struct MapEditorView: View {
         // Consider "close" as within ~20 pixels worth of degrees
         let threshold = region.span.latitudeDelta / (mapViewSize.height / 20.0)
         return abs(a.latitude - b.latitude) < threshold && abs(a.longitude - b.longitude) < threshold
+    }
+
+    private func selectCenterlineAt(_ point: Coordinate) {
+        var bestGroupIdx: Int?
+        var bestClIdx: Int?
+        var bestDist = Double.greatestFiniteMagnitude
+
+        for (gIdx, group) in centerlineGroups.enumerated() {
+            for (clIdx, cl) in group.centerlines.enumerated() {
+                let dist = OSMImporter.distanceToPolyline(from: point, polyline: cl.coordinates)
+                if dist < bestDist {
+                    bestDist = dist
+                    bestGroupIdx = gIdx
+                    bestClIdx = clIdx
+                }
+            }
+        }
+
+        // Only select if within a reasonable tap distance (~50 meters)
+        if bestDist < 50, let gIdx = bestGroupIdx, let clIdx = bestClIdx {
+            selectedMappingGroup = gIdx
+            selectedMappingCenterline = clIdx
+        } else {
+            selectedMappingCenterline = nil
+        }
     }
 
     // MARK: - Finish Drawing
@@ -1252,8 +1342,8 @@ struct MapEditorView: View {
 
 struct CenterlineGroup: Identifiable {
     let id = UUID()
-    let label: String
-    let centerlines: [OverpassAPIClient.ParsedCenterline]
+    var label: String
+    var centerlines: [OverpassAPIClient.ParsedCenterline]
     var assignedSubCourseIndex: Int?
 }
 

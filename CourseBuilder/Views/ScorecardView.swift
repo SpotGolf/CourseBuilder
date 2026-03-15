@@ -246,9 +246,7 @@ struct ScorecardView: View {
         for subCourse in course.subCourses {
             for hole in subCourse.holes {
                 let holeLabel = "Hole \(holeOffset + hole.number)"
-                let holeFeatures = hole.features.compactMap { id in
-                    course.features.first { $0.id == id }
-                }
+                let holeFeatures = course.features(for: hole)
 
                 if !holeFeatures.contains(where: { $0.type == .green }) {
                     warnings.append("\(holeLabel): missing green polygon")

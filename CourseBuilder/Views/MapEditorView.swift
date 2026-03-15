@@ -158,9 +158,7 @@ struct MapEditorView: View {
 
     private var currentHoleFeatures: [Feature] {
         guard let hole = currentHole else { return [] }
-        return hole.features.compactMap { id in
-            course.features.first { $0.id == id }
-        }
+        return course.features(for: hole)
     }
 
     private var unassociatedFeatures: [Feature] {
@@ -354,11 +352,7 @@ struct MapEditorView: View {
             let greenFeature = holeFeatures.first { $0.type == .green }
 
             if let tee = teeFeature, let green = greenFeature {
-                let teeCentroid = PolygonGeometry.centroid(of: tee.polygon)
-                let greenCentroid = PolygonGeometry.centroid(of: green.polygon)
-                let teeLocation = CLLocation(latitude: teeCentroid.latitude, longitude: teeCentroid.longitude)
-                let greenLocation = CLLocation(latitude: greenCentroid.latitude, longitude: greenCentroid.longitude)
-                let meters = teeLocation.distance(from: greenLocation)
+                let meters = tee.center.clLocation.distance(from: green.center.clLocation)
                 let yards = Int(meters * 1.09361)
                 let scorecardYardage: Int = {
                     guard let hole = currentHole else { return 0 }
@@ -404,7 +398,7 @@ struct MapEditorView: View {
                 // Render vertex handles for selected feature (only in edit mode)
                 if isEditingFeature,
                    let featureID = selectedFeatureID,
-                   let feature = course.features.first(where: { $0.id == featureID }) {
+                   let feature = course.findFeature(id: featureID) {
                     ForEach(Array(feature.polygon.enumerated()), id: \.offset) { index, coord in
                         Annotation("", coordinate: coord.clCoordinate) {
                             Circle()
@@ -462,7 +456,7 @@ struct MapEditorView: View {
                    isEditingFeature,
                    let featureID = selectedFeatureID,
                    let vertexIdx = selectedVertexIndex,
-                   let feature = course.features.first(where: { $0.id == featureID }),
+                   let feature = course.findFeature(id: featureID),
                    vertexIdx < feature.polygon.count,
                    let screenPoint = proxy.convert(feature.polygon[vertexIdx].clCoordinate, to: .local) {
                     Color.clear
@@ -751,7 +745,7 @@ struct MapEditorView: View {
         // In edit mode, check if tapping near a vertex of the selected feature
         if isEditingFeature,
            let featureID = selectedFeatureID,
-           let feature = course.features.first(where: { $0.id == featureID }) {
+           let feature = course.findFeature(id: featureID) {
             for (index, vertex) in feature.polygon.enumerated() {
                 if isClose(point, to: vertex) {
                     selectedVertexIndex = index

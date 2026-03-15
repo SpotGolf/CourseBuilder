@@ -84,12 +84,10 @@ enum OSMImporter {
             let cl = course.subCourses[slot.sub].holes[slot.hole].centerline
 
             // Step 1: Find the closest unassigned green to this hole's centerline endpoint
-            let centerlineEnd = cl.last!
             var bestGreen: Feature?
             var bestGreenDist = Double.greatestFiniteMagnitude
             for feature in features where feature.type == .green && !assignedIDs.contains(feature.id) {
-                let centroid = PolygonGeometry.centroid(of: feature.polygon)
-                let dist = centroid.clLocation.distance(from: centerlineEnd.clLocation)
+                let dist = feature.center.clLocation.distance(from: cl.last!.clLocation)
                 if dist < bestGreenDist {
                     bestGreenDist = dist
                     bestGreen = feature
@@ -105,14 +103,13 @@ enum OSMImporter {
             // After finding one, advance the search point to the farthest point of
             // that tee's polygon along the centerline direction. Repeat until no
             // more tees are found within the threshold and forward of the start.
-            let centerlineStart = cl.first!
-            var searchPoint = centerlineStart
+            var searchPoint = cl.first!
 
             while true {
                 var bestTee: Feature?
                 var bestTeeDist = Double.greatestFiniteMagnitude
                 for feature in features where feature.type == .tee && !assignedIDs.contains(feature.id) {
-                    let centroid = PolygonGeometry.centroid(of: feature.polygon)
+                    let centroid = feature.center
                     guard isForwardOfStart(point: centroid, centerline: cl) else { continue }
                     let lateralDist = distanceToPolyline(from: centroid, polyline: cl)
                     guard lateralDist <= thresholdMeters else { continue }
@@ -135,8 +132,7 @@ enum OSMImporter {
             // Step 3: Associate remaining features (fairways, bunkers, water, rough)
             // that are within 35 yards of the centerline and forward of the start.
             for feature in features where !assignedIDs.contains(feature.id) {
-                let centroid = PolygonGeometry.centroid(of: feature.polygon)
-                guard isForwardOfStart(point: centroid, centerline: cl) else { continue }
+                guard isForwardOfStart(point: feature.center, centerline: cl) else { continue }
                 if shouldAssociate(feature: feature, withCenterline: cl, threshold: thresholdMeters) {
                     course.subCourses[slot.sub].holes[slot.hole].features.append(feature.id)
                     assignedIDs.insert(feature.id)
@@ -194,20 +190,18 @@ enum OSMImporter {
             var bestGreenDist = Double.greatestFiniteMagnitude
             let ref = course.location.coordinate
             for green in greens where !usedGreenIDs.contains(green.id) {
-                let centroid = PolygonGeometry.centroid(of: green.polygon)
-                let dist = centroid.clLocation.distance(from: ref.clLocation)
+                let dist = green.center.clLocation.distance(from: ref.clLocation)
                 if dist < bestGreenDist {
                     bestGreenDist = dist
                     bestGreen = green
                 }
             }
 
-            let teeRef = bestGreen.map { PolygonGeometry.centroid(of: $0.polygon) } ?? ref
+            let teeRef = bestGreen?.center ?? ref
             var bestTee: Feature?
             var bestTeeDist = Double.greatestFiniteMagnitude
             for tee in tees where !usedTeeIDs.contains(tee.id) {
-                let centroid = PolygonGeometry.centroid(of: tee.polygon)
-                let dist = centroid.clLocation.distance(from: teeRef.clLocation)
+                let dist = tee.center.clLocation.distance(from: teeRef.clLocation)
                 if dist < bestTeeDist {
                     bestTeeDist = dist
                     bestTee = tee
@@ -216,11 +210,11 @@ enum OSMImporter {
 
             var centerline: [Coordinate] = []
             if let tee = bestTee {
-                centerline.append(PolygonGeometry.centroid(of: tee.polygon))
+                centerline.append(tee.center)
                 usedTeeIDs.insert(tee.id)
             }
             if let green = bestGreen {
-                centerline.append(PolygonGeometry.centroid(of: green.polygon))
+                centerline.append(green.center)
                 usedGreenIDs.insert(green.id)
             }
             course.subCourses[slot.sub].holes[slot.hole].centerline = centerline
@@ -236,24 +230,17 @@ enum OSMImporter {
         let hole = course.subCourses[slot.sub].holes[slot.hole]
         guard !hole.yardages.isEmpty else { return }
 
-        let greenIDs = hole.features.filter { id in
-            course.features.first { $0.id == id }?.type == .green
-        }
-        guard let greenID = greenIDs.first,
-              let green = course.features.first(where: { $0.id == greenID }) else { return }
-        let greenCentroid = PolygonGeometry.centroid(of: green.polygon)
+        let holeFeatures = course.features(for: hole)
+        guard let green = hole.green(from: holeFeatures) else { return }
+        let greenCentroid = green.center
 
-        let teeIDs = hole.features.filter { id in
-            course.features.first { $0.id == id }?.type == .tee
-        }
-        guard !teeIDs.isEmpty else { return }
+        let teeFeatures = holeFeatures.filter { $0.type == .tee }
+        guard !teeFeatures.isEmpty else { return }
 
         var teeDistances: [(featureID: Int, yards: Double)] = []
-        for teeID in teeIDs {
-            guard let feature = course.features.first(where: { $0.id == teeID }) else { continue }
-            let teeCentroid = PolygonGeometry.centroid(of: feature.polygon)
-            let distMeters = teeCentroid.clLocation.distance(from: greenCentroid.clLocation)
-            teeDistances.append((teeID, distMeters / metersPerYard))
+        for tee in teeFeatures {
+            let distMeters = tee.center.clLocation.distance(from: greenCentroid.clLocation)
+            teeDistances.append((tee.id, distMeters / metersPerYard))
         }
 
         teeDistances.sort { $0.yards > $1.yards }
@@ -325,13 +312,10 @@ enum OSMImporter {
         guard centerline.count >= 2 else { return true }
         let start = centerline.first!
         let end = centerline.last!
-        // Direction vector (in lat/lon space)
         let dx = end.longitude - start.longitude
         let dy = end.latitude - start.latitude
-        // Vector from start to point
         let px = point.longitude - start.longitude
         let py = point.latitude - start.latitude
-        // Dot product
         return (px * dx + py * dy) >= 0
     }
 
@@ -343,23 +327,19 @@ enum OSMImporter {
         let polygon = feature.polygon
         guard !polygon.isEmpty, !centerline.isEmpty else { return false }
 
-        // Check 1: Does any centerline point lie inside the polygon?
         for point in centerline {
             if PolygonGeometry.contains(point, in: polygon) {
                 return true
             }
         }
 
-        // Check 2: Is any polygon vertex within threshold of the centerline?
         for vertex in polygon {
             if distanceToPolyline(from: vertex, polyline: centerline) < threshold {
                 return true
             }
         }
 
-        // Check 3: Is the centroid within threshold of the centerline?
-        let centroid = PolygonGeometry.centroid(of: polygon)
-        return distanceToPolyline(from: centroid, polyline: centerline) < threshold
+        return distanceToPolyline(from: feature.center, polyline: centerline) < threshold
     }
 
     /// Minimum distance in meters from a point to a polyline (considering full line segments, not just vertices).
@@ -379,7 +359,6 @@ enum OSMImporter {
 
     /// Distance in meters from a point to a line segment, using projection onto the segment.
     private static func distanceToSegment(point: Coordinate, segStart: Coordinate, segEnd: Coordinate) -> Double {
-        // Work in lat/lon space for projection, then convert to meters
         let dx = segEnd.longitude - segStart.longitude
         let dy = segEnd.latitude - segStart.latitude
         let lenSq = dx * dx + dy * dy
@@ -388,7 +367,6 @@ enum OSMImporter {
             return point.clLocation.distance(from: segStart.clLocation)
         }
 
-        // Project point onto the line, clamped to [0, 1]
         let t = max(0, min(1, (
             (point.longitude - segStart.longitude) * dx +
             (point.latitude - segStart.latitude) * dy

@@ -68,7 +68,7 @@ struct FeatureEditorView: View {
                 }
             }
 
-            let centroid = PolygonGeometry.centroid(of: feature.polygon)
+            let centroid = feature.center
             let area = PolygonGeometry.area(of: feature.polygon)
 
             HStack {

@@ -39,9 +39,10 @@ class CourseStore: ObservableObject {
     func listCourses() throws -> [Course] {
         let files = try FileManager.default.contentsOfDirectory(at: directory, includingPropertiesForKeys: nil)
             .filter { $0.pathExtension == "json" }
-        return try files.map { url in
-            let data = try Data(contentsOf: url)
-            return try JSONDecoder().decode(Course.self, from: data)
+        return files.compactMap { url in
+            guard let data = try? Data(contentsOf: url),
+                  let course = try? JSONDecoder().decode(Course.self, from: data) else { return nil }
+            return course
         }
     }
 

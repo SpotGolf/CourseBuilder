@@ -2,101 +2,115 @@ import SwiftUI
 
 enum ToolMode: String, CaseIterable {
     case select = "Select"
-    case tee = "Tee"
-    case green = "Green"
-    case bunker = "Bunker"
-    case water = "Water"
+    case drawPolygon = "Polygon"
+    case drawCenterline = "Centerline"
 
     var shortcutKey: Character {
         switch self {
         case .select: "s"
-        case .tee: "t"
-        case .green: "g"
-        case .bunker: "b"
-        case .water: "w"
+        case .drawPolygon: "p"
+        case .drawCenterline: "c"
         }
     }
 
     var systemImage: String {
         switch self {
         case .select: "cursorarrow"
-        case .tee: "figure.golf"
-        case .green: "circle.circle"
-        case .bunker: "square.on.square.dashed"
-        case .water: "drop"
+        case .drawPolygon: "pentagon"
+        case .drawCenterline: "line.diagonal"
         }
     }
 }
 
-enum PinType: String, CaseIterable {
-    case tee = "Tee"
-    case greenFront = "Green (Front)"
-    case greenMiddle = "Green (Middle)"
-    case greenBack = "Green (Back)"
-    case bunkerFront = "Bunker (Front)"
-    case bunkerBack = "Bunker (Back)"
-    case waterFront = "Water (Front)"
-    case waterBack = "Water (Back)"
-}
-
-struct EditablePin: Identifiable, Equatable {
-    let id: UUID
-    var pinType: PinType
-    var coordinate: Coordinate
-    var teeName: String?
-    var featureIndex: Int?
-    var featureID: UUID?
-    var subCourseIndex: Int
-    var holeNumber: Int
-
-    static func == (lhs: EditablePin, rhs: EditablePin) -> Bool {
-        lhs.id == rhs.id
-            && lhs.pinType == rhs.pinType
-            && lhs.coordinate == rhs.coordinate
-            && lhs.teeName == rhs.teeName
-            && lhs.subCourseIndex == rhs.subCourseIndex
-            && lhs.holeNumber == rhs.holeNumber
-    }
-}
-
-struct PinEditorView: View {
-    @Binding var pin: EditablePin
-    let teeNames: [String]
+struct FeatureEditorView: View {
+    @Binding var feature: Feature
+    @Binding var hole: Hole
+    var teeNames: [String] = []
     let onDelete: () -> Void
 
     var body: some View {
         VStack(alignment: .leading, spacing: 8) {
-            Text("Hole \(pin.holeNumber)").font(.headline)
+            Text("Feature #\(feature.id)")
+                .font(.headline)
 
-            Picker("Type", selection: $pin.pinType) {
-                ForEach(PinType.allCases, id: \.self) { type in
-                    Text(type.rawValue).tag(type)
+            Picker("Type", selection: Binding(
+                get: { feature.type },
+                set: { newType in
+                    let updated = Feature(id: feature.id, type: newType, polygon: feature.polygon)
+                    feature = updated
+                    if newType != .tee {
+                        // Remove from tees if type changed away from tee
+                        for (name, id) in hole.tees where id == feature.id {
+                            hole.tees.removeValue(forKey: name)
+                        }
+                    }
+                }
+            )) {
+                ForEach(FeatureType.allCases, id: \.self) { type in
+                    Text(type.rawValue.capitalized).tag(type)
                 }
             }
 
-            if pin.pinType == .tee {
-                Picker("Tee", selection: Binding(
-                    get: { pin.teeName ?? "" },
-                    set: { pin.teeName = $0 }
-                )) {
-                    ForEach(teeNames, id: \.self) { name in
-                        Text(name).tag(name)
+            if feature.type == .tee, !teeNames.isEmpty {
+                Text("Tees")
+                    .font(.subheadline.bold())
+                ForEach(teeNames, id: \.self) { name in
+                    Toggle(name, isOn: Binding(
+                        get: { hole.tees[name] == feature.id },
+                        set: { isOn in
+                            if isOn {
+                                hole.tees[name] = feature.id
+                            } else {
+                                hole.tees.removeValue(forKey: name)
+                            }
+                        }
+                    ))
+                }
+            }
+
+            let centroid = feature.center
+            let area = PolygonGeometry.area(of: feature.polygon)
+
+            HStack {
+                Text("Vertices: \(feature.polygon.count)")
+                    .font(.caption)
+                Spacer()
+                Text(String(format: "Area: %.2e", area))
+                    .font(.caption)
+            }
+            .foregroundStyle(.secondary)
+
+            HStack {
+                Text(String(format: "Centroid: %.6f, %.6f", centroid.latitude, centroid.longitude))
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+            }
+
+            Divider()
+
+            Text("Vertices")
+                .font(.subheadline.bold())
+
+            ScrollView {
+                VStack(spacing: 4) {
+                    ForEach(feature.polygon.indices, id: \.self) { index in
+                        HStack(spacing: 4) {
+                            Text("\(index)")
+                                .font(.caption2.monospacedDigit())
+                                .frame(width: 20)
+                                .foregroundStyle(.secondary)
+                            TextField("Lat", value: $feature.polygon[index].latitude, format: .number)
+                                .textFieldStyle(.roundedBorder)
+                                .font(.caption)
+                            TextField("Lon", value: $feature.polygon[index].longitude, format: .number)
+                                .textFieldStyle(.roundedBorder)
+                                .font(.caption)
+                        }
                     }
                 }
             }
 
-            HStack {
-                Text("Lat:")
-                TextField("Latitude", value: $pin.coordinate.latitude, format: .number)
-                    .textFieldStyle(.roundedBorder)
-            }
-            HStack {
-                Text("Lon:")
-                TextField("Longitude", value: $pin.coordinate.longitude, format: .number)
-                    .textFieldStyle(.roundedBorder)
-            }
-
-            Button("Delete", role: .destructive, action: onDelete)
+            Button("Delete Feature", role: .destructive, action: onDelete)
         }
         .padding()
         .frame(maxWidth: .infinity, alignment: .leading)

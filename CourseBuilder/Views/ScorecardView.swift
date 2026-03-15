@@ -227,13 +227,13 @@ struct ScorecardView: View {
 
     private func showSavePanelAndExport() {
         let panel = NSSavePanel()
-        panel.allowedContentTypes = [.json]
+        panel.allowedContentTypes = [.gzip]
         let fileName = course.name
             .components(separatedBy: .alphanumerics.inverted)
             .filter { !$0.isEmpty }
             .map { $0.capitalized }
             .joined(separator: "-")
-        panel.nameFieldStringValue = "\(fileName).json"
+        panel.nameFieldStringValue = "\(fileName).json.gz"
 
         guard panel.runModal() == .OK, let url = panel.url else { return }
         writeExport(to: url)
@@ -241,32 +241,59 @@ struct ScorecardView: View {
 
     private func validateCourse() -> [String] {
         var warnings: [String] = []
-        let teeNames = course.tees.map(\.name)
         var holeOffset = 0
 
         for subCourse in course.subCourses {
             for hole in subCourse.holes {
                 let holeLabel = "Hole \(holeOffset + hole.number)"
+                let holeFeatures = course.features(for: hole)
 
-                let missingTees = teeNames.filter { hole.tees[$0] == nil }
-                if !missingTees.isEmpty {
-                    warnings.append("\(holeLabel): missing tee location for \(missingTees.joined(separator: ", "))")
+                if !holeFeatures.contains(where: { $0.type == .green }) {
+                    warnings.append("\(holeLabel): missing green polygon")
                 }
 
-                if let green = hole.green {
-                    let zero = Coordinate(latitude: 0, longitude: 0)
-                    var missingParts: [String] = []
-                    if green.front == zero { missingParts.append("front") }
-                    if green.middle == zero { missingParts.append("middle") }
-                    if green.back == zero { missingParts.append("back") }
-                    if !missingParts.isEmpty {
-                        warnings.append("\(holeLabel): green missing \(missingParts.joined(separator: ", "))")
+                if hole.par > 3 && !holeFeatures.contains(where: { $0.type == .fairway }) {
+                    warnings.append("\(holeLabel): missing fairway polygon")
+                }
+
+                if !holeFeatures.contains(where: { $0.type == .tee }) {
+                    warnings.append("\(holeLabel): missing tee polygon")
+                }
+
+                if hole.centerline.isEmpty {
+                    warnings.append("\(holeLabel): missing centerline")
+                }
+
+                // Check that every tee name in yardages has a tee assignment
+                for teeName in hole.yardages.keys {
+                    if hole.tees[teeName] == nil {
+                        warnings.append("\(holeLabel): tee \"\(teeName)\" has yardage but no polygon assigned")
                     }
-                } else {
-                    warnings.append("\(holeLabel): missing green")
+                }
+
+                // Check that tee assignments point to valid features
+                for (teeName, featureID) in hole.tees {
+                    if course.findFeature(id: featureID) == nil {
+                        warnings.append("\(holeLabel): tee \"\(teeName)\" references missing feature #\(featureID)")
+                    }
+                }
+
+                // Check for stale feature references
+                for featureID in hole.features {
+                    if course.findFeature(id: featureID) == nil {
+                        warnings.append("\(holeLabel): references missing feature #\(featureID)")
+                    }
                 }
             }
             holeOffset += subCourse.holes.count
+        }
+
+        // Check for unassigned features at the course level
+        let allAssignedIDs = Set(course.subCourses.flatMap(\.holes).flatMap(\.features))
+        let unassigned = course.features.filter { !allAssignedIDs.contains($0.id) }
+        if !unassigned.isEmpty {
+            let ids = unassigned.map { "#\($0.id)" }.joined(separator: ", ")
+            warnings.append("\(unassigned.count) unassigned feature(s): \(ids)")
         }
 
         return warnings
@@ -275,10 +302,13 @@ struct ScorecardView: View {
     private func writeExport(to url: URL) {
         do {
             let encoder = JSONEncoder()
-            encoder.outputFormatting = [.prettyPrinted, .sortedKeys]
-            let data = try encoder.encode(course)
-            try data.write(to: url)
-            statusMessage = "Exported to \(url.lastPathComponent)"
+            encoder.outputFormatting = [.sortedKeys]
+            let jsonData = try encoder.encode(course)
+            let gzipData = try jsonData.gzipCompressed()
+
+            try gzipData.write(to: url)
+            let ratio = Int((1.0 - Double(gzipData.count) / Double(jsonData.count)) * 100)
+            statusMessage = "Exported to \(url.lastPathComponent) (\(ratio)% smaller)"
         } catch {
             statusMessage = "Export failed: \(error.localizedDescription)"
         }

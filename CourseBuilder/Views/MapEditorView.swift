@@ -389,6 +389,14 @@ struct MapEditorView: View {
                         .stroke(colorForFeatureType(feature.type), lineWidth: isSelected ? 3 : 1.5)
                 }
 
+                // Render unassociated features
+                ForEach(unassociatedFeatures) { feature in
+                    let isSelected = selectedFeatureID == feature.id
+                    MapPolygon(coordinates: feature.polygon.map(\.clCoordinate))
+                        .foregroundStyle(colorForFeatureType(feature.type).opacity(isSelected ? 0.5 : 0.15))
+                        .stroke(colorForFeatureType(feature.type).opacity(0.5), lineWidth: isSelected ? 3 : 1)
+                }
+
                 // Render centerline for current hole
                 if let hole = currentHole, hole.centerline.count >= 2 {
                     MapPolyline(coordinates: hole.centerline.map(\.clCoordinate))

@@ -967,8 +967,11 @@ struct MapEditorView: View {
                 logger.info("Full query: \(finalResult.features.count, privacy: .public) features")
             }
 
-            // Group centerlines by hole number and present mapping dialog
-            centerlineGroups = buildCenterlineGroups(from: finalResult.centerlines)
+            // Group centerlines to match sub-course count and present mapping dialog
+            centerlineGroups = buildCenterlineGroups(
+                from: finalResult.centerlines,
+                subCourseSizes: course.subCourses.map(\.holes.count)
+            )
             pendingOSMResult = finalResult
             osmImportStatus = ""
         } catch {
@@ -979,98 +982,40 @@ struct MapEditorView: View {
         clearOSMStatusAfterDelay()
     }
 
-    private func buildCenterlineGroups(from centerlines: [OverpassAPIClient.ParsedCenterline]) -> [CenterlineGroup] {
-        guard !centerlines.isEmpty else { return [] }
+    /// Group centerlines into N groups matching the number of sub-courses.
+    /// Sorts centerlines spatially by midpoint latitude and splits into chunks
+    /// matching the expected sub-course sizes. Within each chunk, centerlines
+    /// are sorted by hole number.
+    private func buildCenterlineGroups(
+        from centerlines: [OverpassAPIClient.ParsedCenterline],
+        subCourseSizes: [Int]
+    ) -> [CenterlineGroup] {
+        guard !centerlines.isEmpty, !subCourseSizes.isEmpty else { return [] }
 
-        // Group centerlines by hole number
-        var byNumber: [Int: [OverpassAPIClient.ParsedCenterline]] = [:]
-        for cl in centerlines {
-            guard let num = cl.holeNumber else { continue }
-            byNumber[num, default: []].append(cl)
-        }
-
-        // Check if any hole number has duplicates
-        let hasDuplicates = byNumber.values.contains { $0.count > 1 }
-
-        if !hasDuplicates {
-            // No duplicates — build contiguous ranges by splitting at number gaps
-            let sortedNumbers = byNumber.keys.sorted()
-            var groups: [CenterlineGroup] = []
-            var rangeStart = sortedNumbers[0]
-            var rangeCenterlines = byNumber[sortedNumbers[0]]!
-
-            for i in 1..<sortedNumbers.count {
-                if sortedNumbers[i] == sortedNumbers[i - 1] + 1 {
-                    rangeCenterlines.append(contentsOf: byNumber[sortedNumbers[i]]!)
-                } else {
-                    let sorted = rangeCenterlines.sorted { ($0.holeNumber ?? 0) < ($1.holeNumber ?? 0) }
-                    groups.append(CenterlineGroup(
-                        label: "Holes \(rangeStart)-\(sortedNumbers[i - 1])",
-                        centerlines: sorted,
-                        assignedSubCourseIndex: nil
-                    ))
-                    rangeStart = sortedNumbers[i]
-                    rangeCenterlines = byNumber[sortedNumbers[i]]!
-                }
+        // Sort all centerlines spatially by midpoint latitude
+        let sorted = centerlines
+            .filter { $0.holeNumber != nil && $0.coordinates.count >= 2 }
+            .sorted { a, b in
+                let midA = (a.coordinates.first!.latitude + a.coordinates.last!.latitude) / 2
+                let midB = (b.coordinates.first!.latitude + b.coordinates.last!.latitude) / 2
+                return midA < midB
             }
-            let sorted = rangeCenterlines.sorted { ($0.holeNumber ?? 0) < ($1.holeNumber ?? 0) }
-            groups.append(CenterlineGroup(
-                label: "Holes \(rangeStart)-\(sortedNumbers.last!)",
-                centerlines: sorted,
-                assignedSubCourseIndex: nil
-            ))
-            return groups
-        }
 
-        // Has duplicates — we need to split spatially.
-        // First, figure out how many copies of each number exist (the duplication factor).
-        let maxDupes = byNumber.values.map(\.count).max() ?? 1
-        let numbersPerGroup = byNumber.keys.count
-
-        // For each hole number with duplicates, assign each copy to a spatial bucket
-        // based on the centerline's midpoint latitude.
-        // Build spatial buckets: for each duplicate centerline, compute its midpoint,
-        // then cluster all centerlines into `maxDupes` groups spatially.
-        struct TaggedCenterline {
-            let centerline: OverpassAPIClient.ParsedCenterline
-            let midLat: Double
-            let midLon: Double
-        }
-
-        var all: [TaggedCenterline] = []
-        for cl in centerlines {
-            guard cl.holeNumber != nil, cl.coordinates.count >= 2 else { continue }
-            let start = cl.coordinates.first!
-            let end = cl.coordinates.last!
-            all.append(TaggedCenterline(
-                centerline: cl,
-                midLat: (start.latitude + end.latitude) / 2,
-                midLon: (start.longitude + end.longitude) / 2
-            ))
-        }
-
-        // Simple spatial clustering: sort by midLat and split into maxDupes groups
-        // of `numbersPerGroup` each
-        all.sort { $0.midLat < $1.midLat }
-
+        // Split into groups matching sub-course sizes
         var groups: [CenterlineGroup] = []
         var offset = 0
-        for groupIdx in 0..<maxDupes {
-            let end = min(offset + numbersPerGroup, all.count)
-            let chunk = Array(all[offset..<end])
-            let sorted = chunk.map(\.centerline).sorted { ($0.holeNumber ?? 0) < ($1.holeNumber ?? 0) }
-            let numbers = sorted.compactMap(\.holeNumber)
+        for (groupIdx, size) in subCourseSizes.enumerated() {
+            let end = min(offset + size, sorted.count)
+            guard offset < sorted.count else { break }
+
+            let chunk = Array(sorted[offset..<end])
+            let byNumber = chunk.sorted { ($0.holeNumber ?? 0) < ($1.holeNumber ?? 0) }
+            let numbers = byNumber.compactMap(\.holeNumber)
             let minNum = numbers.min() ?? 0
             let maxNum = numbers.max() ?? 0
-            let label: String
-            if maxDupes > 1 {
-                label = "Holes \(minNum)-\(maxNum) (group \(groupIdx + 1))"
-            } else {
-                label = "Holes \(minNum)-\(maxNum)"
-            }
             groups.append(CenterlineGroup(
-                label: label,
-                centerlines: sorted,
+                label: "Holes \(minNum)-\(maxNum) (group \(groupIdx + 1))",
+                centerlines: byNumber,
                 assignedSubCourseIndex: nil
             ))
             offset = end

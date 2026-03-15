@@ -83,19 +83,15 @@ enum OSMImporter {
         for slot in holeSlots {
             let cl = course.subCourses[slot.sub].holes[slot.hole].centerline
 
-            // Step 1: Find the closest unassigned green to this hole's centerline endpoint
-            var bestGreen: Feature?
-            var bestGreenDist = Double.greatestFiniteMagnitude
-            for feature in features where feature.type == .green && !assignedIDs.contains(feature.id) {
-                let dist = feature.center.clLocation.distance(from: cl.last!.clLocation)
-                if dist < bestGreenDist {
-                    bestGreenDist = dist
-                    bestGreen = feature
+            // Step 1: Find the green whose polygon contains the centerline endpoint
+            if let endpoint = cl.last {
+                for feature in features where feature.type == .green && !assignedIDs.contains(feature.id) {
+                    if PolygonGeometry.contains(endpoint, in: feature.polygon) {
+                        course.subCourses[slot.sub].holes[slot.hole].features.append(feature.id)
+                        assignedIDs.insert(feature.id)
+                        break
+                    }
                 }
-            }
-            if let green = bestGreen {
-                course.subCourses[slot.sub].holes[slot.hole].features.append(green.id)
-                assignedIDs.insert(green.id)
             }
 
             // Step 2: Walk tees forward along the centerline vector.

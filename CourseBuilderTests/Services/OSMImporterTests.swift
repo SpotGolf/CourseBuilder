@@ -543,7 +543,7 @@ final class OSMImporterTests: XCTestCase {
 
     // MARK: - Phase-Based Association
 
-    func testGreenAnchoredToClosestCenterlineEnd() {
+    func testGreenAnchoredByCenterlineEndpointContainment() {
         let green1 = OverpassAPIClient.ParsedFeature(
             type: .green,
             polygon: [

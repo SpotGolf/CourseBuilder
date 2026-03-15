@@ -33,6 +33,10 @@ Course search (MapKit) -> Scorecard import (API/scraping/OCR) -> Feature detecti
 
 One JSON file per course. Holes contain: tees (keyed by name), green (front/middle/back), features (bunker/water with front/back). See `plans/2026-03-02-course-data-design.md` for full schema.
 
+## Coding Standards
+
+- When a long expression like `course.subCourses[slot.sub].holes[slot.hole]` is used more than once, assign it to a local variable (e.g., `let hole = ...`) and use that variable.
+
 ## Git
 
 Default branch is `main`. **NEVER commit directly to `main`.** Always create a feature branch before starting any implementation work. This branch will always be merged back `main` unless the developer specifically states otherwise. 

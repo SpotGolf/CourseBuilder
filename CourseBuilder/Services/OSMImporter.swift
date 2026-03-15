@@ -33,8 +33,8 @@ enum OSMImporter {
         }
 
         // Run Phases 1-4 on holes that have centerlines
-        let holesWithCenterlines = holeSlots.filter { slot in
-            !course.subCourses[slot.sub].holes[slot.hole].centerline.isEmpty
+        let holesWithCenterlines = holeSlots.filter {
+            !course.subCourses[$0.sub].holes[$0.hole].centerline.isEmpty
         }
         var assignedIDs: Set<Int> = []
         if !holesWithCenterlines.isEmpty {
@@ -44,8 +44,8 @@ enum OSMImporter {
         }
 
         // For holes still missing centerlines, synthesize from leftover features
-        let holesWithoutCenterlines = holeSlots.filter { slot in
-            course.subCourses[slot.sub].holes[slot.hole].centerline.isEmpty
+        let holesWithoutCenterlines = holeSlots.filter {
+            course.subCourses[$0.sub].holes[$0.hole].centerline.isEmpty
         }
         if !holesWithoutCenterlines.isEmpty {
             synthesizeCenterlines(
@@ -56,8 +56,8 @@ enum OSMImporter {
             )
 
             // Run Phases 1-4 on the newly-centerlined holes
-            let nowHaveCenterlines = holesWithoutCenterlines.filter { slot in
-                !course.subCourses[slot.sub].holes[slot.hole].centerline.isEmpty
+            let nowHaveCenterlines = holesWithoutCenterlines.filter {
+                !course.subCourses[$0.sub].holes[$0.hole].centerline.isEmpty
             }
             if !nowHaveCenterlines.isEmpty {
                 let unassigned = features.filter { !assignedIDs.contains($0.id) }
@@ -81,15 +81,15 @@ enum OSMImporter {
         var assignedIDs: Set<Int> = []
 
         for slot in holeSlots {
-            let cl = course.subCourses[slot.sub].holes[slot.hole].centerline
+            let hole = course.subCourses[slot.sub].holes[slot.hole]
+            let cl = hole.centerline
 
             // Step 1: Find the closest unassigned green to this hole's centerline endpoint
-            let centerlineEnd = cl.last!
             var bestGreen: Feature?
             var bestGreenDist = Double.greatestFiniteMagnitude
             for feature in features where feature.type == .green && !assignedIDs.contains(feature.id) {
                 let centroid = PolygonGeometry.centroid(of: feature.polygon)
-                let dist = centroid.clLocation.distance(from: centerlineEnd.clLocation)
+                let dist = centroid.clLocation.distance(from: cl.last!.clLocation)
                 if dist < bestGreenDist {
                     bestGreenDist = dist
                     bestGreen = feature
@@ -105,8 +105,7 @@ enum OSMImporter {
             // After finding one, advance the search point to the farthest point of
             // that tee's polygon along the centerline direction. Repeat until no
             // more tees are found within the threshold and forward of the start.
-            let centerlineStart = cl.first!
-            var searchPoint = centerlineStart
+            var searchPoint = cl.first!
 
             while true {
                 var bestTee: Feature?
@@ -250,8 +249,8 @@ enum OSMImporter {
 
         var teeDistances: [(featureID: Int, yards: Double)] = []
         for teeID in teeIDs {
-            guard let feature = course.features.first(where: { $0.id == teeID }) else { continue }
-            let teeCentroid = PolygonGeometry.centroid(of: feature.polygon)
+            guard let teeFeature = course.features.first(where: { $0.id == teeID }) else { continue }
+            let teeCentroid = PolygonGeometry.centroid(of: teeFeature.polygon)
             let distMeters = teeCentroid.clLocation.distance(from: greenCentroid.clLocation)
             teeDistances.append((teeID, distMeters / metersPerYard))
         }

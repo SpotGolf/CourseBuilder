@@ -21,6 +21,3 @@ build/
 
 # Course data output
 output/
-
-# Claude Code
-.claude/

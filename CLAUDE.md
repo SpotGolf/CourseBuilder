@@ -37,6 +37,10 @@ One JSON file per course. Holes contain: tees (keyed by name), green (front/midd
 
 Default branch is `main`. **NEVER commit directly to `main`.** Always create a feature branch before starting any implementation work. This branch will always be merged back `main` unless the developer specifically states otherwise. 
 
+## Skills
+
+Project skills live in `.claude/skills/`. Place new skills there, not in `~/.claude/skills/`.
+
 ## Environment
 
 GolfCourseAPI.com key is configured in app Settings (Cmd+,).

@@ -178,23 +178,25 @@ struct MapEditorView: View {
                         ForEach(Array(course.subCourses.enumerated()), id: \.element.id) { subIdx, subCourse in
                             Section(subCourse.name) {
                                 ForEach(Array(subCourse.holes.enumerated()), id: \.offset) { _, hole in
-                                    Button {
+                                    let isSelected = selectedSubCourseIndex == subIdx && selectedHole == hole.number
+                                    HStack {
+                                        Text("Hole \(hole.number)")
+                                            .fontWeight(isSelected ? .bold : .regular)
+                                        Spacer()
+                                        Text("\(hole.features.count) features")
+                                            .font(.caption)
+                                            .foregroundStyle(.secondary)
+                                    }
+                                    .frame(maxWidth: .infinity, alignment: .leading)
+                                    .contentShape(Rectangle())
+                                    .onTapGesture {
                                         selectedSubCourseIndex = subIdx
                                         selectedHole = hole.number
                                         selectedFeatureID = nil
                                         selectedVertexIndex = nil
                                         isEditingFeature = false
-                                    } label: {
-                                        HStack {
-                                            Text("Hole \(hole.number)")
-                                                .fontWeight(selectedSubCourseIndex == subIdx && selectedHole == hole.number ? .bold : .regular)
-                                            Spacer()
-                                            Text("\(hole.features.count) features")
-                                                .font(.caption)
-                                                .foregroundStyle(.secondary)
-                                        }
                                     }
-                                    .buttonStyle(.plain)
+                                    .listRowBackground(isSelected ? Color.accentColor.opacity(0.2) : Color.clear)
                                 }
                             }
                         }

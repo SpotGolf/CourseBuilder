@@ -68,8 +68,8 @@ enum OSMImporter {
         }
     }
 
-    /// Phases 1-4: Anchor greens, anchor tees, associate remaining features, assign tee names.
-    /// Returns the set of feature IDs that were assigned to holes.
+    /// For each hole: find its green, walk tees forward along the centerline,
+    /// associate remaining features, and assign tee names. Returns assigned feature IDs.
     @discardableResult
     private static func associateFeatures(
         _ features: [Feature],
@@ -79,87 +79,113 @@ enum OSMImporter {
         let metersPerYard = 0.9144
         let thresholdMeters = 35.0 * metersPerYard
         var assignedIDs: Set<Int> = []
-
-        // Phase 1: Anchor greens — each green goes to the hole whose centerline
-        // endpoint is closest. Greedy closest-pair 1:1 assignment.
         let greenFeatures = features.filter { $0.type == .green }
 
-        var holeCenterlineEnds: [(slot: (sub: Int, hole: Int, global: Int), end: Coordinate)] = []
-        for slot in holeSlots {
+        // Sort holes so the one with the closest green candidate processes first,
+        // preventing a far hole from stealing a nearby hole's green.
+        let sortedSlots = holeSlots.sorted { slotA, slotB in
+            let clA = course.subCourses[slotA.sub].holes[slotA.hole].centerline
+            let clB = course.subCourses[slotB.sub].holes[slotB.hole].centerline
+            let distA = greenFeatures.map { PolygonGeometry.centroid(of: $0.polygon).clLocation.distance(from: clA.last!.clLocation) }.min() ?? .greatestFiniteMagnitude
+            let distB = greenFeatures.map { PolygonGeometry.centroid(of: $0.polygon).clLocation.distance(from: clB.last!.clLocation) }.min() ?? .greatestFiniteMagnitude
+            return distA < distB
+        }
+
+        for slot in sortedSlots {
             let cl = course.subCourses[slot.sub].holes[slot.hole].centerline
-            if let end = cl.last {
-                holeCenterlineEnds.append((slot, end))
-            }
-        }
+            guard cl.count >= 2 else { continue }
 
-        var greenCandidates: [(holeIdx: Int, greenID: Int, dist: Double)] = []
-        for (hIdx, holeEnd) in holeCenterlineEnds.enumerated() {
-            for green in greenFeatures {
-                let centroid = PolygonGeometry.centroid(of: green.polygon)
-                let dist = centroid.clLocation.distance(from: holeEnd.end.clLocation)
-                greenCandidates.append((hIdx, green.id, dist))
-            }
-        }
-        greenCandidates.sort { $0.dist < $1.dist }
-
-        var assignedHoleIndices: Set<Int> = []
-        for candidate in greenCandidates {
-            guard !assignedIDs.contains(candidate.greenID),
-                  !assignedHoleIndices.contains(candidate.holeIdx) else { continue }
-            let slot = holeCenterlineEnds[candidate.holeIdx].slot
-            course.subCourses[slot.sub].holes[slot.hole].features.append(candidate.greenID)
-            assignedIDs.insert(candidate.greenID)
-            assignedHoleIndices.insert(candidate.holeIdx)
-        }
-
-        // Phase 2: Anchor tees — must be within 35 yards laterally of the
-        // centerline AND forward of its start.
-        let teeFeatures = features.filter { $0.type == .tee }
-
-        for slot in holeSlots {
-            let cl = course.subCourses[slot.sub].holes[slot.hole].centerline
-
-            for tee in teeFeatures where !assignedIDs.contains(tee.id) {
-                let centroid = PolygonGeometry.centroid(of: tee.polygon)
-                guard isForwardOfStart(point: centroid, centerline: cl) else { continue }
-                let lateralDist = distanceToPolyline(from: centroid, polyline: cl)
-                if lateralDist <= thresholdMeters {
-                    course.subCourses[slot.sub].holes[slot.hole].features.append(tee.id)
-                    assignedIDs.insert(tee.id)
+            // Step 1: Find the closest unassigned green to this hole's centerline endpoint
+            let centerlineEnd = cl.last!
+            var bestGreen: Feature?
+            var bestGreenDist = Double.greatestFiniteMagnitude
+            for feature in features where feature.type == .green && !assignedIDs.contains(feature.id) {
+                let centroid = PolygonGeometry.centroid(of: feature.polygon)
+                let dist = centroid.clLocation.distance(from: centerlineEnd.clLocation)
+                if dist < bestGreenDist {
+                    bestGreenDist = dist
+                    bestGreen = feature
                 }
             }
-        }
+            if let green = bestGreen {
+                course.subCourses[slot.sub].holes[slot.hole].features.append(green.id)
+                assignedIDs.insert(green.id)
+            }
 
-        // Phase 3: Associate remaining features (fairways, bunkers, water, rough)
-        // with the nearest hole's centerline, filtered by the directional check.
-        let remainingFeatures = features.filter { !assignedIDs.contains($0.id) }
-        for feature in remainingFeatures {
-            let centroid = PolygonGeometry.centroid(of: feature.polygon)
-            var bestSlot: (sub: Int, hole: Int, global: Int)?
-            var bestDist = Double.greatestFiniteMagnitude
+            // Step 2: Walk tees forward along the centerline vector.
+            // Start at the centerline start point. Find the closest unassigned tee.
+            // After finding one, advance the search point to the farthest point of
+            // that tee's polygon along the centerline direction. Repeat until no
+            // more tees are found within the threshold and forward of the start.
+            let centerlineStart = cl.first!
+            var searchPoint = centerlineStart
 
-            for slot in holeSlots {
-                let cl = course.subCourses[slot.sub].holes[slot.hole].centerline
-                guard isForwardOfStart(point: centroid, centerline: cl) else { continue }
-                if shouldAssociate(feature: feature, withCenterline: cl, threshold: thresholdMeters) {
-                    let dist = distanceToPolyline(from: centroid, polyline: cl)
-                    if dist < bestDist {
-                        bestDist = dist
-                        bestSlot = slot
+            while true {
+                var bestTee: Feature?
+                var bestTeeDist = Double.greatestFiniteMagnitude
+                for feature in features where feature.type == .tee && !assignedIDs.contains(feature.id) {
+                    let centroid = PolygonGeometry.centroid(of: feature.polygon)
+                    guard isForwardOfStart(point: centroid, centerline: cl) else { continue }
+                    let lateralDist = distanceToPolyline(from: centroid, polyline: cl)
+                    guard lateralDist <= thresholdMeters else { continue }
+                    let dist = centroid.clLocation.distance(from: searchPoint.clLocation)
+                    if dist < bestTeeDist {
+                        bestTeeDist = dist
+                        bestTee = feature
                     }
                 }
+
+                guard let tee = bestTee else { break }
+
+                course.subCourses[slot.sub].holes[slot.hole].features.append(tee.id)
+                assignedIDs.insert(tee.id)
+
+                // Advance search point to the farthest vertex of this tee along the centerline direction
+                searchPoint = farthestPointAlongCenterline(polygon: tee.polygon, centerline: cl)
             }
 
-            if let slot = bestSlot {
-                course.subCourses[slot.sub].holes[slot.hole].features.append(feature.id)
-                assignedIDs.insert(feature.id)
+            // Step 3: Associate remaining features (fairways, bunkers, water, rough)
+            // that are within 35 yards of the centerline and forward of the start.
+            for feature in features where !assignedIDs.contains(feature.id) {
+                let centroid = PolygonGeometry.centroid(of: feature.polygon)
+                guard isForwardOfStart(point: centroid, centerline: cl) else { continue }
+                if shouldAssociate(feature: feature, withCenterline: cl, threshold: thresholdMeters) {
+                    course.subCourses[slot.sub].holes[slot.hole].features.append(feature.id)
+                    assignedIDs.insert(feature.id)
+                }
             }
+
+            // Step 4: Assign tee names
+            assignTeeNames(slot: slot, course: &course)
         }
 
-        // Phase 4: Assign tee names
-        assignTeeNames(course: &course, holeSlots: holeSlots)
-
         return assignedIDs
+    }
+
+    /// Returns the point in the polygon that is farthest along the centerline direction.
+    /// Projects each vertex onto the centerline direction vector and picks the one with
+    /// the largest projection value.
+    private static func farthestPointAlongCenterline(
+        polygon: [Coordinate],
+        centerline: [Coordinate]
+    ) -> Coordinate {
+        let start = centerline.first!
+        let end = centerline.last!
+        let dx = end.longitude - start.longitude
+        let dy = end.latitude - start.latitude
+
+        var best = polygon[0]
+        var bestProjection = -Double.greatestFiniteMagnitude
+        for vertex in polygon {
+            let px = vertex.longitude - start.longitude
+            let py = vertex.latitude - start.latitude
+            let projection = px * dx + py * dy
+            if projection > bestProjection {
+                bestProjection = projection
+                best = vertex
+            }
+        }
+        return best
     }
 
     /// For holes missing centerlines, synthesize a 2-point centerline by pairing
@@ -176,7 +202,6 @@ enum OSMImporter {
         var usedGreenIDs: Set<Int> = []
 
         for slot in slots {
-            // Find nearest unassigned green to the course center
             var bestGreen: Feature?
             var bestGreenDist = Double.greatestFiniteMagnitude
             let ref = course.location.coordinate
@@ -189,7 +214,6 @@ enum OSMImporter {
                 }
             }
 
-            // Find nearest unassigned tee to that green (or to the course center)
             let teeRef = bestGreen.map { PolygonGeometry.centroid(of: $0.polygon) } ?? ref
             var bestTee: Feature?
             var bestTeeDist = Double.greatestFiniteMagnitude
@@ -202,7 +226,6 @@ enum OSMImporter {
                 }
             }
 
-            // Build centerline from tee → green
             var centerline: [Coordinate] = []
             if let tee = bestTee {
                 centerline.append(PolygonGeometry.centroid(of: tee.polygon))
@@ -216,79 +239,62 @@ enum OSMImporter {
         }
     }
 
-    /// Phase 4: Assign tee names to tee features on a per-hole basis.
-    /// Only uses features already in `hole.features` (populated by Phase 2).
-    ///
-    /// When the number of tee polygons equals the number of tee names, both lists are sorted by
-    /// distance/yardage and zipped directly. When they differ, tee names are clustered by yardage
-    /// proximity into N groups (where N = polygon count), then each cluster is assigned to the
-    /// matching-rank polygon.
+    /// Assign tee names for a single hole using distance-rank zipping or yardage clustering.
     private static func assignTeeNames(
-        course: inout Course,
-        holeSlots: [(sub: Int, hole: Int, global: Int)]
+        slot: (sub: Int, hole: Int, global: Int),
+        course: inout Course
     ) {
         let metersPerYard = 0.9144
+        let hole = course.subCourses[slot.sub].holes[slot.hole]
+        guard !hole.yardages.isEmpty else { return }
 
-        for slot in holeSlots {
-            let hole = course.subCourses[slot.sub].holes[slot.hole]
-            guard !hole.yardages.isEmpty else { continue }
+        let greenIDs = hole.features.filter { id in
+            course.features.first { $0.id == id }?.type == .green
+        }
+        guard let greenID = greenIDs.first,
+              let green = course.features.first(where: { $0.id == greenID }) else { return }
+        let greenCentroid = PolygonGeometry.centroid(of: green.polygon)
 
-            // Find green centroid for this hole
-            let greenIDs = hole.features.filter { id in
-                course.features.first { $0.id == id }?.type == .green
+        let teeIDs = hole.features.filter { id in
+            course.features.first { $0.id == id }?.type == .tee
+        }
+        guard !teeIDs.isEmpty else { return }
+
+        var teeDistances: [(featureID: Int, yards: Double)] = []
+        for teeID in teeIDs {
+            guard let feature = course.features.first(where: { $0.id == teeID }) else { continue }
+            let teeCentroid = PolygonGeometry.centroid(of: feature.polygon)
+            let distMeters = teeCentroid.clLocation.distance(from: greenCentroid.clLocation)
+            teeDistances.append((teeID, distMeters / metersPerYard))
+        }
+
+        teeDistances.sort { $0.yards > $1.yards }
+        let sortedYardages = hole.yardages.sorted { $0.value > $1.value }
+
+        if teeDistances.count == sortedYardages.count {
+            for (tee, entry) in zip(teeDistances, sortedYardages) {
+                course.subCourses[slot.sub].holes[slot.hole].tees[entry.key] = tee.featureID
             }
-            guard let greenID = greenIDs.first,
-                  let green = course.features.first(where: { $0.id == greenID }) else { continue }
-            let greenCentroid = PolygonGeometry.centroid(of: green.polygon)
-
-            // Get tee features already associated with this hole
-            let teeIDs = hole.features.filter { id in
-                course.features.first { $0.id == id }?.type == .tee
-            }
-            guard !teeIDs.isEmpty else { continue }
-
-            // Compute distance from each tee to the green centroid
-            var teeDistances: [(featureID: Int, yards: Double)] = []
-            for teeID in teeIDs {
-                guard let feature = course.features.first(where: { $0.id == teeID }) else { continue }
-                let teeCentroid = PolygonGeometry.centroid(of: feature.polygon)
-                let distMeters = teeCentroid.clLocation.distance(from: greenCentroid.clLocation)
-                teeDistances.append((teeID, distMeters / metersPerYard))
-            }
-
-            // Sort tees by distance descending (longest first) and yardages descending
-            teeDistances.sort { $0.yards > $1.yards }
-            let sortedYardages = hole.yardages.sorted { $0.value > $1.value }
-
-            if teeDistances.count == sortedYardages.count {
-                // Equal counts: zip by rank order — longest tee polygon gets highest yardage name
-                for (tee, entry) in zip(teeDistances, sortedYardages) {
-                    course.subCourses[slot.sub].holes[slot.hole].tees[entry.key] = tee.featureID
+        } else if teeDistances.count < sortedYardages.count {
+            let clusters = clusterYardages(sortedYardages, into: teeDistances.count)
+            for (i, cluster) in clusters.enumerated() {
+                for (name, _) in cluster {
+                    course.subCourses[slot.sub].holes[slot.hole].tees[name] = teeDistances[i].featureID
                 }
-            } else if teeDistances.count < sortedYardages.count {
-                // More tee names than polygons: cluster yardages into N groups (N = polygon count)
-                // by splitting at the largest gaps, then assign each cluster to the matching polygon.
-                let clusters = clusterYardages(sortedYardages, into: teeDistances.count)
-                for (i, cluster) in clusters.enumerated() {
-                    for (name, _) in cluster {
-                        course.subCourses[slot.sub].holes[slot.hole].tees[name] = teeDistances[i].featureID
+            }
+        } else {
+            for (name, yards) in sortedYardages {
+                var bestFeatureID: Int?
+                var bestDiff = Double.greatestFiniteMagnitude
+                for tee in teeDistances {
+                    let diff = abs(tee.yards - Double(yards))
+                    if diff < bestDiff {
+                        bestDiff = diff
+                        bestFeatureID = tee.featureID
                     }
                 }
-            } else {
-                // More polygons than tee names (unusual): assign each name to the closest polygon
-                for (name, yards) in sortedYardages {
-                    var bestFeatureID: Int?
-                    var bestDiff = Double.greatestFiniteMagnitude
-                    for tee in teeDistances {
-                        let diff = abs(tee.yards - Double(yards))
-                        if diff < bestDiff {
-                            bestDiff = diff
-                            bestFeatureID = tee.featureID
-                        }
-                    }
-                    if let featureID = bestFeatureID {
-                        course.subCourses[slot.sub].holes[slot.hole].tees[name] = featureID
-                    }
+                if let featureID = bestFeatureID {
+                    course.subCourses[slot.sub].holes[slot.hole].tees[name] = featureID
                 }
             }
         }

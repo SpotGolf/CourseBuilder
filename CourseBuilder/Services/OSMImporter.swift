@@ -82,7 +82,6 @@ enum OSMImporter {
 
         for slot in holeSlots {
             let cl = course.subCourses[slot.sub].holes[slot.hole].centerline
-            guard cl.count >= 2 else { continue }
 
             // Step 1: Find the closest unassigned green to this hole's centerline endpoint
             let centerlineEnd = cl.last!

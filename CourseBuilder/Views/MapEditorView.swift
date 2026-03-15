@@ -23,7 +23,7 @@ struct MapEditorView: View {
 
     // Selection state
     @State private var selectedSubCourseIndex: Int = 0
-    @State private var selectedHole: Int = 1
+    @State private var selectedHoleIndex: Int = 0
     @State private var selectedFeatureID: Int?
     @State private var selectedVertexIndex: Int?
     @State private var isEditingFeature = false
@@ -152,8 +152,9 @@ struct MapEditorView: View {
     // MARK: - Current Hole Helpers
 
     private var currentHole: Hole? {
-        guard selectedSubCourseIndex < course.subCourses.count else { return nil }
-        return course.subCourses[selectedSubCourseIndex].holes.first { $0.number == selectedHole }
+        guard selectedSubCourseIndex < course.subCourses.count,
+              selectedHoleIndex < course.subCourses[selectedSubCourseIndex].holes.count else { return nil }
+        return course.subCourses[selectedSubCourseIndex].holes[selectedHoleIndex]
     }
 
     private var currentHoleFeatures: [Feature] {
@@ -177,8 +178,8 @@ struct MapEditorView: View {
                     List {
                         ForEach(Array(course.subCourses.enumerated()), id: \.element.id) { subIdx, subCourse in
                             Section(subCourse.name) {
-                                ForEach(Array(subCourse.holes.enumerated()), id: \.offset) { _, hole in
-                                    let isSelected = selectedSubCourseIndex == subIdx && selectedHole == hole.number
+                                ForEach(Array(subCourse.holes.enumerated()), id: \.offset) { holeIdx, hole in
+                                    let isSelected = selectedSubCourseIndex == subIdx && selectedHoleIndex == holeIdx
                                     HStack {
                                         Text("Hole \(hole.number)")
                                             .fontWeight(isSelected ? .bold : .regular)
@@ -191,7 +192,7 @@ struct MapEditorView: View {
                                     .contentShape(Rectangle())
                                     .onTapGesture {
                                         selectedSubCourseIndex = subIdx
-                                        selectedHole = hole.number
+                                        selectedHoleIndex = holeIdx
                                         selectedFeatureID = nil
                                         selectedVertexIndex = nil
                                         isEditingFeature = false
@@ -207,7 +208,7 @@ struct MapEditorView: View {
 
             // Features pane
             VStack(alignment: .leading, spacing: 0) {
-                sectionHeader(title: "Features - Hole \(selectedHole)", collapsed: $featuresCollapsed)
+                sectionHeader(title: "Features - Hole \(currentHole?.number ?? 0)", collapsed: $featuresCollapsed)
                 if !featuresCollapsed {
                     let holeFeatures = currentHoleFeatures
                     List(holeFeatures) { feature in
@@ -532,11 +533,11 @@ struct MapEditorView: View {
 
             if let featureID = selectedFeatureID,
                let featureIndex = course.features.firstIndex(where: { $0.id == featureID }),
-               let holeIndex = course.subCourses[selectedSubCourseIndex].holes.firstIndex(where: { $0.number == selectedHole }) {
+               selectedHoleIndex < course.subCourses[selectedSubCourseIndex].holes.count {
                 VStack(alignment: .leading, spacing: 0) {
                     FeatureEditorView(
                         feature: $course.features[featureIndex],
-                        hole: $course.subCourses[selectedSubCourseIndex].holes[holeIndex],
+                        hole: $course.subCourses[selectedSubCourseIndex].holes[selectedHoleIndex],
                         teeNames: course.tees.map(\.name),
                         onDelete: {
                             featureToDelete = featureID
@@ -550,11 +551,11 @@ struct MapEditorView: View {
                         let isAssociated = currentHole?.features.contains(featureID) ?? false
 
                         if isAssociated {
-                            Button("Disassociate from Hole \(selectedHole)") {
+                            Button("Disassociate from Hole \(currentHole?.number ?? 0)") {
                                 disassociateFeature(id: featureID)
                             }
                         } else {
-                            Button("Associate with Hole \(selectedHole)") {
+                            Button("Associate with Hole \(currentHole?.number ?? 0)") {
                                 associateFeature(id: featureID)
                             }
                         }
@@ -650,7 +651,7 @@ struct MapEditorView: View {
 
             // Hole + feature count
             let subName = course.subCourses.indices.contains(selectedSubCourseIndex) ? course.subCourses[selectedSubCourseIndex].name : ""
-            Text("\(subName) Hole \(selectedHole)")
+            Text("\(subName) Hole \(currentHole?.number ?? 0)")
                 .font(.caption)
             Text("\(currentHoleFeatures.count) features")
                 .font(.caption)
@@ -820,10 +821,9 @@ struct MapEditorView: View {
             course.features.append(newFeature)
 
             // Associate with current hole
-            if selectedSubCourseIndex < course.subCourses.count {
-                if let holeIdx = course.subCourses[selectedSubCourseIndex].holes.firstIndex(where: { $0.number == selectedHole }) {
-                    course.subCourses[selectedSubCourseIndex].holes[holeIdx].features.append(newFeature.id)
-                }
+            if selectedSubCourseIndex < course.subCourses.count,
+               selectedHoleIndex < course.subCourses[selectedSubCourseIndex].holes.count {
+                course.subCourses[selectedSubCourseIndex].holes[selectedHoleIndex].features.append(newFeature.id)
             }
 
             selectedFeatureID = newFeature.id
@@ -838,13 +838,12 @@ struct MapEditorView: View {
                 clearStatusAfterDelay()
                 return
             }
-            if selectedSubCourseIndex < course.subCourses.count {
-                if let holeIdx = course.subCourses[selectedSubCourseIndex].holes.firstIndex(where: { $0.number == selectedHole }) {
-                    course.subCourses[selectedSubCourseIndex].holes[holeIdx].centerline = drawingVertices
-                }
+            if selectedSubCourseIndex < course.subCourses.count,
+               selectedHoleIndex < course.subCourses[selectedSubCourseIndex].holes.count {
+                course.subCourses[selectedSubCourseIndex].holes[selectedHoleIndex].centerline = drawingVertices
             }
             drawingVertices = []
-            statusMessage = "Centerline set for hole \(selectedHole)"
+            statusMessage = "Centerline set for hole \(currentHole?.number ?? 0)"
             clearStatusAfterDelay()
 
         case .select:
@@ -868,17 +867,17 @@ struct MapEditorView: View {
 
     private func disassociateFeature(id: Int) {
         guard selectedSubCourseIndex < course.subCourses.count,
-              let holeIdx = course.subCourses[selectedSubCourseIndex].holes.firstIndex(where: { $0.number == selectedHole })
+              selectedHoleIndex < course.subCourses[selectedSubCourseIndex].holes.count
         else { return }
-        course.subCourses[selectedSubCourseIndex].holes[holeIdx].features.removeAll { $0 == id }
+        course.subCourses[selectedSubCourseIndex].holes[selectedHoleIndex].features.removeAll { $0 == id }
     }
 
     private func associateFeature(id: Int) {
         guard selectedSubCourseIndex < course.subCourses.count,
-              let holeIdx = course.subCourses[selectedSubCourseIndex].holes.firstIndex(where: { $0.number == selectedHole })
+              selectedHoleIndex < course.subCourses[selectedSubCourseIndex].holes.count
         else { return }
-        if !course.subCourses[selectedSubCourseIndex].holes[holeIdx].features.contains(id) {
-            course.subCourses[selectedSubCourseIndex].holes[holeIdx].features.append(id)
+        if !course.subCourses[selectedSubCourseIndex].holes[selectedHoleIndex].features.contains(id) {
+            course.subCourses[selectedSubCourseIndex].holes[selectedHoleIndex].features.append(id)
         }
     }
 

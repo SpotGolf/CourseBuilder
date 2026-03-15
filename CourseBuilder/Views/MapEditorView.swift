@@ -55,6 +55,8 @@ struct MapEditorView: View {
     // OSM import state
     @State private var isImportingOSM = false
     @State private var osmImportStatus = ""
+    @State private var pendingOSMResult: OverpassAPIClient.ParsedResult?
+    @State private var centerlineGroups: [CenterlineGroup] = []
 
     // Delete confirmation
     @State private var featureToDelete: Int?
@@ -622,6 +624,20 @@ struct MapEditorView: View {
         } message: {
             Text("This will permanently remove this feature from the course and all holes.")
         }
+        .sheet(isPresented: Binding(
+            get: { pendingOSMResult != nil },
+            set: { if !$0 { pendingOSMResult = nil; centerlineGroups = [] } }
+        )) {
+            CenterlineMappingSheet(
+                groups: $centerlineGroups,
+                subCourseNames: course.subCourses.map(\.name)
+            ) {
+                pendingOSMResult = nil
+                centerlineGroups = []
+            } onImport: {
+                applyMappingAndImport()
+            }
+        }
     }
 
     private var inspectorHelpText: String {
@@ -937,6 +953,8 @@ struct MapEditorView: View {
         do {
             let result = try await client.fetchFeatures(bbox: searchBBox)
             logger.info("Initial query: \(result.features.count, privacy: .public) features, \(result.centerlines.count, privacy: .public) centerlines, boundary: \(result.courseBoundary != nil, privacy: .public)")
+
+            var finalResult = result
             if let boundary = result.courseBoundary, boundary.count >= 3 {
                 let lats = boundary.map(\.latitude)
                 let lons = boundary.map(\.longitude)
@@ -945,24 +963,143 @@ struct MapEditorView: View {
                     north: lats.max()!, east: lons.max()!
                 ).padded(by: 0.25)
                 osmImportStatus = "Fetching features within course boundary..."
-                let fullResult = try await client.fetchFeatures(bbox: bbox)
-                logger.info("Full query: \(fullResult.features.count, privacy: .public) features")
-                let featureCountBefore = course.features.count
-                OSMImporter.applyParsedResult(fullResult, to: &course)
-                logger.info("After apply: course has \(course.features.count, privacy: .public) features (was \(featureCountBefore, privacy: .public))")
-                osmImportStatus = "Imported \(course.features.count - featureCountBefore) features"
-            } else {
-                let featureCountBefore = course.features.count
-                OSMImporter.applyParsedResult(result, to: &course)
-                logger.info("After apply: course has \(course.features.count, privacy: .public) features (was \(featureCountBefore, privacy: .public))")
-                osmImportStatus = "Imported \(course.features.count - featureCountBefore) features"
+                finalResult = try await client.fetchFeatures(bbox: bbox)
+                logger.info("Full query: \(finalResult.features.count, privacy: .public) features")
             }
-            try? store.save(course)
+
+            // Group centerlines by hole number and present mapping dialog
+            centerlineGroups = buildCenterlineGroups(from: finalResult.centerlines)
+            pendingOSMResult = finalResult
+            osmImportStatus = ""
         } catch {
             logger.error("OSM import failed: \(error, privacy: .public)")
             osmImportStatus = "Import failed: \(error.localizedDescription)"
         }
         isImportingOSM = false
+        clearOSMStatusAfterDelay()
+    }
+
+    private func buildCenterlineGroups(from centerlines: [OverpassAPIClient.ParsedCenterline]) -> [CenterlineGroup] {
+        // Group centerlines by their hole number range
+        var groups: [String: [OverpassAPIClient.ParsedCenterline]] = [:]
+        for cl in centerlines {
+            guard let num = cl.holeNumber else { continue }
+            // Find which group this number belongs to (will be grouped after sorting)
+            let key = "\(num)"
+            groups[key, default: []].append(cl)
+        }
+
+        // Build contiguous ranges by sorting all hole numbers and splitting at gaps
+        let allNumbers = centerlines.compactMap(\.holeNumber).sorted()
+        guard !allNumbers.isEmpty else { return [] }
+
+        var ranges: [(start: Int, end: Int, centerlines: [OverpassAPIClient.ParsedCenterline])] = []
+        var rangeStart = allNumbers[0]
+        var rangeEnd = allNumbers[0]
+        var rangeCenterlines = centerlines.filter { $0.holeNumber == allNumbers[0] }
+
+        for i in 1..<allNumbers.count {
+            if allNumbers[i] == allNumbers[i - 1] + 1 {
+                // Contiguous
+                rangeEnd = allNumbers[i]
+                rangeCenterlines.append(contentsOf: centerlines.filter { $0.holeNumber == allNumbers[i] })
+            } else if allNumbers[i] == allNumbers[i - 1] {
+                // Duplicate number — this starts a new group with the same range
+                // Find all centerlines with this duplicate number that aren't already in the current range
+                // This case needs spatial separation — for now, just continue
+                rangeEnd = allNumbers[i]
+            } else {
+                // Gap — start new range
+                ranges.append((rangeStart, rangeEnd, rangeCenterlines))
+                rangeStart = allNumbers[i]
+                rangeEnd = allNumbers[i]
+                rangeCenterlines = centerlines.filter { $0.holeNumber == allNumbers[i] }
+            }
+        }
+        ranges.append((rangeStart, rangeEnd, rangeCenterlines))
+
+        // Handle duplicate hole numbers by checking if a range has more centerlines than expected
+        var finalGroups: [CenterlineGroup] = []
+        for range in ranges {
+            let expectedCount = range.end - range.start + 1
+            if range.centerlines.count == expectedCount {
+                // Clean range, one group
+                let sorted = range.centerlines.sorted { ($0.holeNumber ?? 0) < ($1.holeNumber ?? 0) }
+                finalGroups.append(CenterlineGroup(
+                    label: "Holes \(range.start)-\(range.end)",
+                    centerlines: sorted,
+                    assignedSubCourseIndex: nil
+                ))
+            } else {
+                // Duplicate numbers — split spatially by computing average latitude
+                let avgLat = range.centerlines.map { cl -> Double in
+                    let coords = cl.coordinates
+                    guard !coords.isEmpty else { return 0 }
+                    return coords.map(\.latitude).reduce(0, +) / Double(coords.count)
+                }
+
+                // Pair centerlines with their average latitude and sort
+                var indexed = Array(zip(range.centerlines, avgLat))
+                indexed.sort { $0.1 < $1.1 }
+
+                // Split into chunks of expectedCount
+                var offset = 0
+                var chunkIndex = 0
+                while offset < indexed.count {
+                    let chunk = Array(indexed[offset..<min(offset + expectedCount, indexed.count)])
+                    let sorted = chunk.map(\.0).sorted { ($0.holeNumber ?? 0) < ($1.holeNumber ?? 0) }
+                    let location = chunkIndex == 0 ? "south" : (offset + expectedCount >= indexed.count ? "north" : "middle")
+                    finalGroups.append(CenterlineGroup(
+                        label: "Holes \(range.start)-\(range.end) (\(location))",
+                        centerlines: sorted,
+                        assignedSubCourseIndex: nil
+                    ))
+                    offset += expectedCount
+                    chunkIndex += 1
+                }
+            }
+        }
+
+        return finalGroups
+    }
+
+    private func applyMappingAndImport() {
+        guard let result = pendingOSMResult else { return }
+
+        // Build renumbered centerlines based on user's sub-course mapping
+        var renumbered: [OverpassAPIClient.ParsedCenterline] = []
+        for group in centerlineGroups {
+            guard let subIdx = group.assignedSubCourseIndex else { continue }
+
+            // Compute global hole offset for this sub-course
+            var globalOffset = 0
+            for i in 0..<subIdx {
+                globalOffset += course.subCourses[i].holes.count
+            }
+
+            for (holeIdx, centerline) in group.centerlines.enumerated() {
+                let globalNumber = globalOffset + holeIdx + 1
+                renumbered.append(OverpassAPIClient.ParsedCenterline(
+                    holeNumber: globalNumber,
+                    coordinates: centerline.coordinates
+                ))
+            }
+        }
+
+        let mappedResult = OverpassAPIClient.ParsedResult(
+            features: result.features,
+            centerlines: renumbered,
+            courseBoundary: result.courseBoundary
+        )
+
+        let featureCountBefore = course.features.count
+        OSMImporter.applyParsedResult(mappedResult, to: &course)
+        logger.info("After apply: course has \(course.features.count, privacy: .public) features (was \(featureCountBefore, privacy: .public))")
+        osmImportStatus = "Imported \(course.features.count - featureCountBefore) features"
+        try? store.save(course)
+
+        pendingOSMResult = nil
+        centerlineGroups = []
         clearOSMStatusAfterDelay()
     }
 
@@ -1003,5 +1140,74 @@ struct MapEditorView: View {
         } catch {
             statusMessage = "Save failed: \(error.localizedDescription)"
         }
+    }
+}
+
+// MARK: - Centerline Mapping
+
+struct CenterlineGroup: Identifiable {
+    let id = UUID()
+    let label: String
+    let centerlines: [OverpassAPIClient.ParsedCenterline]
+    var assignedSubCourseIndex: Int?
+}
+
+struct CenterlineMappingSheet: View {
+    @Binding var groups: [CenterlineGroup]
+    let subCourseNames: [String]
+    let onCancel: () -> Void
+    let onImport: () -> Void
+
+    private var allAssigned: Bool {
+        groups.allSatisfy { $0.assignedSubCourseIndex != nil }
+    }
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 12) {
+            Text("Map OSM Holes to Sub-Courses")
+                .font(.headline)
+
+            Text("OSM returned \(groups.count) group(s) of centerlines. Assign each group to the correct sub-course.")
+                .font(.callout)
+                .foregroundStyle(.secondary)
+
+            Divider()
+
+            ForEach($groups) { $group in
+                HStack {
+                    VStack(alignment: .leading) {
+                        Text(group.label)
+                            .font(.body.bold())
+                        Text("\(group.centerlines.count) holes")
+                            .font(.caption)
+                            .foregroundStyle(.secondary)
+                    }
+                    .frame(minWidth: 150, alignment: .leading)
+
+                    Picker("", selection: $group.assignedSubCourseIndex) {
+                        Text("Select...").tag(nil as Int?)
+                        ForEach(Array(subCourseNames.enumerated()), id: \.offset) { idx, name in
+                            Text(name).tag(idx as Int?)
+                        }
+                    }
+                    .frame(width: 200)
+                }
+            }
+
+            Divider()
+
+            HStack {
+                Spacer()
+                Button("Cancel", role: .cancel, action: onCancel)
+                    .keyboardShortcut(.cancelAction)
+                Button("Import") {
+                    onImport()
+                }
+                .disabled(!allAssigned)
+                .keyboardShortcut(.defaultAction)
+            }
+        }
+        .padding()
+        .frame(minWidth: 400)
     }
 }

@@ -980,87 +980,103 @@ struct MapEditorView: View {
     }
 
     private func buildCenterlineGroups(from centerlines: [OverpassAPIClient.ParsedCenterline]) -> [CenterlineGroup] {
-        // Group centerlines by their hole number range
-        var groups: [String: [OverpassAPIClient.ParsedCenterline]] = [:]
+        guard !centerlines.isEmpty else { return [] }
+
+        // Group centerlines by hole number
+        var byNumber: [Int: [OverpassAPIClient.ParsedCenterline]] = [:]
         for cl in centerlines {
             guard let num = cl.holeNumber else { continue }
-            // Find which group this number belongs to (will be grouped after sorting)
-            let key = "\(num)"
-            groups[key, default: []].append(cl)
+            byNumber[num, default: []].append(cl)
         }
 
-        // Build contiguous ranges by sorting all hole numbers and splitting at gaps
-        let allNumbers = centerlines.compactMap(\.holeNumber).sorted()
-        guard !allNumbers.isEmpty else { return [] }
+        // Check if any hole number has duplicates
+        let hasDuplicates = byNumber.values.contains { $0.count > 1 }
 
-        var ranges: [(start: Int, end: Int, centerlines: [OverpassAPIClient.ParsedCenterline])] = []
-        var rangeStart = allNumbers[0]
-        var rangeEnd = allNumbers[0]
-        var rangeCenterlines = centerlines.filter { $0.holeNumber == allNumbers[0] }
+        if !hasDuplicates {
+            // No duplicates — build contiguous ranges by splitting at number gaps
+            let sortedNumbers = byNumber.keys.sorted()
+            var groups: [CenterlineGroup] = []
+            var rangeStart = sortedNumbers[0]
+            var rangeCenterlines = byNumber[sortedNumbers[0]]!
 
-        for i in 1..<allNumbers.count {
-            if allNumbers[i] == allNumbers[i - 1] + 1 {
-                // Contiguous
-                rangeEnd = allNumbers[i]
-                rangeCenterlines.append(contentsOf: centerlines.filter { $0.holeNumber == allNumbers[i] })
-            } else if allNumbers[i] == allNumbers[i - 1] {
-                // Duplicate number — this starts a new group with the same range
-                // Find all centerlines with this duplicate number that aren't already in the current range
-                // This case needs spatial separation — for now, just continue
-                rangeEnd = allNumbers[i]
-            } else {
-                // Gap — start new range
-                ranges.append((rangeStart, rangeEnd, rangeCenterlines))
-                rangeStart = allNumbers[i]
-                rangeEnd = allNumbers[i]
-                rangeCenterlines = centerlines.filter { $0.holeNumber == allNumbers[i] }
-            }
-        }
-        ranges.append((rangeStart, rangeEnd, rangeCenterlines))
-
-        // Handle duplicate hole numbers by checking if a range has more centerlines than expected
-        var finalGroups: [CenterlineGroup] = []
-        for range in ranges {
-            let expectedCount = range.end - range.start + 1
-            if range.centerlines.count == expectedCount {
-                // Clean range, one group
-                let sorted = range.centerlines.sorted { ($0.holeNumber ?? 0) < ($1.holeNumber ?? 0) }
-                finalGroups.append(CenterlineGroup(
-                    label: "Holes \(range.start)-\(range.end)",
-                    centerlines: sorted,
-                    assignedSubCourseIndex: nil
-                ))
-            } else {
-                // Duplicate numbers — split spatially by computing average latitude
-                let avgLat = range.centerlines.map { cl -> Double in
-                    let coords = cl.coordinates
-                    guard !coords.isEmpty else { return 0 }
-                    return coords.map(\.latitude).reduce(0, +) / Double(coords.count)
-                }
-
-                // Pair centerlines with their average latitude and sort
-                var indexed = Array(zip(range.centerlines, avgLat))
-                indexed.sort { $0.1 < $1.1 }
-
-                // Split into chunks of expectedCount
-                var offset = 0
-                var chunkIndex = 0
-                while offset < indexed.count {
-                    let chunk = Array(indexed[offset..<min(offset + expectedCount, indexed.count)])
-                    let sorted = chunk.map(\.0).sorted { ($0.holeNumber ?? 0) < ($1.holeNumber ?? 0) }
-                    let location = chunkIndex == 0 ? "south" : (offset + expectedCount >= indexed.count ? "north" : "middle")
-                    finalGroups.append(CenterlineGroup(
-                        label: "Holes \(range.start)-\(range.end) (\(location))",
+            for i in 1..<sortedNumbers.count {
+                if sortedNumbers[i] == sortedNumbers[i - 1] + 1 {
+                    rangeCenterlines.append(contentsOf: byNumber[sortedNumbers[i]]!)
+                } else {
+                    let sorted = rangeCenterlines.sorted { ($0.holeNumber ?? 0) < ($1.holeNumber ?? 0) }
+                    groups.append(CenterlineGroup(
+                        label: "Holes \(rangeStart)-\(sortedNumbers[i - 1])",
                         centerlines: sorted,
                         assignedSubCourseIndex: nil
                     ))
-                    offset += expectedCount
-                    chunkIndex += 1
+                    rangeStart = sortedNumbers[i]
+                    rangeCenterlines = byNumber[sortedNumbers[i]]!
                 }
             }
+            let sorted = rangeCenterlines.sorted { ($0.holeNumber ?? 0) < ($1.holeNumber ?? 0) }
+            groups.append(CenterlineGroup(
+                label: "Holes \(rangeStart)-\(sortedNumbers.last!)",
+                centerlines: sorted,
+                assignedSubCourseIndex: nil
+            ))
+            return groups
         }
 
-        return finalGroups
+        // Has duplicates — we need to split spatially.
+        // First, figure out how many copies of each number exist (the duplication factor).
+        let maxDupes = byNumber.values.map(\.count).max() ?? 1
+        let numbersPerGroup = byNumber.keys.count
+
+        // For each hole number with duplicates, assign each copy to a spatial bucket
+        // based on the centerline's midpoint latitude.
+        // Build spatial buckets: for each duplicate centerline, compute its midpoint,
+        // then cluster all centerlines into `maxDupes` groups spatially.
+        struct TaggedCenterline {
+            let centerline: OverpassAPIClient.ParsedCenterline
+            let midLat: Double
+            let midLon: Double
+        }
+
+        var all: [TaggedCenterline] = []
+        for cl in centerlines {
+            guard cl.holeNumber != nil, cl.coordinates.count >= 2 else { continue }
+            let start = cl.coordinates.first!
+            let end = cl.coordinates.last!
+            all.append(TaggedCenterline(
+                centerline: cl,
+                midLat: (start.latitude + end.latitude) / 2,
+                midLon: (start.longitude + end.longitude) / 2
+            ))
+        }
+
+        // Simple spatial clustering: sort by midLat and split into maxDupes groups
+        // of `numbersPerGroup` each
+        all.sort { $0.midLat < $1.midLat }
+
+        var groups: [CenterlineGroup] = []
+        var offset = 0
+        for groupIdx in 0..<maxDupes {
+            let end = min(offset + numbersPerGroup, all.count)
+            let chunk = Array(all[offset..<end])
+            let sorted = chunk.map(\.centerline).sorted { ($0.holeNumber ?? 0) < ($1.holeNumber ?? 0) }
+            let numbers = sorted.compactMap(\.holeNumber)
+            let minNum = numbers.min() ?? 0
+            let maxNum = numbers.max() ?? 0
+            let label: String
+            if maxDupes > 1 {
+                label = "Holes \(minNum)-\(maxNum) (group \(groupIdx + 1))"
+            } else {
+                label = "Holes \(minNum)-\(maxNum)"
+            }
+            groups.append(CenterlineGroup(
+                label: label,
+                centerlines: sorted,
+                assignedSubCourseIndex: nil
+            ))
+            offset = end
+        }
+
+        return groups
     }
 
     private func applyMappingAndImport() {

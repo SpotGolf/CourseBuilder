@@ -175,10 +175,18 @@ struct MapEditorView: View {
             VStack(alignment: .leading, spacing: 0) {
                 sectionHeader(title: "Holes", collapsed: $holesCollapsed)
                 if !holesCollapsed {
-                    List {
-                        ForEach(Array(course.subCourses.enumerated()), id: \.element.id) { subIdx, subCourse in
-                            Section(subCourse.name) {
-                                ForEach(Array(subCourse.holes.enumerated()), id: \.offset) { holeIdx, hole in
+                    ScrollView {
+                        VStack(alignment: .leading, spacing: 0) {
+                            ForEach(Array(course.subCourses.enumerated()), id: \.element.id) { subIdx, subCourse in
+                                Text(subCourse.name)
+                                    .font(.caption.bold())
+                                    .foregroundStyle(.secondary)
+                                    .padding(.horizontal, 8)
+                                    .padding(.top, subIdx > 0 ? 8 : 4)
+                                    .padding(.bottom, 2)
+
+                                ForEach(subCourse.holes.indices, id: \.self) { holeIdx in
+                                    let hole = subCourse.holes[holeIdx]
                                     let isSelected = selectedSubCourseIndex == subIdx && selectedHoleIndex == holeIdx
                                     HStack {
                                         Text("Hole \(hole.number)")
@@ -188,7 +196,10 @@ struct MapEditorView: View {
                                             .font(.caption)
                                             .foregroundStyle(.secondary)
                                     }
+                                    .padding(.horizontal, 8)
+                                    .padding(.vertical, 3)
                                     .frame(maxWidth: .infinity, alignment: .leading)
+                                    .background(isSelected ? Color.accentColor.opacity(0.2) : Color.clear)
                                     .contentShape(Rectangle())
                                     .onTapGesture {
                                         selectedSubCourseIndex = subIdx
@@ -197,7 +208,6 @@ struct MapEditorView: View {
                                         selectedVertexIndex = nil
                                         isEditingFeature = false
                                     }
-                                    .listRowBackground(isSelected ? Color.accentColor.opacity(0.2) : Color.clear)
                                 }
                             }
                         }

@@ -982,43 +982,105 @@ struct MapEditorView: View {
         clearOSMStatusAfterDelay()
     }
 
-    /// Group centerlines into N groups matching the number of sub-courses.
-    /// Sorts centerlines spatially by midpoint latitude and splits into chunks
-    /// matching the expected sub-course sizes. Within each chunk, centerlines
-    /// are sorted by hole number.
+    /// Group centerlines into chains by traversing them in playing order.
+    ///
+    /// Starting from each unvisited hole with ref=1, follow the chain: find the
+    /// centerline with ref=2 whose start is nearest to the current hole's end,
+    /// then ref=3, etc. Each chain is limited to the expected sub-course size
+    /// to prevent jumping across nines (e.g., hole 9 → hole 10 on a different nine).
+    /// Leftover centerlines (e.g., holes 10-18) form additional chains.
     private func buildCenterlineGroups(
         from centerlines: [OverpassAPIClient.ParsedCenterline],
         subCourseSizes: [Int]
     ) -> [CenterlineGroup] {
-        guard !centerlines.isEmpty, !subCourseSizes.isEmpty else { return [] }
+        let valid = centerlines.filter { $0.holeNumber != nil && $0.coordinates.count >= 2 }
+        guard !valid.isEmpty, !subCourseSizes.isEmpty else { return [] }
 
-        // Sort all centerlines spatially by midpoint latitude
-        let sorted = centerlines
-            .filter { $0.holeNumber != nil && $0.coordinates.count >= 2 }
-            .sorted { a, b in
-                let midA = (a.coordinates.first!.latitude + a.coordinates.last!.latitude) / 2
-                let midB = (b.coordinates.first!.latitude + b.coordinates.last!.latitude) / 2
-                return midA < midB
+        let maxChainLength = subCourseSizes.max() ?? 9
+        var used: Set<Int> = [] // indices into `valid`
+        var groups: [CenterlineGroup] = []
+
+        // Find all hole-1 centerlines as chain starting points
+        let starts = valid.enumerated().filter { $0.element.holeNumber == 1 }
+
+        for (startIdx, startCL) in starts {
+            if used.contains(startIdx) { continue }
+
+            var chain: [OverpassAPIClient.ParsedCenterline] = [startCL]
+            used.insert(startIdx)
+            var currentEnd = startCL.coordinates.last!
+
+            var nextRef = 2
+            while chain.count < maxChainLength {
+                var bestIdx: Int?
+                var bestDist = Double.greatestFiniteMagnitude
+                for (i, cl) in valid.enumerated() {
+                    guard cl.holeNumber == nextRef, !used.contains(i) else { continue }
+                    let dist = cl.coordinates.first!.clLocation.distance(from: currentEnd.clLocation)
+                    if dist < bestDist {
+                        bestDist = dist
+                        bestIdx = i
+                    }
+                }
+
+                guard let idx = bestIdx else { break }
+
+                chain.append(valid[idx])
+                used.insert(idx)
+                currentEnd = valid[idx].coordinates.last!
+                nextRef += 1
             }
 
-        // Split into groups matching sub-course sizes
-        var groups: [CenterlineGroup] = []
-        var offset = 0
-        for (groupIdx, size) in subCourseSizes.enumerated() {
-            let end = min(offset + size, sorted.count)
-            guard offset < sorted.count else { break }
-
-            let chunk = Array(sorted[offset..<end])
-            let byNumber = chunk.sorted { ($0.holeNumber ?? 0) < ($1.holeNumber ?? 0) }
-            let numbers = byNumber.compactMap(\.holeNumber)
-            let minNum = numbers.min() ?? 0
-            let maxNum = numbers.max() ?? 0
             groups.append(CenterlineGroup(
-                label: "Holes \(minNum)-\(maxNum) (group \(groupIdx + 1))",
-                centerlines: byNumber,
+                label: "\(chain.count) holes (group \(groups.count + 1))",
+                centerlines: chain,
                 assignedSubCourseIndex: nil
             ))
-            offset = end
+        }
+
+        // Pick up remaining centerlines (e.g., holes 10-18 with no ref=1 start)
+        let remaining = valid.enumerated().filter { !used.contains($0.offset) }
+        if !remaining.isEmpty {
+            // Sort by ref and traverse
+            let sortedRemaining = remaining.sorted { ($0.element.holeNumber ?? 0) < ($1.element.holeNumber ?? 0) }
+            var remainingUsed: Set<Int> = []
+
+            // Start chains from the lowest unused ref
+            for (startIdx, startCL) in sortedRemaining {
+                if remainingUsed.contains(startIdx) { continue }
+
+                var chain: [OverpassAPIClient.ParsedCenterline] = [startCL]
+                remainingUsed.insert(startIdx)
+                var currentEnd = startCL.coordinates.last!
+                let startRef = startCL.holeNumber ?? 0
+
+                var nextRef = startRef + 1
+                while chain.count < maxChainLength {
+                    var bestIdx: Int?
+                    var bestDist = Double.greatestFiniteMagnitude
+                    for (idx, cl) in sortedRemaining {
+                        guard cl.holeNumber == nextRef, !remainingUsed.contains(idx) else { continue }
+                        let dist = cl.coordinates.first!.clLocation.distance(from: currentEnd.clLocation)
+                        if dist < bestDist {
+                            bestDist = dist
+                            bestIdx = idx
+                        }
+                    }
+
+                    guard let idx = bestIdx else { break }
+                    let cl = valid[idx]
+                    chain.append(cl)
+                    remainingUsed.insert(idx)
+                    currentEnd = cl.coordinates.last!
+                    nextRef += 1
+                }
+
+                groups.append(CenterlineGroup(
+                    label: "\(chain.count) holes (group \(groups.count + 1))",
+                    centerlines: chain,
+                    assignedSubCourseIndex: nil
+                ))
+            }
         }
 
         return groups

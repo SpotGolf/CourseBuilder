@@ -118,32 +118,86 @@ final class OSMImportIntegrationTests: XCTestCase {
         from centerlines: [OverpassAPIClient.ParsedCenterline],
         subCourseSizes: [Int]
     ) -> [TestCenterlineGroup] {
-        guard !centerlines.isEmpty, !subCourseSizes.isEmpty else { return [] }
+        let valid = centerlines.filter { $0.holeNumber != nil && $0.coordinates.count >= 2 }
+        guard !valid.isEmpty, !subCourseSizes.isEmpty else { return [] }
 
-        let sorted = centerlines
-            .filter { $0.holeNumber != nil && $0.coordinates.count >= 2 }
-            .sorted { a, b in
-                let midA = (a.coordinates.first!.latitude + a.coordinates.last!.latitude) / 2
-                let midB = (b.coordinates.first!.latitude + b.coordinates.last!.latitude) / 2
-                return midA < midB
+        let maxChainLength = subCourseSizes.max() ?? 9
+        var used: Set<Int> = []
+        var groups: [TestCenterlineGroup] = []
+
+        let starts = valid.enumerated().filter { $0.element.holeNumber == 1 }
+
+        for (startIdx, startCL) in starts {
+            if used.contains(startIdx) { continue }
+
+            var chain: [OverpassAPIClient.ParsedCenterline] = [startCL]
+            used.insert(startIdx)
+            var currentEnd = startCL.coordinates.last!
+
+            var nextRef = 2
+            while chain.count < maxChainLength {
+                var bestIdx: Int?
+                var bestDist = Double.greatestFiniteMagnitude
+                for (i, cl) in valid.enumerated() {
+                    guard cl.holeNumber == nextRef, !used.contains(i) else { continue }
+                    let dist = cl.coordinates.first!.clLocation.distance(from: currentEnd.clLocation)
+                    if dist < bestDist {
+                        bestDist = dist
+                        bestIdx = i
+                    }
+                }
+
+                guard let idx = bestIdx else { break }
+                chain.append(valid[idx])
+                used.insert(idx)
+                currentEnd = valid[idx].coordinates.last!
+                nextRef += 1
             }
 
-        var groups: [TestCenterlineGroup] = []
-        var offset = 0
-        for (groupIdx, size) in subCourseSizes.enumerated() {
-            let end = min(offset + size, sorted.count)
-            guard offset < sorted.count else { break }
-
-            let chunk = Array(sorted[offset..<end])
-            let byNumber = chunk.sorted { ($0.holeNumber ?? 0) < ($1.holeNumber ?? 0) }
-            let numbers = byNumber.compactMap(\.holeNumber)
-            let minNum = numbers.min() ?? 0
-            let maxNum = numbers.max() ?? 0
             groups.append(TestCenterlineGroup(
-                label: "Holes \(minNum)-\(maxNum) (group \(groupIdx + 1))",
-                centerlines: byNumber
+                label: "\(chain.count) holes (group \(groups.count + 1))",
+                centerlines: chain
             ))
-            offset = end
+        }
+
+        let remaining = valid.enumerated().filter { !used.contains($0.offset) }
+        if !remaining.isEmpty {
+            let sortedRemaining = remaining.sorted { ($0.element.holeNumber ?? 0) < ($1.element.holeNumber ?? 0) }
+            var remainingUsed: Set<Int> = []
+
+            for (startIdx, startCL) in sortedRemaining {
+                if remainingUsed.contains(startIdx) { continue }
+
+                var chain: [OverpassAPIClient.ParsedCenterline] = [startCL]
+                remainingUsed.insert(startIdx)
+                var currentEnd = startCL.coordinates.last!
+                let startRef = startCL.holeNumber ?? 0
+
+                var nextRef = startRef + 1
+                while chain.count < maxChainLength {
+                    var bestIdx: Int?
+                    var bestDist = Double.greatestFiniteMagnitude
+                    for (idx, cl) in sortedRemaining {
+                        guard cl.holeNumber == nextRef, !remainingUsed.contains(idx) else { continue }
+                        let dist = cl.coordinates.first!.clLocation.distance(from: currentEnd.clLocation)
+                        if dist < bestDist {
+                            bestDist = dist
+                            bestIdx = idx
+                        }
+                    }
+
+                    guard let idx = bestIdx else { break }
+                    chain.append(valid[idx])
+                    remainingUsed.insert(idx)
+                    currentEnd = valid[idx].coordinates.last!
+                    nextRef += 1
+                }
+
+                groups.append(TestCenterlineGroup(
+                    label: "\(chain.count) holes (group \(groups.count + 1))",
+                    centerlines: chain
+                ))
+            }
         }
 
         return groups

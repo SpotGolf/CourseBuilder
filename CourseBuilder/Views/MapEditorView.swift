@@ -965,11 +965,21 @@ struct MapEditorView: View {
             }
         }
 
-        // Check all features in one pass, sorted by type priority so small features
-        // (tees, greens, bunkers) are hit before large ones (fairways, rough).
-        let allClickable = currentHoleFeatures + unassociatedFeatures + otherHoleFeatures
-        let sorted = allClickable.sorted { featureHitPriority($0.type) < featureHitPriority($1.type) }
-        for feature in sorted {
+        // Check all features, sorted by type priority so small features (tees, greens)
+        // are hit before large ones (fairways, rough). Use bounding-box pre-filter to
+        // avoid expensive point-in-polygon tests on distant features.
+        let candidates = course.features
+            .filter { feature in
+                let lats = feature.polygon.map(\.latitude)
+                let lons = feature.polygon.map(\.longitude)
+                guard let minLat = lats.min(), let maxLat = lats.max(),
+                      let minLon = lons.min(), let maxLon = lons.max() else { return false }
+                return point.latitude >= minLat && point.latitude <= maxLat
+                    && point.longitude >= minLon && point.longitude <= maxLon
+            }
+            .sorted { featureHitPriority($0.type) < featureHitPriority($1.type) }
+
+        for feature in candidates {
             if PolygonGeometry.contains(point, in: feature.polygon) {
                 if selectedFeatureID == feature.id && !isEditingFeature {
                     isEditingFeature = true

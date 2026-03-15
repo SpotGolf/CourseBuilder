@@ -319,6 +319,188 @@ enum OSMImporter {
         return (px * dx + py * dy) >= 0
     }
 
+    /// Renumber OSM centerlines to match the course's sequential hole numbering (1-N).
+    ///
+    /// OSM data can have duplicate hole numbers (e.g., two sets of 1-9 for a 27-hole course).
+    /// This method groups centerlines spatially into clusters (one per sub-course), matches
+    /// each cluster to a sub-course by comparing centerline distances against scorecard
+    /// yardages, then renumbers everything sequentially.
+    ///
+    /// If centerline numbers are already unique and match the course, this is a no-op.
+    static func renumberCenterlines(
+        in result: OverpassAPIClient.ParsedResult,
+        for course: Course
+    ) -> OverpassAPIClient.ParsedResult {
+        let centerlines = result.centerlines
+        let totalHoles = course.subCourses.flatMap(\.holes).count
+        let uniqueNumbers = Set(centerlines.compactMap(\.holeNumber))
+
+        // If numbers are already unique and cover all holes, no renumbering needed
+        if uniqueNumbers.count == centerlines.count && uniqueNumbers.count == totalHoles {
+            return result
+        }
+
+        guard !centerlines.isEmpty, !course.subCourses.isEmpty else { return result }
+
+        // Step 1: Cluster centerlines spatially using their midpoint coordinates.
+        // We need as many clusters as sub-courses.
+        let targetClusterCount = course.subCourses.count
+        let clusters = spatiallyClusterCenterlines(centerlines, into: targetClusterCount)
+
+        // Step 2: Sort centerlines within each cluster by their original hole number
+        let sortedClusters = clusters.map { cluster in
+            cluster.sorted { a, b in
+                (a.holeNumber ?? 0) < (b.holeNumber ?? 0)
+            }
+        }
+
+        // Step 3: Match each cluster to the best sub-course by yardage pattern.
+        // Compute the average centerline distance for each cluster, then compare
+        // against the average yardage of each sub-course's longest tee.
+        let metersPerYard = 0.9144
+        var clusterDistances: [[Double]] = []
+        for cluster in sortedClusters {
+            let distances = cluster.map { cl -> Double in
+                guard cl.coordinates.count >= 2 else { return 0 }
+                let start = cl.coordinates.first!
+                let end = cl.coordinates.last!
+                return start.clLocation.distance(from: end.clLocation) / metersPerYard
+            }
+            clusterDistances.append(distances)
+        }
+
+        // For each sub-course, get the max tee yardages per hole (sorted by hole order)
+        var subCourseYardages: [[Int]] = []
+        for subCourse in course.subCourses {
+            let yardages = subCourse.holes.map { hole in
+                hole.yardages.values.max() ?? 0
+            }
+            subCourseYardages.append(yardages)
+        }
+
+        // Greedy best-fit matching: for each cluster, find the sub-course whose
+        // yardage pattern is closest (by sum of squared differences)
+        var usedSubCourses: Set<Int> = []
+        var clusterToSubCourse: [Int: Int] = [:]
+
+        for clusterIdx in sortedClusters.indices {
+            var bestSubIdx = 0
+            var bestScore = Double.greatestFiniteMagnitude
+
+            for subIdx in course.subCourses.indices where !usedSubCourses.contains(subIdx) {
+                // Clusters and sub-courses may have different hole counts; compare up to the minimum
+                let count = min(clusterDistances[clusterIdx].count, subCourseYardages[subIdx].count)
+                guard count > 0 else { continue }
+
+                var score = 0.0
+                for i in 0..<count {
+                    let diff = clusterDistances[clusterIdx][i] - Double(subCourseYardages[subIdx][i])
+                    score += diff * diff
+                }
+                score /= Double(count) // normalize by hole count
+
+                if score < bestScore {
+                    bestScore = score
+                    bestSubIdx = subIdx
+                }
+            }
+
+            clusterToSubCourse[clusterIdx] = bestSubIdx
+            usedSubCourses.insert(bestSubIdx)
+        }
+
+        // Step 4: Renumber. Sub-courses are ordered by their index, so compute
+        // the global hole offset for each sub-course and assign sequential numbers.
+        var renumbered: [OverpassAPIClient.ParsedCenterline] = []
+        for clusterIdx in sortedClusters.indices {
+            guard let subIdx = clusterToSubCourse[clusterIdx] else { continue }
+
+            // Compute global offset: sum of holes in all sub-courses before this one
+            var globalOffset = 0
+            for i in 0..<subIdx {
+                globalOffset += course.subCourses[i].holes.count
+            }
+
+            for (holeIdx, centerline) in sortedClusters[clusterIdx].enumerated() {
+                let globalNumber = globalOffset + holeIdx + 1
+                renumbered.append(OverpassAPIClient.ParsedCenterline(
+                    holeNumber: globalNumber,
+                    coordinates: centerline.coordinates
+                ))
+            }
+        }
+
+        return OverpassAPIClient.ParsedResult(
+            features: result.features,
+            centerlines: renumbered,
+            courseBoundary: result.courseBoundary
+        )
+    }
+
+    /// Group centerlines into `n` spatial clusters based on their midpoint coordinates.
+    /// Uses a simple iterative k-means approach in lat/lon space.
+    private static func spatiallyClusterCenterlines(
+        _ centerlines: [OverpassAPIClient.ParsedCenterline],
+        into n: Int
+    ) -> [[OverpassAPIClient.ParsedCenterline]] {
+        guard n > 1, centerlines.count >= n else { return [centerlines] }
+
+        // Compute midpoint for each centerline
+        let midpoints: [Coordinate] = centerlines.map { cl in
+            guard cl.coordinates.count >= 2 else {
+                return cl.coordinates.first ?? Coordinate(latitude: 0, longitude: 0)
+            }
+            let start = cl.coordinates.first!
+            let end = cl.coordinates.last!
+            return Coordinate(
+                latitude: (start.latitude + end.latitude) / 2,
+                longitude: (start.longitude + end.longitude) / 2
+            )
+        }
+
+        // Initialize centroids by picking evenly spaced centerlines sorted by latitude
+        let sortedIndices = midpoints.indices.sorted { midpoints[$0].latitude < midpoints[$1].latitude }
+        var centroids: [Coordinate] = []
+        for i in 0..<n {
+            let idx = sortedIndices[i * sortedIndices.count / n]
+            centroids.append(midpoints[idx])
+        }
+
+        // Run k-means for a fixed number of iterations
+        var assignments = [Int](repeating: 0, count: centerlines.count)
+        for _ in 0..<20 {
+            // Assign each centerline to nearest centroid
+            for i in midpoints.indices {
+                var bestCluster = 0
+                var bestDist = Double.greatestFiniteMagnitude
+                for c in 0..<n {
+                    let dist = midpoints[i].clLocation.distance(from: centroids[c].clLocation)
+                    if dist < bestDist {
+                        bestDist = dist
+                        bestCluster = c
+                    }
+                }
+                assignments[i] = bestCluster
+            }
+
+            // Recompute centroids
+            for c in 0..<n {
+                let members = midpoints.indices.filter { assignments[$0] == c }
+                guard !members.isEmpty else { continue }
+                let avgLat = members.map { midpoints[$0].latitude }.reduce(0, +) / Double(members.count)
+                let avgLon = members.map { midpoints[$0].longitude }.reduce(0, +) / Double(members.count)
+                centroids[c] = Coordinate(latitude: avgLat, longitude: avgLon)
+            }
+        }
+
+        // Build cluster arrays
+        var clusters = [[OverpassAPIClient.ParsedCenterline]](repeating: [], count: n)
+        for i in centerlines.indices {
+            clusters[assignments[i]].append(centerlines[i])
+        }
+        return clusters
+    }
+
     /// Determines if a feature should be associated with a hole based on three checks:
     /// 1. Does the centerline pass through the polygon? (handles large fairways/greens)
     /// 2. Is any polygon vertex within the threshold of the centerline? (handles offset features)

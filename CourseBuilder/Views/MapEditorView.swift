@@ -896,6 +896,18 @@ struct MapEditorView: View {
 
     // MARK: - Feature Colors
 
+    /// Hit-test priority for feature types. Lower values are checked first.
+    private func featureHitPriority(_ type: FeatureType) -> Int {
+        switch type {
+        case .tee: 0
+        case .green: 1
+        case .bunker: 2
+        case .water: 3
+        case .fairway: 4
+        case .rough: 5
+        }
+    }
+
     private func colorForFeatureType(_ type: FeatureType) -> Color {
         switch type {
         case .fairway: .green
@@ -953,8 +965,10 @@ struct MapEditorView: View {
             }
         }
 
-        // Check if tap is inside any feature polygon of the current hole
-        for feature in currentHoleFeatures {
+        // Check if tap is inside any feature polygon of the current hole.
+        // Sort so small/specific features (tee, green, bunker) are checked before large ones (fairway, rough).
+        let sortedHoleFeatures = currentHoleFeatures.sorted { featureHitPriority($0.type) < featureHitPriority($1.type) }
+        for feature in sortedHoleFeatures {
             if PolygonGeometry.contains(point, in: feature.polygon) {
                 if selectedFeatureID == feature.id && !isEditingFeature {
                     // Second click on selected polygon enters edit mode
@@ -969,7 +983,8 @@ struct MapEditorView: View {
         }
 
         // Check unassociated features and features from other holes
-        for feature in unassociatedFeatures + otherHoleFeatures {
+        let sortedOtherFeatures = (unassociatedFeatures + otherHoleFeatures).sorted { featureHitPriority($0.type) < featureHitPriority($1.type) }
+        for feature in sortedOtherFeatures {
             if PolygonGeometry.contains(point, in: feature.polygon) {
                 if selectedFeatureID == feature.id && !isEditingFeature {
                     isEditingFeature = true

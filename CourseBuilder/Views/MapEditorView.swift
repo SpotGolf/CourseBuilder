@@ -947,15 +947,13 @@ struct MapEditorView: View {
                 osmImportStatus = "Fetching features within course boundary..."
                 let fullResult = try await client.fetchFeatures(bbox: bbox)
                 logger.info("Full query: \(fullResult.features.count, privacy: .public) features")
-                let renumberedFull = OSMImporter.renumberCenterlines(in: fullResult, for: course)
                 let featureCountBefore = course.features.count
-                OSMImporter.applyParsedResult(renumberedFull, to: &course)
+                OSMImporter.applyParsedResult(fullResult, to: &course)
                 logger.info("After apply: course has \(course.features.count, privacy: .public) features (was \(featureCountBefore, privacy: .public))")
                 osmImportStatus = "Imported \(course.features.count - featureCountBefore) features"
             } else {
-                let renumbered = OSMImporter.renumberCenterlines(in: result, for: course)
                 let featureCountBefore = course.features.count
-                OSMImporter.applyParsedResult(renumbered, to: &course)
+                OSMImporter.applyParsedResult(result, to: &course)
                 logger.info("After apply: course has \(course.features.count, privacy: .public) features (was \(featureCountBefore, privacy: .public))")
                 osmImportStatus = "Imported \(course.features.count - featureCountBefore) features"
             }

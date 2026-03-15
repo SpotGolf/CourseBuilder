@@ -55,9 +55,17 @@ final class OSMImporterTests: XCTestCase {
     }
 
     func testAssignsFeatureToCorrectHole() {
-        // Green centroid (~39.7901, ~-74.9401) is right at hole 2's centerline endpoint,
-        // far from hole 1's centerline
-        let greenNearHole2 = OverpassAPIClient.ParsedFeature(
+        // Two greens, two holes. Each green is closest to one hole's centerline endpoint.
+        let greenForHole1 = OverpassAPIClient.ParsedFeature(
+            type: .green,
+            polygon: [
+                Coordinate(latitude: 39.787, longitude: -74.9552),
+                Coordinate(latitude: 39.787, longitude: -74.9548),
+                Coordinate(latitude: 39.788, longitude: -74.9548),
+                Coordinate(latitude: 39.788, longitude: -74.9552)
+            ]
+        )
+        let greenForHole2 = OverpassAPIClient.ParsedFeature(
             type: .green,
             polygon: [
                 Coordinate(latitude: 39.7900, longitude: -74.9402),
@@ -82,7 +90,7 @@ final class OSMImporterTests: XCTestCase {
         )
 
         let parsed = OverpassAPIClient.ParsedResult(
-            features: [greenNearHole2],
+            features: [greenForHole1, greenForHole2],
             centerlines: [cl1, cl2],
             courseBoundary: nil
         )
@@ -98,9 +106,14 @@ final class OSMImporterTests: XCTestCase {
 
         OSMImporter.applyParsedResult(parsed, to: &course)
 
-        // Green should be assigned to hole 2 only
-        XCTAssertTrue(course.subCourses[0].holes[0].features.isEmpty)
-        XCTAssertEqual(course.subCourses[0].holes[1].features.count, 1)
+        let green1ID = course.features.first(where: { $0.type == .green && $0.polygon[0].latitude < 39.789 })!.id
+        let green2ID = course.features.first(where: { $0.type == .green && $0.polygon[0].latitude > 39.789 })!.id
+
+        // Each green should be assigned to its closest hole
+        XCTAssertTrue(course.subCourses[0].holes[0].features.contains(green1ID))
+        XCTAssertFalse(course.subCourses[0].holes[0].features.contains(green2ID))
+        XCTAssertTrue(course.subCourses[0].holes[1].features.contains(green2ID))
+        XCTAssertFalse(course.subCourses[0].holes[1].features.contains(green1ID))
     }
 
     func testFeatureBeyondThresholdNotAssigned() {

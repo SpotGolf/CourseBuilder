@@ -79,19 +79,8 @@ enum OSMImporter {
         let metersPerYard = 0.9144
         let thresholdMeters = 35.0 * metersPerYard
         var assignedIDs: Set<Int> = []
-        let greenFeatures = features.filter { $0.type == .green }
 
-        // Sort holes so the one with the closest green candidate processes first,
-        // preventing a far hole from stealing a nearby hole's green.
-        let sortedSlots = holeSlots.sorted { slotA, slotB in
-            let clA = course.subCourses[slotA.sub].holes[slotA.hole].centerline
-            let clB = course.subCourses[slotB.sub].holes[slotB.hole].centerline
-            let distA = greenFeatures.map { PolygonGeometry.centroid(of: $0.polygon).clLocation.distance(from: clA.last!.clLocation) }.min() ?? .greatestFiniteMagnitude
-            let distB = greenFeatures.map { PolygonGeometry.centroid(of: $0.polygon).clLocation.distance(from: clB.last!.clLocation) }.min() ?? .greatestFiniteMagnitude
-            return distA < distB
-        }
-
-        for slot in sortedSlots {
+        for slot in holeSlots {
             let cl = course.subCourses[slot.sub].holes[slot.hole].centerline
             guard cl.count >= 2 else { continue }
 

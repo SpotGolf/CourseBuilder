@@ -57,6 +57,7 @@ struct MapEditorView: View {
     @State private var osmImportStatus = ""
     @State private var pendingOSMResult: OverpassAPIClient.ParsedResult?
     @State private var centerlineGroups: [CenterlineGroup] = []
+    @State private var selectedMappingGroup: Int?
 
     // Delete confirmation
     @State private var featureToDelete: Int?
@@ -72,8 +73,13 @@ struct MapEditorView: View {
             Divider()
 
             HSplitView {
-                holeSidebar
-                    .frame(minWidth: 180, maxWidth: 220)
+                if pendingOSMResult != nil {
+                    mappingSidebar
+                        .frame(minWidth: 220, maxWidth: 280)
+                } else {
+                    holeSidebar
+                        .frame(minWidth: 180, maxWidth: 220)
+                }
 
                 VStack(spacing: 0) {
                     mapArea
@@ -177,6 +183,83 @@ struct MapEditorView: View {
     }
 
     // MARK: - Hole Sidebar
+
+    // MARK: - Mapping Sidebar (shown during OSM import)
+
+    private var mappingSidebar: some View {
+        VStack(alignment: .leading, spacing: 0) {
+            Text("Map OSM Holes to Sub-Courses")
+                .font(.headline)
+                .padding(8)
+
+            Text("Select a group to see its centerlines on the map, then assign it to a sub-course.")
+                .font(.caption)
+                .foregroundStyle(.secondary)
+                .padding(.horizontal, 8)
+                .padding(.bottom, 8)
+
+            Divider()
+
+            ScrollView {
+                VStack(alignment: .leading, spacing: 8) {
+                    ForEach(Array(centerlineGroups.enumerated()), id: \.offset) { idx, group in
+                        VStack(alignment: .leading, spacing: 4) {
+                            HStack {
+                                Circle()
+                                    .fill(groupColor(for: idx))
+                                    .frame(width: 10, height: 10)
+                                Text(group.label)
+                                    .font(.body.bold())
+                            }
+                            .frame(maxWidth: .infinity, alignment: .leading)
+                            .contentShape(Rectangle())
+                            .onTapGesture {
+                                selectedMappingGroup = (selectedMappingGroup == idx) ? nil : idx
+                            }
+
+                            Picker("Sub-Course", selection: Binding(
+                                get: { centerlineGroups[idx].assignedSubCourseIndex },
+                                set: { centerlineGroups[idx].assignedSubCourseIndex = $0 }
+                            )) {
+                                Text("Select...").tag(nil as Int?)
+                                ForEach(Array(course.subCourses.enumerated()), id: \.offset) { subIdx, sc in
+                                    Text(sc.name).tag(subIdx as Int?)
+                                }
+                            }
+                            .labelsHidden()
+                        }
+                        .padding(8)
+                        .background(selectedMappingGroup == idx ? groupColor(for: idx).opacity(0.15) : Color.clear)
+                        .cornerRadius(6)
+                    }
+                }
+                .padding(8)
+            }
+
+            Divider()
+
+            HStack {
+                Button("Cancel") {
+                    pendingOSMResult = nil
+                    centerlineGroups = []
+                    selectedMappingGroup = nil
+                }
+                Spacer()
+                Button("Import") {
+                    applyMappingAndImport()
+                    selectedMappingGroup = nil
+                }
+                .disabled(!centerlineGroups.allSatisfy { $0.assignedSubCourseIndex != nil })
+            }
+            .padding(8)
+        }
+        .background(Color(.windowBackgroundColor))
+    }
+
+    private func groupColor(for index: Int) -> Color {
+        let colors: [Color] = [.red, .blue, .green, .orange, .purple, .cyan, .yellow, .pink, .mint]
+        return colors[index % colors.count]
+    }
 
     private var holeSidebar: some View {
         VSplitView {
@@ -403,6 +486,19 @@ struct MapEditorView: View {
     private var mapArea: some View {
         MapReader { proxy in
             Map(position: $mapPosition, interactionModes: isDraggingVertex ? [.zoom, .rotate, .pitch] : .all) {
+                // Render centerline groups during mapping mode
+                if pendingOSMResult != nil {
+                    ForEach(Array(centerlineGroups.enumerated()), id: \.offset) { groupIdx, group in
+                        let isSelected = selectedMappingGroup == groupIdx
+                        let color = groupColor(for: groupIdx)
+                        ForEach(group.centerlines.indices, id: \.self) { clIdx in
+                            let cl = group.centerlines[clIdx]
+                            MapPolyline(coordinates: cl.coordinates.map(\.clCoordinate))
+                                .stroke(color, lineWidth: isSelected ? 4 : 2)
+                        }
+                    }
+                }
+
                 // Render feature polygons for current hole
                 ForEach(currentHoleFeatures) { feature in
                     let isSelected = selectedFeatureID == feature.id
@@ -623,20 +719,6 @@ struct MapEditorView: View {
             }
         } message: {
             Text("This will permanently remove this feature from the course and all holes.")
-        }
-        .sheet(isPresented: Binding(
-            get: { pendingOSMResult != nil },
-            set: { if !$0 { pendingOSMResult = nil; centerlineGroups = [] } }
-        )) {
-            CenterlineMappingSheet(
-                groups: $centerlineGroups,
-                subCourseNames: course.subCourses.map(\.name)
-            ) {
-                pendingOSMResult = nil
-                centerlineGroups = []
-            } onImport: {
-                applyMappingAndImport()
-            }
         }
     }
 
@@ -1175,62 +1257,3 @@ struct CenterlineGroup: Identifiable {
     var assignedSubCourseIndex: Int?
 }
 
-struct CenterlineMappingSheet: View {
-    @Binding var groups: [CenterlineGroup]
-    let subCourseNames: [String]
-    let onCancel: () -> Void
-    let onImport: () -> Void
-
-    private var allAssigned: Bool {
-        groups.allSatisfy { $0.assignedSubCourseIndex != nil }
-    }
-
-    var body: some View {
-        VStack(alignment: .leading, spacing: 12) {
-            Text("Map OSM Holes to Sub-Courses")
-                .font(.headline)
-
-            Text("OSM returned \(groups.count) group(s) of centerlines. Assign each group to the correct sub-course.")
-                .font(.callout)
-                .foregroundStyle(.secondary)
-
-            Divider()
-
-            ForEach($groups) { $group in
-                HStack {
-                    VStack(alignment: .leading) {
-                        Text(group.label)
-                            .font(.body.bold())
-                        Text("\(group.centerlines.count) holes")
-                            .font(.caption)
-                            .foregroundStyle(.secondary)
-                    }
-                    .frame(minWidth: 150, alignment: .leading)
-
-                    Picker("", selection: $group.assignedSubCourseIndex) {
-                        Text("Select...").tag(nil as Int?)
-                        ForEach(Array(subCourseNames.enumerated()), id: \.offset) { idx, name in
-                            Text(name).tag(idx as Int?)
-                        }
-                    }
-                    .frame(width: 200)
-                }
-            }
-
-            Divider()
-
-            HStack {
-                Spacer()
-                Button("Cancel", role: .cancel, action: onCancel)
-                    .keyboardShortcut(.cancelAction)
-                Button("Import") {
-                    onImport()
-                }
-                .disabled(!allAssigned)
-                .keyboardShortcut(.defaultAction)
-            }
-        }
-        .padding()
-        .frame(minWidth: 400)
-    }
-}

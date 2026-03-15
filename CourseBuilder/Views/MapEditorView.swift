@@ -177,7 +177,7 @@ struct MapEditorView: View {
                     List {
                         ForEach(Array(course.subCourses.enumerated()), id: \.element.id) { subIdx, subCourse in
                             Section(subCourse.name) {
-                                ForEach(subCourse.holes) { hole in
+                                ForEach(Array(subCourse.holes.enumerated()), id: \.offset) { _, hole in
                                     Button {
                                         selectedSubCourseIndex = subIdx
                                         selectedHole = hole.number

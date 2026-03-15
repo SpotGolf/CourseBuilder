@@ -581,6 +581,16 @@ struct MapEditorView: View {
                         .stroke(colorForFeatureType(feature.type).opacity(0.5), lineWidth: isSelected ? 3 : 1)
                 }
 
+                // Render selected feature if it's not already visible (other-hole feature)
+                if let featureID = selectedFeatureID,
+                   !currentHoleFeatureIDs.contains(featureID),
+                   !unassociatedFeatures.contains(where: { $0.id == featureID }),
+                   let feature = course.findFeature(id: featureID) {
+                    MapPolygon(coordinates: feature.polygon.map(\.clCoordinate))
+                        .foregroundStyle(colorForFeatureType(feature.type).opacity(0.5))
+                        .stroke(colorForFeatureType(feature.type), lineWidth: 3)
+                }
+
                 // Render centerline for current hole
                 if let hole = currentHole, hole.centerline.count >= 2 {
                     MapPolyline(coordinates: hole.centerline.map(\.clCoordinate))

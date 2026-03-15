@@ -288,6 +288,14 @@ struct ScorecardView: View {
             holeOffset += subCourse.holes.count
         }
 
+        // Check for unassigned features at the course level
+        let allAssignedIDs = Set(course.subCourses.flatMap(\.holes).flatMap(\.features))
+        let unassigned = course.features.filter { !allAssignedIDs.contains($0.id) }
+        if !unassigned.isEmpty {
+            let ids = unassigned.map { "#\($0.id)" }.joined(separator: ", ")
+            warnings.append("\(unassigned.count) unassigned feature(s): \(ids)")
+        }
+
         return warnings
     }
 

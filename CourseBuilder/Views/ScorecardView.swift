@@ -263,6 +263,27 @@ struct ScorecardView: View {
                 if hole.centerline.isEmpty {
                     warnings.append("\(holeLabel): missing centerline")
                 }
+
+                // Check that every tee name in yardages has a tee assignment
+                for teeName in hole.yardages.keys {
+                    if hole.tees[teeName] == nil {
+                        warnings.append("\(holeLabel): tee \"\(teeName)\" has yardage but no polygon assigned")
+                    }
+                }
+
+                // Check that tee assignments point to valid features
+                for (teeName, featureID) in hole.tees {
+                    if course.findFeature(id: featureID) == nil {
+                        warnings.append("\(holeLabel): tee \"\(teeName)\" references missing feature #\(featureID)")
+                    }
+                }
+
+                // Check for stale feature references
+                for featureID in hole.features {
+                    if course.findFeature(id: featureID) == nil {
+                        warnings.append("\(holeLabel): references missing feature #\(featureID)")
+                    }
+                }
             }
             holeOffset += subCourse.holes.count
         }

@@ -101,6 +101,18 @@ enum OSMImporter {
             // more tees are found within the threshold and forward of the start.
             var searchPoint = cl.first!
 
+            // First, grab any tee whose polygon contains the centerline start point.
+            // This handles the back tee that the centerline originates from.
+            if let startPoint = cl.first {
+                for feature in features where feature.type == .tee && !assignedIDs.contains(feature.id) {
+                    if PolygonGeometry.contains(startPoint, in: feature.polygon) {
+                        course.subCourses[slot.sub].holes[slot.hole].features.append(feature.id)
+                        assignedIDs.insert(feature.id)
+                        searchPoint = farthestPointAlongCenterline(polygon: feature.polygon, centerline: cl)
+                    }
+                }
+            }
+
             while true {
                 var bestTee: Feature?
                 var bestTeeDist = Double.greatestFiniteMagnitude

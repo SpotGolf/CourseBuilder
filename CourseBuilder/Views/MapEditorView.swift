@@ -965,26 +965,11 @@ struct MapEditorView: View {
             }
         }
 
-        // Check if tap is inside any feature polygon of the current hole.
-        // Sort so small/specific features (tee, green, bunker) are checked before large ones (fairway, rough).
-        let sortedHoleFeatures = currentHoleFeatures.sorted { featureHitPriority($0.type) < featureHitPriority($1.type) }
-        for feature in sortedHoleFeatures {
-            if PolygonGeometry.contains(point, in: feature.polygon) {
-                if selectedFeatureID == feature.id && !isEditingFeature {
-                    // Second click on selected polygon enters edit mode
-                    isEditingFeature = true
-                } else {
-                    selectedFeatureID = feature.id
-                    selectedVertexIndex = nil
-                    isEditingFeature = false
-                }
-                return
-            }
-        }
-
-        // Check unassociated features and features from other holes
-        let sortedOtherFeatures = (unassociatedFeatures + otherHoleFeatures).sorted { featureHitPriority($0.type) < featureHitPriority($1.type) }
-        for feature in sortedOtherFeatures {
+        // Check all features in one pass, sorted by type priority so small features
+        // (tees, greens, bunkers) are hit before large ones (fairways, rough).
+        let allClickable = currentHoleFeatures + unassociatedFeatures + otherHoleFeatures
+        let sorted = allClickable.sorted { featureHitPriority($0.type) < featureHitPriority($1.type) }
+        for feature in sorted {
             if PolygonGeometry.contains(point, in: feature.polygon) {
                 if selectedFeatureID == feature.id && !isEditingFeature {
                     isEditingFeature = true

@@ -7,7 +7,8 @@ CourseBuilder produces JSON files containing tee, green, and hazard coordinates 
 ## Features
 
 - **Scorecard Import** — Pull scorecard data from GolfCourseAPI.com, web scraping, or image OCR
-- **Satellite Map Editor** — Place and adjust pins for tees, greens, bunkers, and water hazards on a satellite map
+- **OpenStreet Maps Import** - Import OSM polygon and centerline data based on the location of the golf course
+- **Satellite Map Editor** — Place and adjust polygons for tees, greens, bunkers, rough, and water hazards and lines for centerlines on a satellite map
 - **JSON Export** — Export course data as a single JSON file per course
 
 ## Future Features

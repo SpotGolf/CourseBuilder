@@ -1,5 +1,9 @@
 # CourseBuilder
 
+<p align="center">
+<img width="512" height="512" alt="icon_512x512" src="https://github.com/user-attachments/assets/41be3ccd-c198-4b1d-9255-ead5818a0ae0" />
+</p>
+
 A macOS desktop app for creating golf course GPS data files. Part of the [SpotGolf](https://spot.golf) project.
 
 CourseBuilder produces JSON files containing tee, green, and hazard coordinates for each hole on a golf course. These files are used by the SpotGolf mobile app for on-course GPS distances.

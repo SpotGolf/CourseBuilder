@@ -140,7 +140,10 @@ struct AddCourseSheet: View {
         case .search:
             return !checkedResultIDs.isEmpty
         case .manualEntry:
-            return !name.isEmpty && Double(latitude) != nil && Double(longitude) != nil
+            guard !name.isEmpty,
+                  let lat = Double(latitude), (-90...90).contains(lat),
+                  let lon = Double(longitude), (-180...180).contains(lon) else { return false }
+            return true
         case .importFile:
             return importedCourse != nil
         }
@@ -292,7 +295,7 @@ struct AddCourseSheet: View {
                                 Text(group.clubName)
                                     .font(.headline)
                                 if let loc = group.courses.first?.location {
-                                    Text("\(loc.city), \(loc.state)")
+                                    Text(loc.state.isEmpty ? loc.city : "\(loc.city), \(loc.state)")
                                         .font(.caption)
                                         .foregroundStyle(.secondary)
                                 }
@@ -353,7 +356,13 @@ struct AddCourseSheet: View {
             let courseName = name
             let courseClubName = clubName
             let courseHoleCount = holeCount
-            reverseGeocode(latitude: lat, longitude: lon) { address, city, state, country in
+            reverseGeocode(latitude: lat, longitude: lon) { address, city, state, country, geocodeError in
+                isGeocodingManual = false
+                if let geocodeError {
+                    fetchErrorMessage = "Reverse geocode failed: \(geocodeError)"
+                    showFetchError = true
+                    return
+                }
                 let subCourseCount = courseHoleCount / 9
                 let subCourseNames = ["Front", "Back", "Third"]
                 var subCourses: [SubCourse] = []
@@ -373,7 +382,6 @@ struct AddCourseSheet: View {
                     ),
                     subCourses: subCourses
                 )
-                isGeocodingManual = false
                 onCreate(course)
             }
         }
@@ -438,21 +446,23 @@ struct AddCourseSheet: View {
         }
     }
 
-    private func reverseGeocode(latitude: Double, longitude: Double, completion: @escaping (_ address: String, _ city: String, _ state: String, _ country: String) -> Void) {
+    private func reverseGeocode(latitude: Double, longitude: Double, completion: @escaping (_ address: String, _ city: String, _ state: String, _ country: String, _ error: String?) -> Void) {
         let location = CLLocation(latitude: latitude, longitude: longitude)
         if #available(macOS 26.0, *) {
             guard let request = MKReverseGeocodingRequest(location: location) else {
-                completion("", "", "", "")
+                completion("", "", "", "", "Failed to create geocoding request")
                 return
             }
             request.getMapItems { mapItems, error in
                 let pm = mapItems?.first?.placemark
+                let errMsg = pm == nil ? (error?.localizedDescription ?? "No location found for these coordinates") : nil
                 DispatchQueue.main.async {
                     completion(
                         pm?.thoroughfare ?? "",
                         pm?.locality ?? "",
                         pm?.administrativeArea ?? "",
-                        pm?.isoCountryCode ?? ""
+                        pm?.isoCountryCode ?? "",
+                        errMsg
                     )
                 }
             }
@@ -460,12 +470,14 @@ struct AddCourseSheet: View {
             let geocoder = CLGeocoder()
             geocoder.reverseGeocodeLocation(location) { placemarks, error in
                 let pm = placemarks?.first
+                let errMsg = pm == nil ? (error?.localizedDescription ?? "No location found for these coordinates") : nil
                 DispatchQueue.main.async {
                     completion(
                         pm?.thoroughfare ?? "",
                         pm?.locality ?? "",
                         pm?.administrativeArea ?? "",
-                        pm?.isoCountryCode ?? ""
+                        pm?.isoCountryCode ?? "",
+                        errMsg
                     )
                 }
             }

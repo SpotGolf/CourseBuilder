@@ -1,3 +1,5 @@
+import CoreLocation
+import MapKit
 import SwiftUI
 import UniformTypeIdentifiers
 
@@ -14,7 +16,7 @@ struct CourseListView: View {
                     VStack(alignment: .leading) {
                         Text(course.name)
                             .font(.headline)
-                        Text("\(course.location.city), \(course.location.state)")
+                        Text(course.location.cityStateDisplay)
                             .font(.caption)
                             .foregroundStyle(.secondary)
                         Text("\(course.subCourses.reduce(0) { $0 + $1.holes.count }) holes")
@@ -116,13 +118,10 @@ struct AddCourseSheet: View {
     // Manual entry fields
     @State private var clubName = ""
     @State private var name = ""
-    @State private var address = ""
-    @State private var city = ""
-    @State private var state = ""
-    @State private var country = ""
     @State private var latitude = ""
     @State private var longitude = ""
     @State private var holeCount = 18
+    @State private var isGeocodingManual = false
 
     private var groupedResults: [(clubName: String, courses: [GolfCourseAPIClient.CourseSearchResult])] {
         var groups: [String: [GolfCourseAPIClient.CourseSearchResult]] = [:]
@@ -141,7 +140,10 @@ struct AddCourseSheet: View {
         case .search:
             return !checkedResultIDs.isEmpty
         case .manualEntry:
-            return !name.isEmpty && !city.isEmpty && !state.isEmpty
+            guard !name.isEmpty,
+                  let lat = Double(latitude), (-90...90).contains(lat),
+                  let lon = Double(longitude), (-180...180).contains(lon) else { return false }
+            return true
         case .importFile:
             return importedCourse != nil
         }
@@ -171,13 +173,13 @@ struct AddCourseSheet: View {
                 Button("Cancel") { dismiss() }
                     .keyboardShortcut(.cancelAction)
                 Spacer()
-                if isFetching {
+                if isFetching || isGeocodingManual {
                     ProgressView()
                         .scaleEffect(0.7)
                 }
                 Button("Add") { addCourse() }
                     .keyboardShortcut(.defaultAction)
-                    .disabled(!canAdd || isFetching)
+                    .disabled(!canAdd || isFetching || isGeocodingManual)
             }
             .padding()
         }
@@ -192,14 +194,8 @@ struct AddCourseSheet: View {
         Form {
             TextField("Club Name", text: $clubName)
             TextField("Course Name", text: $name)
-            TextField("Address", text: $address)
-            TextField("City", text: $city)
-            TextField("State", text: $state)
-            TextField("Country", text: $country)
-            HStack {
-                TextField("Latitude", text: $latitude)
-                TextField("Longitude", text: $longitude)
-            }
+            TextField("Latitude", text: $latitude)
+            TextField("Longitude", text: $longitude)
             Picker("Holes", selection: $holeCount) {
                 Text("9").tag(9)
                 Text("18").tag(18)
@@ -221,7 +217,7 @@ struct AddCourseSheet: View {
                         .foregroundStyle(.green)
                     Text(course.name)
                         .font(.headline)
-                    Text("\(course.location.city), \(course.location.state)")
+                    Text(course.location.cityStateDisplay)
                         .font(.subheadline)
                         .foregroundStyle(.secondary)
                     let holeCount = course.subCourses.reduce(0) { $0 + $1.holes.count }
@@ -299,7 +295,7 @@ struct AddCourseSheet: View {
                                 Text(group.clubName)
                                     .font(.headline)
                                 if let loc = group.courses.first?.location {
-                                    Text("\(loc.city), \(loc.state)")
+                                    Text(loc.state.isEmpty ? loc.city : "\(loc.city), \(loc.state)")
                                         .font(.caption)
                                         .foregroundStyle(.secondary)
                                 }
@@ -354,26 +350,40 @@ struct AddCourseSheet: View {
                 onCreate(course)
             }
         case .manualEntry:
-            let subCourseCount = holeCount / 9
-            let subCourseNames = ["Front", "Back", "Third"]
-            var subCourses: [SubCourse] = []
-            for i in 0..<subCourseCount {
-                let holes = (1...9).map { Hole(number: $0, par: 4) }
-                subCourses.append(SubCourse(name: subCourseNames[i], holes: holes))
+            guard let lat = Double(latitude), let lon = Double(longitude) else { return }
+            isGeocodingManual = true
+            let coord = Coordinate(latitude: lat, longitude: lon)
+            let courseName = name
+            let courseClubName = clubName
+            let courseHoleCount = holeCount
+            reverseGeocode(latitude: lat, longitude: lon) { address, city, state, country, geocodeError in
+                isGeocodingManual = false
+                if let geocodeError {
+                    fetchErrorMessage = "Reverse geocode failed: \(geocodeError)"
+                    showFetchError = true
+                    return
+                }
+                let subCourseCount = courseHoleCount / 9
+                let subCourseNames = ["Front", "Back", "Third"]
+                var subCourses: [SubCourse] = []
+                for i in 0..<subCourseCount {
+                    let holes = (1...9).map { Hole(number: $0, par: 4) }
+                    subCourses.append(SubCourse(name: subCourseNames[i], holes: holes))
+                }
+                let course = Course(
+                    name: courseName,
+                    clubName: courseClubName,
+                    location: CourseLocation(
+                        address: address,
+                        city: city,
+                        state: state,
+                        country: country,
+                        coordinate: coord
+                    ),
+                    subCourses: subCourses
+                )
+                onCreate(course)
             }
-            let course = Course(
-                name: name,
-                clubName: clubName,
-                location: CourseLocation(
-                    address: address,
-                    city: city,
-                    state: state,
-                    country: country,
-                    coordinate: Coordinate(latitude: Double(latitude) ?? 0, longitude: Double(longitude) ?? 0)
-                ),
-                subCourses: subCourses
-            )
-            onCreate(course)
         }
     }
 
@@ -433,6 +443,44 @@ struct AddCourseSheet: View {
                 showFetchError = true
             }
             isFetching = false
+        }
+    }
+
+    private func reverseGeocode(latitude: Double, longitude: Double, completion: @escaping (_ address: String, _ city: String, _ state: String, _ country: String, _ error: String?) -> Void) {
+        let location = CLLocation(latitude: latitude, longitude: longitude)
+        if #available(macOS 26.0, *) {
+            guard let request = MKReverseGeocodingRequest(location: location) else {
+                completion("", "", "", "", "Failed to create geocoding request")
+                return
+            }
+            request.getMapItems { mapItems, error in
+                let pm = mapItems?.first?.placemark
+                let errMsg = pm == nil ? (error?.localizedDescription ?? "No location found for these coordinates") : nil
+                DispatchQueue.main.async {
+                    completion(
+                        pm?.thoroughfare ?? "",
+                        pm?.locality ?? "",
+                        pm?.administrativeArea ?? "",
+                        pm?.isoCountryCode ?? "",
+                        errMsg
+                    )
+                }
+            }
+        } else {
+            let geocoder = CLGeocoder()
+            geocoder.reverseGeocodeLocation(location) { placemarks, error in
+                let pm = placemarks?.first
+                let errMsg = pm == nil ? (error?.localizedDescription ?? "No location found for these coordinates") : nil
+                DispatchQueue.main.async {
+                    completion(
+                        pm?.thoroughfare ?? "",
+                        pm?.locality ?? "",
+                        pm?.administrativeArea ?? "",
+                        pm?.isoCountryCode ?? "",
+                        errMsg
+                    )
+                }
+            }
         }
     }
 }

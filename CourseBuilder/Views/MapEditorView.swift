@@ -142,7 +142,7 @@ struct MapEditorView: View {
             }
             return .handled
         }
-        .navigationTitle("\(course.name) — \(course.location.city), \(course.location.state)")
+        .navigationTitle("\(course.name) — \(course.location.cityStateDisplay)")
         .onAppear {
             if let latest = store.courses.first(where: { $0.id == course.id }) {
                 course = latest

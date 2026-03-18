@@ -24,7 +24,7 @@ enum ScorecardOCR {
     /// Extract all text blocks from an image, sorted top-to-bottom then left-to-right.
     /// Scales the image up before OCR to improve detection of small digits.
     static func extractText(from image: NSImage) throws -> [TextBlock] {
-        guard let scaledCGImage = scaleUp(image, factor: 3.0) else {
+        guard let scaledCGImage = scaleUp(image, targetMinDimension: 3000) else {
             throw OCRError.invalidImage
         }
 
@@ -32,7 +32,7 @@ enum ScorecardOCR {
 
         let request = VNRecognizeTextRequest()
         request.recognitionLevel = .accurate
-        request.usesLanguageCorrection = true
+        request.usesLanguageCorrection = false
         request.customWords = ["Par", "Handicap", "Hdcp", "Out", "In", "Tot", "Slope", "Rating"]
 
         try handler.perform([request])
@@ -64,13 +64,24 @@ enum ScorecardOCR {
 
     // MARK: - Scorecard Parsing
 
+    private static let summaryLabels: Set<String> = ["out", "in", "total", "tot"]
+
     /// Attempt to parse extracted text blocks into scorecard data.
     /// This is a best-effort parser -- OCR output is noisy and real scorecards vary widely.
     static func parseScorecard(from image: NSImage) throws -> ScorecardData {
         let blocks = try extractText(from: image)
+        return parseScorecardData(from: blocks)
+    }
 
+    /// Parse scorecard data from pre-extracted text blocks.
+    /// Separated from `parseScorecard` to allow unit testing without images.
+    static func parseScorecardData(from blocks: [TextBlock]) -> ScorecardData {
         let rows = groupIntoRows(blocks)
+        return classifyRows(rows)
+    }
 
+    /// Classifies grouped rows into par, handicap, and tee data, then builds holes.
+    private static func classifyRows(_ rows: [[TextBlock]]) -> ScorecardData {
         var parValues: [Int] = []
         var maleHandicapValues: [Int] = []
         var femaleHandicapValues: [Int] = []
@@ -81,20 +92,19 @@ enum ScorecardOCR {
 
             let label = row[0].text
             let normalizedLabel = label.lowercased()
-            // Skip header rows (e.g. "Hole 1 2 3 ...")
-            if normalizedLabel == "hole" { continue }
+            // Skip header rows (e.g. "Hole 1 2 3 ..." or "Hole1")
+            if normalizedLabel.hasPrefix("hole") { continue }
 
             let remaining = Array(row.dropFirst())
-            // Split merged text blocks (e.g. "458 335") and strip non-numeric
-            // characters (e.g. "| 306") before parsing.
+            // Split merged text blocks (e.g. "458 335") and trim leading/trailing
+            // non-numeric characters (e.g. "| 306") before parsing.
             // Filter out "Out"/"In"/"Total" summary labels.
-            let summaryLabels: Set<String> = ["out", "in", "total", "tot"]
             let numbers = remaining
                 .flatMap { $0.text.split(separator: " ") }
                 .filter { !summaryLabels.contains($0.lowercased()) }
                 .compactMap { token -> Int? in
-                    let cleaned = token.filter { $0.isNumber }
-                    return Int(cleaned)
+                    let trimmed = token.trimmingCharacters(in: .decimalDigits.inverted)
+                    return Int(trimmed)
                 }
 
             if normalizedLabel.contains("par") && !normalizedLabel.contains("handicap") {
@@ -104,7 +114,7 @@ enum ScorecardOCR {
                 }
             } else if normalizedLabel.contains("handicap") || normalizedLabel.contains("hdcp") {
                 let filtered = numbers.filter { $0 >= 1 && $0 <= 18 }
-                if normalizedLabel.contains("women") || normalizedLabel.contains("female") {
+                if normalizedLabel.contains("women") || normalizedLabel.contains("female") || normalizedLabel.contains("lad") {
                     if femaleHandicapValues.isEmpty {
                         femaleHandicapValues = filtered
                     }
@@ -161,10 +171,18 @@ enum ScorecardOCR {
 
     // MARK: - Private Helpers
 
-    /// Scales an NSImage up by the given factor to improve OCR accuracy on small text.
-    private static func scaleUp(_ image: NSImage, factor: CGFloat) -> CGImage? {
-        let newWidth = Int(image.size.width * factor)
-        let newHeight = Int(image.size.height * factor)
+    /// Scales an NSImage up so its smallest dimension reaches `targetMinDimension` pixels.
+    /// Uses actual pixel dimensions rather than point size to handle Retina images correctly.
+    /// Returns nil if the image has no representations.
+    private static func scaleUp(_ image: NSImage, targetMinDimension: CGFloat) -> CGImage? {
+        guard let rep = image.representations.first else { return nil }
+        let pixelWidth = rep.pixelsWide
+        let pixelHeight = rep.pixelsHigh
+        let currentMin = CGFloat(min(pixelWidth, pixelHeight))
+        let factor = currentMin < targetMinDimension ? targetMinDimension / currentMin : 1.0
+
+        let newWidth = Int(CGFloat(pixelWidth) * factor)
+        let newHeight = Int(CGFloat(pixelHeight) * factor)
         guard let bitmapRep = NSBitmapImageRep(
             bitmapDataPlanes: nil,
             pixelsWide: newWidth,
@@ -186,7 +204,7 @@ enum ScorecardOCR {
     }
 
     /// Groups text blocks into rows based on Y position proximity.
-    private static func groupIntoRows(_ blocks: [TextBlock]) -> [[TextBlock]] {
+    static func groupIntoRows(_ blocks: [TextBlock]) -> [[TextBlock]] {
         guard !blocks.isEmpty else { return [] }
 
         let rowTolerance: CGFloat = 0.02

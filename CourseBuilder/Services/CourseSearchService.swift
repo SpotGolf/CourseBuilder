@@ -1,5 +1,6 @@
 import Foundation
 import MapKit
+import CourseDataSwift
 
 struct MapSearchResult: Identifiable {
     let id = UUID()

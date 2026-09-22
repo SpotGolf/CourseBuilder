@@ -2,16 +2,18 @@ import CoreLocation
 import MapKit
 import SwiftUI
 import UniformTypeIdentifiers
+import CourseDataSwift
 
 struct CourseListView: View {
     @EnvironmentObject var store: CourseStore
     @State private var showNewCourse = false
     @State private var showDeleteConfirmation = false
     @State private var selectedCourse: Course?
+    @State private var courseNeedingElevations: Course?
 
     var body: some View {
         NavigationSplitView {
-            List(store.courses, selection: $selectedCourse) { course in
+            List(store.courses, selection: Binding(get: { selectedCourse }, set: { select($0) })) { course in
                 NavigationLink(value: course) {
                     VStack(alignment: .leading) {
                         Text(course.name)
@@ -53,8 +55,8 @@ struct CourseListView: View {
                 .padding(.bottom, 8)
             }
         } detail: {
-            if let course = selectedCourse {
-                ScorecardView(course: course)
+            if let course = selectedCourse, let binding = store.binding(for: course.id) {
+                ScorecardView(course: binding)
                     .id(course.id)
             } else {
                 Text("Select a course or create a new one")
@@ -83,8 +85,22 @@ struct CourseListView: View {
         } message: {
             Text("This action cannot be undone.")
         }
+        .elevationUpdatePrompt(for: $courseNeedingElevations) { updated in
+            try store.save(updated)
+            selectedCourse = updated
+        }
         .onAppear {
             try? store.loadAll()
+        }
+    }
+
+    /// Selects a course, unless its file is missing elevations. In that case the user is asked
+    /// to update the file first, and the course is only selected once it has been updated.
+    private func select(_ course: Course?) {
+        if let course, course.isMissingElevations {
+            courseNeedingElevations = course
+        } else {
+            selectedCourse = course
         }
     }
 }
@@ -104,7 +120,7 @@ struct AddCourseSheet: View {
     @State private var searchQuery = ""
     @State private var searchResults: [GolfCourseAPIClient.CourseSearchResult] = []
     @State private var selectedClubName: String?
-    @State private var checkedResultIDs: Set<Int> = []
+    @State private var checkedResultIDs: Set<String> = []
     @State private var isSearching = false
     @State private var searchError = ""
     @State private var isFetching = false
@@ -114,6 +130,7 @@ struct AddCourseSheet: View {
     // Import fields
     @State private var importedCourse: Course?
     @State private var importError = ""
+    @State private var importNeedingElevations: Course?
 
     // Manual entry fields
     @State private var clubName = ""
@@ -247,6 +264,9 @@ struct AddCourseSheet: View {
             Spacer()
         }
         .padding()
+        .elevationUpdatePrompt(for: $importNeedingElevations) { updated in
+            importedCourse = updated
+        }
     }
 
     private var searchTab: some View {
@@ -399,8 +419,14 @@ struct AddCourseSheet: View {
             if data.count >= 2, data[data.startIndex] == 0x1f, data[data.startIndex + 1] == 0x8b {
                 data = try data.gzipDecompressed()
             }
-            importedCourse = try JSONDecoder().decode(Course.self, from: data)
+            let course = try JSONDecoder().decode(Course.self, from: data)
             importError = ""
+            if course.isMissingElevations {
+                importedCourse = nil
+                importNeedingElevations = course
+            } else {
+                importedCourse = course
+            }
         } catch {
             importedCourse = nil
             importError = "Invalid CourseBuilder file: \(error.localizedDescription)"

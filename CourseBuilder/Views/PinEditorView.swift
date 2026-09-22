@@ -1,4 +1,5 @@
 import SwiftUI
+import CourseDataSwift
 
 enum ToolMode: String, CaseIterable {
     case select = "Select"

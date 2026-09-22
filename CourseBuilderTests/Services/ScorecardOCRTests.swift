@@ -1,6 +1,6 @@
 import XCTest
 @testable import CourseBuilder
-@testable import CourseData
+@testable import CourseDataSwift
 
 final class ScorecardOCRTests: XCTestCase {
 

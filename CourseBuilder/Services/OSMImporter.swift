@@ -1,5 +1,6 @@
 import Foundation
 import CoreLocation
+import CourseDataSwift
 
 enum OSMImporter {
     /// Apply parsed OSM data to a course. Runs Phases 1-4 on holes with centerlines first,

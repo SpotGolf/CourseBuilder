@@ -1,14 +1,14 @@
 import SwiftUI
 import UniformTypeIdentifiers
+import CourseDataSwift
 
 struct ScorecardView: View {
-    @EnvironmentObject var store: CourseStore
-    @State var course: Course
+    @Binding var course: Course
     @State private var isImporting = false
     @State private var statusMessage = ""
     @State private var showImagePicker = false
-    @State private var saveTask: Task<Void, Never>?
     @State private var exportWarnings: [String]?
+    @State private var cleanupActions: [String]?
     @Environment(\.openWindow) private var openWindow
 
     var body: some View {
@@ -18,6 +18,7 @@ struct ScorecardView: View {
                 // Action buttons
                 HStack {
                     Spacer()
+                    Button("Cleanup") { runCleanup() }
                     Button("Export JSON...") { exportJSON() }
                     Button("Import Image...") { showImagePicker = true }
                     Button("Open Map Editor") {
@@ -111,7 +112,13 @@ struct ScorecardView: View {
                         .buttonStyle(.borderless)
                         .disabled(index == course.tees.count - 1)
 
-                        TextField("Tee Name", text: $course.tees[index].name)
+                        TextField(
+                            "Tee Name",
+                            text: Binding(
+                                get: { course.tees[index].name },
+                                set: { CourseIntegrity.renameTee(at: index, to: $0, in: &course) }
+                            )
+                        )
                             .textFieldStyle(.roundedBorder)
                             .frame(maxWidth: 150)
                         ColorPicker(
@@ -123,7 +130,7 @@ struct ScorecardView: View {
                         )
                         .labelsHidden()
                         Button(action: {
-                            course.tees.remove(at: index)
+                            CourseIntegrity.removeTee(at: index, from: &course)
                         }) {
                             Image(systemName: "xmark")
                         }
@@ -160,27 +167,22 @@ struct ScorecardView: View {
         ) {
             ExportWarningsSheet(warnings: exportWarnings ?? []) {
                 exportWarnings = nil
+            } onCleanup: {
+                exportWarnings = nil
+                runCleanup()
             } onExportAnyway: {
                 exportWarnings = nil
                 showSavePanelAndExport()
             }
         }
-        .onAppear {
-            if let latest = store.courses.first(where: { $0.id == course.id }) {
-                course = latest
-            }
-        }
-        .onChange(of: store.courses) { _, newCourses in
-            if let latest = newCourses.first(where: { $0.id == course.id }), latest != course {
-                course = latest
-            }
-        }
-        .onChange(of: course) { _, _ in
-            saveTask?.cancel()
-            saveTask = Task {
-                try? await Task.sleep(for: .milliseconds(500))
-                guard !Task.isCancelled else { return }
-                try? store.save(course)
+        .sheet(
+            isPresented: Binding(
+                get: { cleanupActions != nil },
+                set: { if !$0 { cleanupActions = nil } }
+            )
+        ) {
+            CleanupResultsSheet(actions: cleanupActions ?? []) {
+                cleanupActions = nil
             }
         }
     }
@@ -214,15 +216,17 @@ struct ScorecardView: View {
     }
 
     private func exportJSON() {
-        if let latest = store.courses.first(where: { $0.id == course.id }) {
-            course = latest
-        }
-        let warnings = validateCourse()
+        let warnings = CourseIntegrity.validateCourse(course)
         if warnings.isEmpty {
             showSavePanelAndExport()
         } else {
             exportWarnings = warnings
         }
+    }
+
+    private func runCleanup() {
+        let report = CourseIntegrity.cleanup(&course)
+        cleanupActions = report.actions
     }
 
     private func showSavePanelAndExport() {
@@ -237,66 +241,6 @@ struct ScorecardView: View {
 
         guard panel.runModal() == .OK, let url = panel.url else { return }
         writeExport(to: url)
-    }
-
-    private func validateCourse() -> [String] {
-        var warnings: [String] = []
-        var holeOffset = 0
-
-        for subCourse in course.subCourses {
-            for hole in subCourse.holes {
-                let holeLabel = "Hole \(holeOffset + hole.number)"
-                let holeFeatures = course.features(for: hole)
-
-                if !holeFeatures.contains(where: { $0.type == .green }) {
-                    warnings.append("\(holeLabel): missing green polygon")
-                }
-
-                if hole.par > 3 && !holeFeatures.contains(where: { $0.type == .fairway }) {
-                    warnings.append("\(holeLabel): missing fairway polygon")
-                }
-
-                if !holeFeatures.contains(where: { $0.type == .tee }) {
-                    warnings.append("\(holeLabel): missing tee polygon")
-                }
-
-                if hole.centerline.isEmpty {
-                    warnings.append("\(holeLabel): missing centerline")
-                }
-
-                // Check that every tee name in yardages has a tee assignment
-                for teeName in hole.yardages.keys {
-                    if hole.tees[teeName] == nil {
-                        warnings.append("\(holeLabel): tee \"\(teeName)\" has yardage but no polygon assigned")
-                    }
-                }
-
-                // Check that tee assignments point to valid features
-                for (teeName, featureID) in hole.tees {
-                    if course.findFeature(id: featureID) == nil {
-                        warnings.append("\(holeLabel): tee \"\(teeName)\" references missing feature #\(featureID)")
-                    }
-                }
-
-                // Check for stale feature references
-                for featureID in hole.features {
-                    if course.findFeature(id: featureID) == nil {
-                        warnings.append("\(holeLabel): references missing feature #\(featureID)")
-                    }
-                }
-            }
-            holeOffset += subCourse.holes.count
-        }
-
-        // Check for unassigned features at the course level
-        let allAssignedIDs = Set(course.subCourses.flatMap(\.holes).flatMap(\.features))
-        let unassigned = course.features.filter { !allAssignedIDs.contains($0.id) }
-        if !unassigned.isEmpty {
-            let ids = unassigned.map { "#\($0.id)" }.joined(separator: ", ")
-            warnings.append("\(unassigned.count) unassigned feature(s): \(ids)")
-        }
-
-        return warnings
     }
 
     private func writeExport(to url: URL) {
@@ -321,6 +265,7 @@ struct ScorecardView: View {
 struct ExportWarningsSheet: View {
     let warnings: [String]
     let onCancel: () -> Void
+    let onCleanup: () -> Void
     let onExportAnyway: () -> Void
 
     var body: some View {
@@ -342,11 +287,47 @@ struct ExportWarningsSheet: View {
                 Spacer()
                 Button("Cancel", role: .cancel, action: onCancel)
                     .keyboardShortcut(.cancelAction)
+                Button("Cleanup", action: onCleanup)
                 Button("Export Anyway", action: onExportAnyway)
             }
         }
         .padding()
         .frame(width: 450)
+    }
+}
+
+// MARK: - CleanupResultsSheet
+
+struct CleanupResultsSheet: View {
+    let actions: [String]
+    let onDismiss: () -> Void
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 12) {
+            Text("Cleanup Complete")
+                .font(.headline)
+
+            if actions.isEmpty {
+                Text("No cleanup was needed.")
+                    .foregroundStyle(.secondary)
+            } else {
+                Text("The following cleanup actions were performed:")
+                    .foregroundStyle(.secondary)
+
+                List(Array(actions.enumerated()), id: \.offset) { _, action in
+                    Text(action)
+                }
+                .frame(height: 280)
+            }
+
+            HStack {
+                Spacer()
+                Button("Done", action: onDismiss)
+                    .keyboardShortcut(.defaultAction)
+            }
+        }
+        .padding()
+        .frame(width: 500)
     }
 }
 

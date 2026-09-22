@@ -1,4 +1,5 @@
 import Foundation
+import CourseDataSwift
 
 struct ScorecardData {
     var holes: [Hole]

@@ -10,8 +10,9 @@ settings:
   base:
     SWIFT_VERSION: "5.9"
 packages:
-  CourseData:
-    path: ../CourseData
+  CourseDataSwift:
+    url: https://github.com/SpotGolf/CourseDataSwift
+    exactVersion: 0.1.2
 fileGroups:
   - CLAUDE.md
   - README.md
@@ -34,7 +35,7 @@ targets:
         CURRENT_PROJECT_VERSION: "1"
         INFOPLIST_KEY_NSLocationUsageDescription: "CourseBuilder uses your location for course distance verification"
     dependencies:
-      - package: CourseData
+      - package: CourseDataSwift
     scheme:
       testTargets:
         - CourseBuilderTests

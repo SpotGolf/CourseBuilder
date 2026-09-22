@@ -1,5 +1,6 @@
 import XCTest
 @testable import CourseBuilder
+import CourseDataSwift
 
 final class OSMImporterTests: XCTestCase {
     func testAssociateFeaturesViaCenterlines() {

@@ -1,5 +1,6 @@
 import XCTest
 @testable import CourseBuilder
+import CourseDataSwift
 
 @MainActor
 final class ScorecardImporterTests: XCTestCase {

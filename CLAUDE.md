@@ -10,10 +10,25 @@ CourseBuilder — a macOS SwiftUI desktop app for creating golf course GPS data 
 
 Requires xcodegen (`brew install xcodegen`).
 
+**Always** disable Xcode's sandboxes on every `xcodebuild` and `swift` call: build, test, run, simulator, archive, or anything else.
+
 ```bash
 xcodegen generate
-xcodebuild -scheme CourseBuilder -destination 'platform=macOS' build
-xcodebuild -scheme CourseBuilder -destination 'platform=macOS' test
+xcodebuild -scheme CourseBuilder -destination 'platform=macOS' -IDEPackageSupportDisableManifestSandbox=YES -IDEPackageSupportDisablePluginExecutionSandbox=YES ENABLE_USER_SCRIPT_SANDBOXING=NO build
+```
+
+**Never** run the app tests with `xcodebuild test`. Inside Agent Safehouse the test app hangs for 300 seconds and the run fails with "The test runner hung before establishing connection." Run them with the Xcode MCP tools instead:
+
+1. `mcp__xcode__XcodeListWindows` to get the tab ID of `CourseBuilder.xcodeproj`.
+2. `mcp__xcode__RunAllTests` or `mcp__xcode__RunSomeTests` with that tab ID.
+
+The project must be open in Xcode. If the `mcp__xcode__*` tools are missing, register the server with `claude mcp add --transport stdio xcode -- xcrun mcpbridge` and restart the session.
+
+To build the CourseDataSwift library, which is included in this project
+
+```bash
+swift build --disable-sandbox
+swift test --disable-sandbox
 ```
 
 ## Architecture
@@ -31,7 +46,19 @@ Course search (MapKit) -> Scorecard import (API/scraping/OCR) -> Feature detecti
 
 ## Data Model
 
-One JSON file per course. Holes contain: tees (keyed by name), green (front/middle/back), features (bunker/water with front/back). See `plans/2026-03-02-course-data-design.md` for full schema.
+One JSON file per course. The Swift types live in the `CourseDataSwift` package (`../CourseDataSwift/Sources`). That code is the source of truth.
+
+| Type      | Holds                                                                                                                                            |
+|-----------|--------------------------------------------------------------------------------------------------------------------------------------------------|
+| Course    | Name, club name, location, tee list (name and color), features, sub-courses                                                                      |
+| Feature   | ID, type (`fairway`, `green`, `tee`, `bunker`, `water`, `rough`), and a polygon (list of points)                                                 |
+| SubCourse | A group of holes (e.g. "Front", "Back") with rating, slope, yards, and par for each tee                                                          |
+| Hole      | Number, par, handicaps, yardage for each tee, the IDs of its features, its tee boxes (tee name -> feature ID), and a centerline (list of points) |
+| Point     | `[latitude, longitude, elevation]`                                                                                                               |
+
+- Elevation is in meters above sea level. It comes from USGS and is optional: `[latitude, longitude]` is also valid.
+- Features are stored once on the course. Holes point to them by ID.
+- The front, middle, and back of a feature are not stored. They are worked out from the polygon and the hole's centerline.
 
 ## Git
 

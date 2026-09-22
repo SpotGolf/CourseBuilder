@@ -1,5 +1,6 @@
 import AppKit
 import Foundation
+import CourseDataSwift
 
 @MainActor
 class ScorecardImporter: ObservableObject {

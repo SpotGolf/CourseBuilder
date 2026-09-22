@@ -1,5 +1,6 @@
 import Foundation
 import os
+import CourseDataSwift
 
 private let logger = Logger(subsystem: "golf.spot.CourseBuilder", category: "GolfCourseAPI")
 
@@ -39,7 +40,7 @@ actor GolfCourseAPIClient {
     }
 
     struct CourseSearchResult: Codable, Hashable {
-        let id: Int
+        let id: String
         let clubName: String
         let courseName: String
         let location: APILocation
@@ -79,7 +80,7 @@ actor GolfCourseAPIClient {
     }
 
     struct CourseDetail: Codable {
-        let id: Int?
+        let id: String?
         let courseName: String
         let clubName: String
         let location: APILocation
@@ -166,7 +167,7 @@ actor GolfCourseAPIClient {
         }
     }
 
-    func fetchCourse(id: Int) async throws -> CourseDetail {
+    func fetchCourse(id: String) async throws -> CourseDetail {
         guard let url = URLComponents(url: baseURL.appendingPathComponent("courses/\(id)"), resolvingAgainstBaseURL: false)?.url else {
             throw APIError.invalidURL
         }
@@ -223,7 +224,7 @@ actor GolfCourseAPIClient {
         var allTeeDefinitions: [String: TeeDefinition] = [:]
         var allSubCourses: [SubCourse] = []
         var seenSubCourseNames: Set<String> = []
-        var golfCourseAPIIds: [Int] = []
+        var golfCourseAPIIds: [String] = []
 
         for detail in details {
             if let detailId = detail.id {

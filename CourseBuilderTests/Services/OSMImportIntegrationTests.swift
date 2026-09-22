@@ -1,5 +1,6 @@
 import XCTest
 @testable import CourseBuilder
+import CourseDataSwift
 
 /// Integration tests that hit real APIs (GolfCourseAPI + Overpass).
 /// These require a GolfCourseAPI key set in the GOLF_COURSE_API_KEY environment variable.

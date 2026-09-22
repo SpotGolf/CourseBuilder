@@ -1,5 +1,6 @@
 import Foundation
 import os
+import CourseDataSwift
 
 private let logger = Logger(subsystem: "golf.spot.CourseBuilder", category: "OverpassAPI")
 

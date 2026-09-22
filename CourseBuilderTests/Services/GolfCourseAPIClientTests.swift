@@ -1,5 +1,6 @@
 import XCTest
 @testable import CourseBuilder
+import CourseDataSwift
 
 private func loadAPIKey() throws -> String {
     // #filePath gives us the real filesystem path, bypassing sandbox remapping
@@ -24,7 +25,7 @@ final class GolfCourseAPIClientTests: XCTestCase {
         {
             "courses": [
                 {
-                    "id": 12345,
+                    "id": "3cvjz0r9",
                     "club_name": "The Broadlands Golf Club",
                     "course_name": "Broadlands Golf Course",
                     "location": {
@@ -42,6 +43,7 @@ final class GolfCourseAPIClientTests: XCTestCase {
 
         let response = try JSONDecoder().decode(GolfCourseAPIClient.SearchResponse.self, from: json)
         XCTAssertEqual(response.courses.count, 1)
+        XCTAssertEqual(response.courses[0].id, "3cvjz0r9")
         XCTAssertEqual(response.courses[0].courseName, "Broadlands Golf Course")
         XCTAssertEqual(response.courses[0].location.city, "Broomfield")
     }
@@ -49,7 +51,7 @@ final class GolfCourseAPIClientTests: XCTestCase {
     func testParseCourseDetailResponse() throws {
         let json = """
         {
-            "id": 12345,
+            "id": "3cvjz0r9",
             "course_name": "Broadlands Golf Course",
             "club_name": "The Broadlands Golf Club",
             "location": {
@@ -103,7 +105,7 @@ final class GolfCourseAPIClientTests: XCTestCase {
 
         XCTAssertEqual(course.name, "Broadlands Golf Course")
         XCTAssertEqual(course.clubName, "The Broadlands Golf Club")
-        XCTAssertEqual(course.golfCourseAPIIds, [12345])
+        XCTAssertEqual(course.golfCourseAPIIds, ["3cvjz0r9"])
         XCTAssertEqual(course.location.city, "Broomfield")
         XCTAssertEqual(course.tees.count, 2)
 
@@ -173,7 +175,7 @@ final class GolfCourseAPIClientTests: XCTestCase {
     func testExtractSubCourseNamesWithSlash() throws {
         let json = """
         {
-            "id": 1,
+            "id": "7k2m9qb4",
             "course_name": "Vista/Canyon",
             "club_name": "Test Club",
             "location": { "address": "", "city": "Denver", "state": "CO", "country": "US", "zip_code": "" },
@@ -205,10 +207,10 @@ final class GolfCourseAPIClientTests: XCTestCase {
     }
 
     func testConvertToCourseMultipleDetails() throws {
-        let makeDetail: (Int, String) -> GolfCourseAPIClient.CourseDetail = { id, name in
+        let makeDetail: (String, String) -> GolfCourseAPIClient.CourseDetail = { id, name in
             let json = """
             {
-                "id": \(id),
+                "id": "\(id)",
                 "course_name": "\(name)",
                 "club_name": "Test Club",
                 "location": { "address": "", "city": "Denver", "state": "CO", "country": "US", "zip_code": "" },
@@ -231,10 +233,10 @@ final class GolfCourseAPIClientTests: XCTestCase {
             return try! JSONDecoder().decode(GolfCourseAPIClient.CourseDetail.self, from: json)
         }
 
-        let details = [makeDetail(1, "Front Nine"), makeDetail(2, "Back Nine")]
+        let details = [makeDetail("7k2m9qb1", "Front Nine"), makeDetail("7k2m9qb2", "Back Nine")]
         let course = try GolfCourseAPIClient.convertToCourse(details: details)
 
-        XCTAssertEqual(course.golfCourseAPIIds, [1, 2])
+        XCTAssertEqual(course.golfCourseAPIIds, ["7k2m9qb1", "7k2m9qb2"])
         XCTAssertFalse(course.subCourses.isEmpty)
     }
 
@@ -242,7 +244,7 @@ final class GolfCourseAPIClientTests: XCTestCase {
         // Create a course with three male tees where the shortest tee appears first
         let json = """
         {
-            "id": 99,
+            "id": "7k2m9qb9",
             "course_name": "Sort Test Course",
             "club_name": "Sort Test Club",
             "location": { "address": "", "city": "Denver", "state": "CO", "country": "US", "zip_code": "" },

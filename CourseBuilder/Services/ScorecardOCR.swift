@@ -1,5 +1,6 @@
 import AppKit
 import Vision
+import CourseDataSwift
 
 enum ScorecardOCR {
 

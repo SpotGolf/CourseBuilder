@@ -54,7 +54,3 @@ Or open `CourseBuilder.xcodeproj` in Xcode after running `xcodegen generate`.
 ## Downloads
 
 Pre-built releases are available on the [Releases](https://github.com/SpotGolf/CourseBuilder/releases) page.
-
-## License
-
-Copyright SpotGolf. All rights reserved.

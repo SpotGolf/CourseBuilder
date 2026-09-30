@@ -168,20 +168,26 @@ struct AddCourseSheet: View {
 
     var body: some View {
         VStack(spacing: 0) {
-            TabView(selection: $selectedTab) {
-                searchTab
-                    .tabItem { Label("Search", systemImage: "magnifyingglass") }
-                    .tag(Tab.search)
-
-                manualEntryTab
-                    .tabItem { Label("Manual Entry", systemImage: "square.and.pencil") }
-                    .tag(Tab.manualEntry)
-
-                importTab
-                    .tabItem { Label("Import", systemImage: "square.and.arrow.down") }
-                    .tag(Tab.importFile)
+            Picker("Add Method", selection: $selectedTab) {
+                Text("Search").tag(Tab.search)
+                Text("Manual Entry").tag(Tab.manualEntry)
+                Text("Import").tag(Tab.importFile)
             }
-            .padding(.top, 8)
+            .pickerStyle(.segmented)
+            .labelsHidden()
+            .padding(.top, 16)
+            .padding(.horizontal)
+
+            Group {
+                switch selectedTab {
+                case .search:
+                    searchTab
+                case .manualEntry:
+                    manualEntryTab
+                case .importFile:
+                    importTab
+                }
+            }
             .frame(width: 450, height: 370)
 
             Divider()

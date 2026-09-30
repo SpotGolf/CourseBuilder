@@ -513,6 +513,13 @@ struct MapEditorView: View {
 
             Spacer()
 
+            // Guess tees button
+            Button("Guess Tees") {
+                guessTeesForCurrentHole()
+            }
+            .disabled(currentHole == nil || isMappingMode)
+            .help("Re-guess which tee box each tee plays from, using the centerline")
+
             // Import OSM button
             Button {
                 Task { await importFromOSM() }
@@ -1304,13 +1311,15 @@ struct MapEditorView: View {
                 clearStatusAfterDelay()
                 return
             }
-            if selectedSubCourseIndex < course.subCourses.count,
-               selectedHoleIndex < course.subCourses[selectedSubCourseIndex].holes.count {
-                course.subCourses[selectedSubCourseIndex].holes[selectedHoleIndex].centerline = drawingVertices
-            }
+            let vertices = drawingVertices
+            let subCourseIndex = selectedSubCourseIndex
+            let holeIndex = selectedHoleIndex
             drawingVertices = []
-            statusMessage = "Centerline set for hole \(currentHole?.number ?? 0)"
-            clearStatusAfterDelay()
+            guard subCourseIndex < course.subCourses.count,
+                  holeIndex < course.subCourses[subCourseIndex].holes.count else { return }
+            course.subCourses[subCourseIndex].holes[holeIndex].centerline = vertices
+            statusMessage = "Updating centerline elevations..."
+            Task { await updateCenterlineElevations(for: vertices, subCourseIndex: subCourseIndex, holeIndex: holeIndex) }
 
         case .select:
             break
@@ -1390,10 +1399,45 @@ struct MapEditorView: View {
               vertexIndex < course.subCourses[selectedSubCourseIndex].holes[selectedHoleIndex].centerline.count else { return }
         let degreesPerPixelLat = region.span.latitudeDelta / mapViewSize.height
         let degreesPerPixelLng = region.span.longitudeDelta / mapViewSize.width
-        course.subCourses[selectedSubCourseIndex].holes[selectedHoleIndex].centerline[vertexIndex].latitude -= translation.height * degreesPerPixelLat
-        course.subCourses[selectedSubCourseIndex].holes[selectedHoleIndex].centerline[vertexIndex].longitude += translation.width * degreesPerPixelLng
+        let subCourseIndex = selectedSubCourseIndex
+        let holeIndex = selectedHoleIndex
+        var movedCoordinate = course.subCourses[subCourseIndex].holes[holeIndex].centerline[vertexIndex]
+        movedCoordinate.latitude -= translation.height * degreesPerPixelLat
+        movedCoordinate.longitude += translation.width * degreesPerPixelLng
         // The old elevation belongs to the old position.
-        course.subCourses[selectedSubCourseIndex].holes[selectedHoleIndex].centerline[vertexIndex].elevation = nil
+        movedCoordinate.elevation = nil
+        course.subCourses[subCourseIndex].holes[holeIndex].centerline[vertexIndex] = movedCoordinate
+        statusMessage = "Updating point elevation..."
+        Task { await updateCenterlineElevations(for: [movedCoordinate], subCourseIndex: subCourseIndex, holeIndex: holeIndex) }
+    }
+
+    private func updateCenterlineElevations(for coordinates: [Coordinate], subCourseIndex: Int, holeIndex: Int) async {
+        do {
+            let elevations = try await Task.detached(priority: .utility) {
+                try await USGSElevationClient().elevations(for: coordinates)
+            }.value
+            let resolved = elevations.compactMap { $0 }
+            guard elevations.count == coordinates.count, resolved.count == coordinates.count else {
+                throw USGSElevationClient.ElevationError.noData(
+                    missing: coordinates.count - resolved.count,
+                    total: coordinates.count
+                )
+            }
+            for (coordinate, elevation) in zip(coordinates, resolved) {
+                PolygonEditorOperations.applyCenterlineElevation(
+                    elevation,
+                    to: coordinate,
+                    subCourseIndex: subCourseIndex,
+                    holeIndex: holeIndex,
+                    in: &course
+                )
+            }
+            statusMessage = "Updated centerline elevations"
+        } catch {
+            logger.error("Background elevation update failed for centerline: \(error, privacy: .public)")
+            statusMessage = "Centerline elevation update failed: \(error.localizedDescription)"
+        }
+        clearStatusAfterDelay()
     }
 
     // MARK: - Delete Handling
@@ -1481,6 +1525,27 @@ struct MapEditorView: View {
               selectedHoleIndex < course.subCourses[selectedSubCourseIndex].holes.count
         else { return }
         course.subCourses[selectedSubCourseIndex].holes[selectedHoleIndex].features.removeAll { $0 == id }
+    }
+
+    private func guessTeesForCurrentHole() {
+        guard selectedSubCourseIndex < course.subCourses.count,
+              selectedHoleIndex < course.subCourses[selectedSubCourseIndex].holes.count
+        else { return }
+        let hole = course.subCourses[selectedSubCourseIndex].holes[selectedHoleIndex]
+        if hole.yardages.isEmpty {
+            statusMessage = "Hole \(hole.number) has no yardages"
+        } else if hole.centerline.count < 2 {
+            statusMessage = "Hole \(hole.number) needs a centerline"
+        } else {
+            let tees = TeeGuesser.guessTees(for: hole, features: course.features)
+            if tees.isEmpty {
+                statusMessage = "Hole \(hole.number) has no tee boxes"
+            } else {
+                course.subCourses[selectedSubCourseIndex].holes[selectedHoleIndex].tees = tees
+                statusMessage = "Guessed \(tees.count) tees for hole \(hole.number)"
+            }
+        }
+        clearStatusAfterDelay()
     }
 
     private func associateFeature(id: Int) {

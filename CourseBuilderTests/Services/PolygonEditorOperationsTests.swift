@@ -90,6 +90,46 @@ struct PolygonEditorOperationsTests {
         #expect(course.features[0].polygon[0] == newLocation)
     }
 
+    @Test func centerlineElevationAppliesOnlyToMatchingUnresolvedPoints() {
+        let target = Coordinate(latitude: 1, longitude: 2)
+        let resolved = Coordinate(latitude: 5, longitude: 6, elevation: 10)
+        var course = makeCourse(features: [])
+        course.subCourses[0].holes[1].centerline = [target, resolved]
+
+        let applied = PolygonEditorOperations.applyCenterlineElevation(
+            123.45, to: target, subCourseIndex: 0, holeIndex: 1, in: &course
+        )
+
+        #expect(applied)
+        #expect(course.subCourses[0].holes[1].centerline[0].elevation == 123.45)
+        #expect(course.subCourses[0].holes[1].centerline[1].elevation == 10)
+        #expect(course.subCourses[0].holes[0].centerline.isEmpty)
+    }
+
+    @Test func staleCenterlineElevationDoesNotOverwritePointMovedAgain() {
+        let oldLocation = Coordinate(latitude: 1, longitude: 2)
+        let newLocation = Coordinate(latitude: 3, longitude: 4)
+        var course = makeCourse(features: [])
+        course.subCourses[0].holes[0].centerline = [newLocation]
+
+        let applied = PolygonEditorOperations.applyCenterlineElevation(
+            123.45, to: oldLocation, subCourseIndex: 0, holeIndex: 0, in: &course
+        )
+
+        #expect(!applied)
+        #expect(course.subCourses[0].holes[0].centerline[0] == newLocation)
+    }
+
+    @Test func centerlineElevationIgnoresInvalidHole() {
+        var course = makeCourse(features: [])
+
+        let applied = PolygonEditorOperations.applyCenterlineElevation(
+            123.45, to: Coordinate(latitude: 1, longitude: 2), subCourseIndex: 0, holeIndex: 5, in: &course
+        )
+
+        #expect(!applied)
+    }
+
     @Test func deleteAndRestorePreservesFeatureAndHoleOrdering() throws {
         let first = Feature(id: 1, type: .tee, polygon: square)
         let deleted = Feature(id: 2, type: .fairway, polygon: square)

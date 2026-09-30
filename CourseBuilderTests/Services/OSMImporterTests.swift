@@ -288,7 +288,8 @@ final class OSMImporterTests: XCTestCase {
 
     func testAssignsTeeNamesWhenCountsMatch() {
         // 3 tee polygons at different distances from the green, 3 tee names with yardages.
-        // Should zip by rank: longest polygon → highest yardage name.
+        // Along the centerline the tee boxes span about 815-968 (far), 508-662 (mid), and
+        // 202-356 (close) yards to the green. Each yardage falls inside one range.
 
         // Green at ~39.784, ~-74.954
         let green = OverpassAPIClient.ParsedFeature(
@@ -358,7 +359,7 @@ final class OSMImporterTests: XCTestCase {
                 SubCourse(name: "Front", holes: [Hole(number: 1, par: 4)])
             ]
         )
-        course.subCourses[0].holes[0].yardages = ["Black": 550, "White": 400, "Red": 250]
+        course.subCourses[0].holes[0].yardages = ["Black": 900, "White": 600, "Red": 300]
 
         OSMImporter.applyParsedResult(parsed, to: &course)
 
@@ -460,14 +461,14 @@ final class OSMImporterTests: XCTestCase {
         XCTAssertEqual(hole.tees.count, 4)
     }
 
-    // MARK: - Yardage Clustering
+    // MARK: - Shared Tee Boxes
 
     func testTeeNameClusteringWithUnequalCounts() {
         // 4 tee names, 2 tee polygons.
-        // Yardages: Black=420, Blue=400, White=310, Red=290
-        // Largest gap is between Blue(400) and White(310) = 90 yards.
-        // Cluster 1: [Black, Blue] → back polygon
-        // Cluster 2: [White, Red] → front polygon
+        // Along the centerline the back tee box spans about 815-1025 yards to the green and
+        // the front tee box spans about 662-872 yards.
+        // Black=950, Blue=900 → back polygon
+        // White=800, Red=700 → front polygon
         let green = OverpassAPIClient.ParsedFeature(
             type: .green,
             polygon: [
@@ -526,7 +527,7 @@ final class OSMImporterTests: XCTestCase {
                 SubCourse(name: "Front", holes: [Hole(number: 1, par: 4)])
             ]
         )
-        course.subCourses[0].holes[0].yardages = ["Black": 420, "Blue": 400, "White": 310, "Red": 290]
+        course.subCourses[0].holes[0].yardages = ["Black": 950, "Blue": 900, "White": 800, "Red": 700]
 
         OSMImporter.applyParsedResult(parsed, to: &course)
 

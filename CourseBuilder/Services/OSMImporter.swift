@@ -230,87 +230,15 @@ enum OSMImporter {
         }
     }
 
-    /// Assign tee names for a single hole using distance-rank zipping or yardage clustering.
+    /// Assign tee names for a single hole by walking the tee boxes along the centerline.
     private static func assignTeeNames(
         slot: (sub: Int, hole: Int, global: Int),
         course: inout Course
     ) {
-        let metersPerYard = 0.9144
         let hole = course.subCourses[slot.sub].holes[slot.hole]
-        guard !hole.yardages.isEmpty else { return }
-
-        let holeFeatures = course.features(for: hole)
-        guard let green = hole.green(from: holeFeatures) else { return }
-        let greenCentroid = green.center
-
-        let teeFeatures = holeFeatures.filter { $0.type == .tee }
-        guard !teeFeatures.isEmpty else { return }
-
-        var teeDistances: [(featureID: Int, yards: Double)] = []
-        for tee in teeFeatures {
-            let distMeters = tee.center.clLocation.distance(from: greenCentroid.clLocation)
-            teeDistances.append((tee.id, distMeters / metersPerYard))
+        for (name, featureID) in TeeGuesser.guessTees(for: hole, features: course.features) {
+            course.subCourses[slot.sub].holes[slot.hole].tees[name] = featureID
         }
-
-        teeDistances.sort { $0.yards > $1.yards }
-        let sortedYardages = hole.yardages.sorted { $0.value > $1.value }
-
-        if teeDistances.count == sortedYardages.count {
-            for (tee, entry) in zip(teeDistances, sortedYardages) {
-                course.subCourses[slot.sub].holes[slot.hole].tees[entry.key] = tee.featureID
-            }
-        } else if teeDistances.count < sortedYardages.count {
-            let clusters = clusterYardages(sortedYardages, into: teeDistances.count)
-            for (i, cluster) in clusters.enumerated() {
-                for (name, _) in cluster {
-                    course.subCourses[slot.sub].holes[slot.hole].tees[name] = teeDistances[i].featureID
-                }
-            }
-        } else {
-            for (name, yards) in sortedYardages {
-                var bestFeatureID: Int?
-                var bestDiff = Double.greatestFiniteMagnitude
-                for tee in teeDistances {
-                    let diff = abs(tee.yards - Double(yards))
-                    if diff < bestDiff {
-                        bestDiff = diff
-                        bestFeatureID = tee.featureID
-                    }
-                }
-                if let featureID = bestFeatureID {
-                    course.subCourses[slot.sub].holes[slot.hole].tees[name] = featureID
-                }
-            }
-        }
-    }
-
-    /// Cluster a sorted (descending) array of yardage entries into `n` groups by splitting
-    /// at the largest gaps between consecutive yardages.
-    private static func clusterYardages(
-        _ sortedYardages: [(key: String, value: Int)],
-        into n: Int
-    ) -> [[(key: String, value: Int)]] {
-        guard n > 0, !sortedYardages.isEmpty else { return [] }
-        guard n < sortedYardages.count else {
-            return sortedYardages.map { [$0] }
-        }
-
-        var gaps: [(index: Int, gap: Int)] = []
-        for i in 0..<(sortedYardages.count - 1) {
-            let gap = sortedYardages[i].value - sortedYardages[i + 1].value
-            gaps.append((i, gap))
-        }
-        gaps.sort { $0.gap > $1.gap }
-        let splitIndices = gaps.prefix(n - 1).map(\.index).sorted()
-
-        var clusters: [[(key: String, value: Int)]] = []
-        var start = 0
-        for splitIndex in splitIndices {
-            clusters.append(Array(sortedYardages[start...(splitIndex)]))
-            start = splitIndex + 1
-        }
-        clusters.append(Array(sortedYardages[start...]))
-        return clusters
     }
 
     /// Returns true if `point` is not behind the centerline's start.

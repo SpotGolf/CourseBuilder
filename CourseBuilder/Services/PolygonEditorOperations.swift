@@ -67,6 +67,29 @@ enum PolygonEditorOperations {
         return true
     }
 
+    /// Sets the elevation on every centerline point of the hole that is at `coordinate` and has
+    /// no elevation yet. Returns false if no such point exists, for example because it was moved again.
+    @discardableResult
+    static func applyCenterlineElevation(
+        _ elevation: Double,
+        to coordinate: Coordinate,
+        subCourseIndex: Int,
+        holeIndex: Int,
+        in course: inout Course
+    ) -> Bool {
+        guard subCourseIndex < course.subCourses.count,
+              holeIndex < course.subCourses[subCourseIndex].holes.count else { return false }
+        var applied = false
+        for index in course.subCourses[subCourseIndex].holes[holeIndex].centerline.indices {
+            let point = course.subCourses[subCourseIndex].holes[holeIndex].centerline[index]
+            if point.latitude == coordinate.latitude && point.longitude == coordinate.longitude && point.elevation == nil {
+                course.subCourses[subCourseIndex].holes[holeIndex].centerline[index].elevation = elevation
+                applied = true
+            }
+        }
+        return applied
+    }
+
     static func deleteFeature(id: Int, from course: inout Course) -> DeletedFeatureRecord? {
         guard let featureIndex = course.features.firstIndex(where: { $0.id == id }) else { return nil }
         let feature = course.features[featureIndex]

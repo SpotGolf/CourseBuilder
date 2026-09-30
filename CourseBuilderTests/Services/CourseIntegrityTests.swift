@@ -127,6 +127,113 @@ struct CourseIntegrityTests {
         #expect(course.subCourses[0].holes[0].tees.isEmpty)
     }
 
+    @Test func validationReportsComboTeeProblems() {
+        var course = comboCourse()
+        course.comboTees.append(ComboTeeDefinition(name: "Gold/Blue", tees: ["Gold", "Blue"]))
+        course.subCourses[0].holes[0].comboTees = ["Blue/White": "White", "Gold/Blue": "Red", "Old": "Blue"]
+        course.subCourses[0].holes[0].tees = ["Blue": 1]
+
+        let warnings = CourseIntegrity.validateCourse(course)
+
+        #expect(warnings.contains("Hole 1: combo tee \"Blue/White\" plays from \"White\", which has no polygon assigned"))
+        #expect(warnings.contains("Hole 1: combo tee \"Gold/Blue\" plays from \"Red\", which is not part of the combo"))
+        #expect(warnings.contains("Hole 1: references undefined combo tee \"Old\""))
+        #expect(warnings.contains("Combo tee \"Gold/Blue\" uses undefined tee \"Gold\""))
+
+        course.subCourses[0].holes[0].comboTees = [:]
+        #expect(CourseIntegrity.validateCourse(course).contains("Hole 1: combo tee \"Blue/White\" has no tee picked"))
+    }
+
+    @Test func validationAcceptsValidComboTee() {
+        var course = comboCourse()
+        course.subCourses[0].holes[0].tees = ["Blue": 1, "White": 1]
+
+        let warnings = CourseIntegrity.validateCourse(course)
+
+        #expect(!warnings.contains { $0.localizedCaseInsensitiveContains("combo") })
+    }
+
+    @Test func cleanupRemovesDanglingComboTeeData() {
+        var course = comboCourse()
+        course.comboTees.append(ComboTeeDefinition(name: "Gold/Blue", tees: ["Gold", "Blue"]))
+        course.subCourses[0].comboTees["Gold/Blue"] = SubCourseTee()
+        course.subCourses[0].holes[0].comboTees = ["Blue/White": "Red", "Gold/Blue": "Blue"]
+
+        let report = CourseIntegrity.cleanup(&course)
+
+        #expect(course.comboTees == [ComboTeeDefinition(name: "Blue/White", tees: ["Blue", "White"])])
+        #expect(course.subCourses[0].comboTees.keys.sorted() == ["Blue/White"])
+        #expect(course.subCourses[0].holes[0].comboTees.isEmpty)
+        #expect(report.removedComboTees == 4)
+        #expect(report.actions.contains("Removed combo tee \"Gold/Blue\" because it uses an undefined tee"))
+        #expect(report.actions.contains("Hole 1: removed combo tee \"Blue/White\" assignment to \"Red\", which is not part of the combo"))
+    }
+
+    @Test func cleanupKeepsValidComboTees() {
+        var course = comboCourse()
+        let original = course
+
+        let report = CourseIntegrity.cleanup(&course)
+
+        #expect(course == original)
+        #expect(report.removedComboTees == 0)
+    }
+
+    @Test func renameTeeUpdatesComboTees() {
+        var course = comboCourse()
+
+        #expect(CourseIntegrity.renameTee(at: 1, to: "Silver", in: &course))
+
+        #expect(course.comboTees == [ComboTeeDefinition(name: "Blue/White", tees: ["Blue", "Silver"])])
+        #expect(course.subCourses[0].holes[0].comboTees == ["Blue/White": "Silver"])
+    }
+
+    @Test func renameTeeRejectsComboTeeName() {
+        var course = comboCourse()
+        let original = course
+
+        #expect(!CourseIntegrity.renameTee(at: 1, to: "Blue/White", in: &course))
+        #expect(course == original)
+    }
+
+    @Test func removeTeeRemovesComboTeesThatUseIt() {
+        var course = comboCourse()
+
+        CourseIntegrity.removeTee(at: 1, from: &course)
+
+        #expect(course.tees.map(\.name) == ["Blue"])
+        #expect(course.comboTees.isEmpty)
+        #expect(course.subCourses[0].comboTees.isEmpty)
+        #expect(course.subCourses[0].holes[0].comboTees.isEmpty)
+    }
+
+    @Test func usageCountsTeeBoxesAndComboTees() {
+        var course = comboCourse()
+        course.subCourses[0].holes.append(Hole(number: 2, par: 3))
+        course.subCourses[0].holes[0].tees = ["White": 1]
+
+        #expect(CourseIntegrity.usage(ofTeeNamed: "White", in: course) == .init(holesWithTeeBox: 1, comboTees: ["Blue/White"]))
+        #expect(CourseIntegrity.usage(ofTeeNamed: "Blue", in: course) == .init(holesWithTeeBox: 0, comboTees: ["Blue/White"]))
+        #expect(CourseIntegrity.usage(ofTeeNamed: "White", in: course).isInUse)
+
+        course.comboTees = []
+        course.subCourses[0].holes[0].tees = [:]
+        #expect(!CourseIntegrity.usage(ofTeeNamed: "White", in: course).isInUse)
+    }
+
+    /// Blue and White tees, and a Blue/White combo tee where hole 1 plays from White.
+    private func comboCourse() -> Course {
+        var course = makeCourse(features: [])
+        course.tees = [
+            TeeDefinition(name: "Blue", color: "#0000FF"),
+            TeeDefinition(name: "White", color: "#FFFFFF"),
+        ]
+        course.comboTees = [ComboTeeDefinition(name: "Blue/White", tees: ["Blue", "White"])]
+        course.subCourses[0].comboTees = ["Blue/White": SubCourseTee(male: TeeInformation(rating: 35, slope: 125))]
+        course.subCourses[0].holes[0].comboTees = ["Blue/White": "White"]
+        return course
+    }
+
     private func makeCourse(features: [Feature]) -> Course {
         Course(
             name: "Test Course",

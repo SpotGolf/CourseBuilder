@@ -9,6 +9,8 @@ import CourseDataSwift
 /// get no tee box. They must be assigned, deleted, or marked as combo tees by hand.
 /// Sub-courses and holes are matched by position so renamed sub-courses still line up. Nothing is
 /// removed: tees, sub-courses, and holes that the fetched course does not have are left as they are.
+/// Fetched tees that are combo tees in the course stay combo tees: their ratings and slopes update
+/// the sub-course combo tees, and their yardages are dropped.
 enum CourseInfoUpdater {
     static func merge(_ existing: Course, with fetched: Course) -> Course {
         var course = existing
@@ -19,20 +21,33 @@ enum CourseInfoUpdater {
         course.location.state = fetched.location.state
         course.location.country = fetched.location.country
 
+        let comboNames = Set(existing.comboTees.map(\.name))
         let existingColors = Dictionary(existing.tees.map { ($0.name, $0.color) }, uniquingKeysWith: { first, _ in first })
         let fetchedNames = Set(fetched.tees.map(\.name))
-        course.tees = fetched.tees.map { tee in
+        course.tees = fetched.tees.filter { !comboNames.contains($0.name) }.map { tee in
             TeeDefinition(name: tee.name, color: existingColors[tee.name] ?? tee.color)
         } + existing.tees.filter { !fetchedNames.contains($0.name) }
 
         for (subCourseIndex, fetchedSubCourse) in fetched.subCourses.enumerated() {
+            let fetchedTees = fetchedSubCourse.tees.filter { !comboNames.contains($0.key) }
+            let fetchedComboTees = fetchedSubCourse.tees.filter { comboNames.contains($0.key) }
+            let fetchedHoles = fetchedSubCourse.holes.map { hole in
+                var hole = hole
+                hole.yardages = hole.yardages.filter { !comboNames.contains($0.key) }
+                return hole
+            }
             guard subCourseIndex < course.subCourses.count else {
-                course.subCourses.append(fetchedSubCourse)
+                var subCourse = fetchedSubCourse
+                subCourse.tees = fetchedTees
+                subCourse.comboTees = fetchedComboTees
+                subCourse.holes = fetchedHoles
+                course.subCourses.append(subCourse)
                 continue
             }
-            course.subCourses[subCourseIndex].tees.merge(fetchedSubCourse.tees) { _, new in new }
+            course.subCourses[subCourseIndex].tees.merge(fetchedTees) { _, new in new }
+            course.subCourses[subCourseIndex].comboTees.merge(fetchedComboTees) { _, new in new }
 
-            for (holeIndex, fetchedHole) in fetchedSubCourse.holes.enumerated() {
+            for (holeIndex, fetchedHole) in fetchedHoles.enumerated() {
                 guard holeIndex < course.subCourses[subCourseIndex].holes.count else {
                     course.subCourses[subCourseIndex].holes.append(fetchedHole)
                     continue

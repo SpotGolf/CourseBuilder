@@ -23,6 +23,7 @@ struct CourseIntegrity {
         let removedTeeAssignments: Int
         let removedYardages: Int
         let removedSubCourseTees: Int
+        let removedComboTees: Int
         let actions: [String]
 
         init(
@@ -30,12 +31,14 @@ struct CourseIntegrity {
             removedTeeAssignments: Int,
             removedYardages: Int = 0,
             removedSubCourseTees: Int = 0,
+            removedComboTees: Int = 0,
             actions: [String] = []
         ) {
             self.removedFeatureReferences = removedFeatureReferences
             self.removedTeeAssignments = removedTeeAssignments
             self.removedYardages = removedYardages
             self.removedSubCourseTees = removedSubCourseTees
+            self.removedComboTees = removedComboTees
             self.actions = actions
         }
 
@@ -80,8 +83,31 @@ struct CourseIntegrity {
                 for featureID in hole.features where course.findFeature(id: featureID) == nil {
                     warnings.append("\(holeLabel): references missing feature #\(featureID)")
                 }
+
+                for combo in course.comboTees {
+                    guard let teeName = hole.comboTees[combo.name] else {
+                        warnings.append("\(holeLabel): combo tee \"\(combo.name)\" has no tee picked")
+                        continue
+                    }
+                    if !combo.tees.contains(teeName) {
+                        warnings.append("\(holeLabel): combo tee \"\(combo.name)\" plays from \"\(teeName)\", which is not part of the combo")
+                    } else if hole.tees[teeName] == nil {
+                        warnings.append("\(holeLabel): combo tee \"\(combo.name)\" plays from \"\(teeName)\", which has no polygon assigned")
+                    }
+                }
+
+                for comboName in hole.comboTees.keys.sorted() where !course.comboTees.contains(where: { $0.name == comboName }) {
+                    warnings.append("\(holeLabel): references undefined combo tee \"\(comboName)\"")
+                }
             }
             holeOffset += subCourse.holes.count
+        }
+
+        let teeNames = Set(course.tees.map(\.name))
+        for combo in course.comboTees {
+            for teeName in combo.tees where !teeNames.contains(teeName) {
+                warnings.append("Combo tee \"\(combo.name)\" uses undefined tee \"\(teeName)\"")
+            }
         }
 
         let assignedFeatureIDs = Set(course.subCourses.flatMap(\.holes).flatMap(\.features))
@@ -99,13 +125,26 @@ struct CourseIntegrity {
         let validFeatureIDs = Set(course.features.map(\.id))
         let validTeeNames = Set(course.tees.map(\.name))
         var removedFeatureReferences = 0
+        var removedComboTees = 0
         var removedTeeAssignments = 0
         var removedYardages = 0
         var removedSubCourseTees = 0
         var actions: [String] = []
 
+        for combo in course.comboTees where combo.tees.contains(where: { !validTeeNames.contains($0) }) {
+            course.comboTees.removeAll { $0.name == combo.name }
+            removedComboTees += 1
+            actions.append("Removed combo tee \"\(combo.name)\" because it uses an undefined tee")
+        }
+        let validCombos = Dictionary(course.comboTees.map { ($0.name, $0.tees) }, uniquingKeysWith: { first, _ in first })
+
         for subCourseIndex in course.subCourses.indices {
             let subCourseName = course.subCourses[subCourseIndex].name
+            for comboName in course.subCourses[subCourseIndex].comboTees.keys.sorted() where validCombos[comboName] == nil {
+                course.subCourses[subCourseIndex].comboTees.removeValue(forKey: comboName)
+                removedComboTees += 1
+                actions.append("\(subCourseName): removed metadata for undefined combo tee \"\(comboName)\"")
+            }
             let subCourseTeeNames = course.subCourses[subCourseIndex].tees.keys.sorted()
             for teeName in subCourseTeeNames where !validTeeNames.contains(teeName) {
                 course.subCourses[subCourseIndex].tees.removeValue(forKey: teeName)
@@ -145,6 +184,19 @@ struct CourseIntegrity {
                 course.subCourses[subCourseIndex].holes[holeIndex].tees = teeAssignments.filter {
                     validTeeNames.contains($0.key) && validFeatureIDs.contains($0.value)
                 }
+
+                let comboAssignments = course.subCourses[subCourseIndex].holes[holeIndex].comboTees
+                for comboName in comboAssignments.keys.sorted() {
+                    guard let teeName = comboAssignments[comboName] else { continue }
+                    if let comboTees = validCombos[comboName] {
+                        guard !comboTees.contains(teeName) else { continue }
+                        actions.append("Hole \(holeNumber): removed combo tee \"\(comboName)\" assignment to \"\(teeName)\", which is not part of the combo")
+                    } else {
+                        actions.append("Hole \(holeNumber): removed assignment for undefined combo tee \"\(comboName)\"")
+                    }
+                    course.subCourses[subCourseIndex].holes[holeIndex].comboTees.removeValue(forKey: comboName)
+                    removedComboTees += 1
+                }
             }
         }
 
@@ -153,6 +205,7 @@ struct CourseIntegrity {
             removedTeeAssignments: removedTeeAssignments,
             removedYardages: removedYardages,
             removedSubCourseTees: removedSubCourseTees,
+            removedComboTees: removedComboTees,
             actions: actions
         )
     }
@@ -168,11 +221,15 @@ struct CourseIntegrity {
         let oldName = course.tees[index].name
         guard newName != oldName else { return true }
         guard !newName.isEmpty,
-              !course.tees.enumerated().contains(where: { $0.offset != index && $0.element.name == newName }) else {
+              !course.tees.enumerated().contains(where: { $0.offset != index && $0.element.name == newName }),
+              !course.comboTees.contains(where: { $0.name == newName }) else {
             return false
         }
 
         course.tees[index].name = newName
+        for comboIndex in course.comboTees.indices {
+            course.comboTees[comboIndex].tees = course.comboTees[comboIndex].tees.map { $0 == oldName ? newName : $0 }
+        }
         for subCourseIndex in course.subCourses.indices {
             moveValue(from: oldName, to: newName, in: &course.subCourses[subCourseIndex].tees)
             for holeIndex in course.subCourses[subCourseIndex].holes.indices {
@@ -186,14 +243,37 @@ struct CourseIntegrity {
                     to: newName,
                     in: &course.subCourses[subCourseIndex].holes[holeIndex].tees
                 )
+                course.subCourses[subCourseIndex].holes[holeIndex].comboTees =
+                    course.subCourses[subCourseIndex].holes[holeIndex].comboTees.mapValues { $0 == oldName ? newName : $0 }
             }
         }
         return true
     }
 
+    /// What uses a tee: the number of holes with a tee box assigned to it and the combo tees made from it.
+    struct TeeUsage: Equatable {
+        let holesWithTeeBox: Int
+        let comboTees: [String]
+
+        var isInUse: Bool {
+            holesWithTeeBox > 0 || !comboTees.isEmpty
+        }
+    }
+
+    static func usage(ofTeeNamed teeName: String, in course: Course) -> TeeUsage {
+        TeeUsage(
+            holesWithTeeBox: course.subCourses.flatMap(\.holes).filter { $0.tees[teeName] != nil }.count,
+            comboTees: course.comboTees.filter { $0.tees.contains(teeName) }.map(\.name)
+        )
+    }
+
     static func removeTee(at index: Int, from course: inout Course) {
         guard course.tees.indices.contains(index) else { return }
         let teeName = course.tees.remove(at: index).name
+        // A combo tee cannot be played without all of its tees.
+        for combo in course.comboTees where combo.tees.contains(teeName) {
+            ComboTeeBuilder.delete(comboNamed: combo.name, from: &course)
+        }
         for subCourseIndex in course.subCourses.indices {
             course.subCourses[subCourseIndex].tees.removeValue(forKey: teeName)
             for holeIndex in course.subCourses[subCourseIndex].holes.indices {

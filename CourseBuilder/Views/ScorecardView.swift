@@ -11,6 +11,8 @@ struct ScorecardView: View {
     @State private var cleanupActions: [String]?
     @State private var showUpdateInfoConfirmation = false
     @State private var isUpdatingInfo = false
+    @State private var comboTeeName: String?
+    @State private var teeToDelete: String?
     @AppStorage("golfCourseAPIKey") private var apiKey: String = ""
     @Environment(\.openWindow) private var openWindow
 
@@ -87,60 +89,93 @@ struct ScorecardView: View {
                     }
                 }
 
-                // Tee definitions
-                HStack {
-                    Text("Tees").font(.caption).foregroundStyle(.secondary)
-                    Button(action: {
-                        course.tees.append(TeeDefinition(name: "", color: "#FFFFFF"))
-                    }) {
-                        Image(systemName: "plus")
+                // Tee definitions, with combo tees to the right
+                HStack(alignment: .top, spacing: 32) {
+                    VStack(alignment: .leading, spacing: 8) {
+                        HStack {
+                            Text("Tees").font(.caption).foregroundStyle(.secondary)
+                            Button(action: {
+                                course.tees.append(TeeDefinition(name: "", color: "#FFFFFF"))
+                            }) {
+                                Image(systemName: "plus")
+                            }
+                            .buttonStyle(.borderless)
+                        }
+
+                        ForEach(course.tees.indices, id: \.self) { index in
+                            HStack(spacing: 8) {
+                                Button {
+                                    guard index > 0 else { return }
+                                    course.tees.swapAt(index, index - 1)
+                                } label: {
+                                    Image(systemName: "chevron.up")
+                                }
+                                .buttonStyle(.borderless)
+                                .disabled(index == 0)
+
+                                Button {
+                                    guard index < course.tees.count - 1 else { return }
+                                    course.tees.swapAt(index, index + 1)
+                                } label: {
+                                    Image(systemName: "chevron.down")
+                                }
+                                .buttonStyle(.borderless)
+                                .disabled(index == course.tees.count - 1)
+
+                                TextField(
+                                    "Tee Name",
+                                    text: Binding(
+                                        get: { course.tees[index].name },
+                                        set: { CourseIntegrity.renameTee(at: index, to: $0, in: &course) }
+                                    )
+                                )
+                                    .textFieldStyle(.roundedBorder)
+                                    .frame(maxWidth: 150)
+                                ColorPicker(
+                                    "",
+                                    selection: Binding(
+                                        get: { Color(hex: course.tees[index].color) ?? .white },
+                                        set: { course.tees[index].color = $0.hexString }
+                                    )
+                                )
+                                .labelsHidden()
+                                Button("Make combo tee...") {
+                                    comboTeeName = course.tees[index].name
+                                }
+                                .disabled(course.tees.count < 3)
+                                Button(action: {
+                                    let teeName = course.tees[index].name
+                                    if CourseIntegrity.usage(ofTeeNamed: teeName, in: course).isInUse {
+                                        teeToDelete = teeName
+                                    } else {
+                                        CourseIntegrity.removeTee(at: index, from: &course)
+                                    }
+                                }) {
+                                    Image(systemName: "xmark")
+                                }
+                                .buttonStyle(.borderless)
+                            }
+                        }
                     }
-                    .buttonStyle(.borderless)
-                }
 
-                ForEach(course.tees.indices, id: \.self) { index in
-                    HStack(spacing: 8) {
-                        Button {
-                            guard index > 0 else { return }
-                            course.tees.swapAt(index, index - 1)
-                        } label: {
-                            Image(systemName: "chevron.up")
+                    if !course.comboTees.isEmpty {
+                        VStack(alignment: .leading, spacing: 8) {
+                            Text("Combo Tees").font(.caption).foregroundStyle(.secondary)
+                            ForEach(course.comboTees) { combo in
+                                HStack(spacing: 8) {
+                                    Text("\(combo.name): \(combo.tees.joined(separator: " + "))")
+                                    Button("Edit...") {
+                                        comboTeeName = combo.name
+                                    }
+                                    Button(action: {
+                                        ComboTeeBuilder.delete(comboNamed: combo.name, from: &course)
+                                    }) {
+                                        Image(systemName: "xmark")
+                                    }
+                                    .buttonStyle(.borderless)
+                                }
+                            }
                         }
-                        .buttonStyle(.borderless)
-                        .disabled(index == 0)
-
-                        Button {
-                            guard index < course.tees.count - 1 else { return }
-                            course.tees.swapAt(index, index + 1)
-                        } label: {
-                            Image(systemName: "chevron.down")
-                        }
-                        .buttonStyle(.borderless)
-                        .disabled(index == course.tees.count - 1)
-
-                        TextField(
-                            "Tee Name",
-                            text: Binding(
-                                get: { course.tees[index].name },
-                                set: { CourseIntegrity.renameTee(at: index, to: $0, in: &course) }
-                            )
-                        )
-                            .textFieldStyle(.roundedBorder)
-                            .frame(maxWidth: 150)
-                        ColorPicker(
-                            "",
-                            selection: Binding(
-                                get: { Color(hex: course.tees[index].color) ?? .white },
-                                set: { course.tees[index].color = $0.hexString }
-                            )
-                        )
-                        .labelsHidden()
-                        Button(action: {
-                            CourseIntegrity.removeTee(at: index, from: &course)
-                        }) {
-                            Image(systemName: "xmark")
-                        }
-                        .buttonStyle(.borderless)
                     }
                 }
             }
@@ -169,6 +204,38 @@ struct ScorecardView: View {
             Button("Cancel", role: .cancel) {}
         } message: {
             Text("Names, address, tees, ratings, slopes, par, handicaps, and yardages are replaced. Map features, centerlines, and tee box assignments are kept.")
+        }
+        .sheet(
+            isPresented: Binding(
+                get: { comboTeeName != nil },
+                set: { if !$0 { comboTeeName = nil } }
+            )
+        ) {
+            if let comboTeeName {
+                ComboTeeSheet(course: $course, teeName: comboTeeName) {
+                    self.comboTeeName = nil
+                }
+            }
+        }
+        .alert(
+            "Delete tee \"\(teeToDelete ?? "")\"?",
+            isPresented: Binding(
+                get: { teeToDelete != nil },
+                set: { if !$0 { teeToDelete = nil } }
+            ),
+            presenting: teeToDelete
+        ) { teeName in
+            Button("Delete", role: .destructive) {
+                if let index = course.tees.firstIndex(where: { $0.name == teeName }) {
+                    CourseIntegrity.removeTee(at: index, from: &course)
+                }
+                teeToDelete = nil
+            }
+            Button("Cancel", role: .cancel) {
+                teeToDelete = nil
+            }
+        } message: { teeName in
+            Text(teeInUseMessage(for: teeName))
         }
         .fileImporter(isPresented: $showImagePicker, allowedContentTypes: [.image, .pdf]) { result in
             if case .success(let url) = result {
@@ -223,12 +290,26 @@ struct ScorecardView: View {
                 state: course.location.state
             )
             course.tees = imported.tees
+            // The imported holes have no combo tees, so any old combo tees would point at nothing.
+            course.comboTees = []
             course.subCourses = imported.subCourses
             let totalHoles = imported.subCourses.reduce(0) { $0 + $1.holes.count }
             statusMessage = "OCR imported \(totalHoles) holes"
         } catch {
             statusMessage = "OCR failed: \(error.localizedDescription)"
         }
+    }
+
+    private func teeInUseMessage(for teeName: String) -> String {
+        let usage = CourseIntegrity.usage(ofTeeNamed: teeName, in: course)
+        var lines = ["This tee is in use. Deleting it also deletes:"]
+        if usage.holesWithTeeBox > 0 {
+            lines.append("• Its tee box on \(usage.holesWithTeeBox) \(usage.holesWithTeeBox == 1 ? "hole" : "holes")")
+        }
+        if !usage.comboTees.isEmpty {
+            lines.append("• Combo \(usage.comboTees.count == 1 ? "tee" : "tees") \(usage.comboTees.map { "\"\($0)\"" }.joined(separator: ", "))")
+        }
+        return lines.joined(separator: "\n")
     }
 
     private var updateInfoHelp: String {
@@ -292,10 +373,7 @@ struct ScorecardView: View {
 
     private func writeExport(to url: URL) {
         do {
-            let encoder = JSONEncoder()
-            encoder.outputFormatting = [.sortedKeys]
-            let jsonData = try encoder.encode(course)
-            let gzipData = try jsonData.gzipCompressed()
+            let (jsonData, gzipData) = try CourseExporter.export(course)
 
             try gzipData.write(to: url)
             let ratio = Int((1.0 - Double(gzipData.count) / Double(jsonData.count)) * 100)

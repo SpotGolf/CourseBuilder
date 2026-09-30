@@ -111,6 +111,54 @@ struct CourseInfoUpdaterTests {
         #expect(merged.subCourses[0].holes[0].tees == ["Blue": 2])
     }
 
+    @Test func comboTeesStayComboTees() {
+        var existing = makeCourse(
+            name: "Course",
+            tees: [TeeDefinition(name: "Blue", color: "#0000FF"), TeeDefinition(name: "White", color: "#FFFFFF")],
+            subCourses: [SubCourse(
+                name: "Front",
+                holes: [Hole(number: 1, par: 4, yardages: ["Blue": 400, "White": 380], comboTees: ["Blue/White": "White"])],
+                comboTees: ["Blue/White": SubCourseTee(male: TeeInformation(rating: 34, slope: 120))]
+            )]
+        )
+        existing.comboTees = [ComboTeeDefinition(name: "Blue/White", tees: ["Blue", "White"])]
+        let fetched = makeCourse(
+            name: "Course",
+            tees: [
+                TeeDefinition(name: "Blue", color: "#0000FF"),
+                TeeDefinition(name: "Blue/White", color: "#808080"),
+                TeeDefinition(name: "White", color: "#FFFFFF"),
+            ],
+            subCourses: [
+                SubCourse(
+                    name: "Front",
+                    holes: [Hole(number: 1, par: 4, yardages: ["Blue": 400, "Blue/White": 380, "White": 380])],
+                    tees: [
+                        "Blue": SubCourseTee(male: TeeInformation(rating: 36, slope: 130)),
+                        "Blue/White": SubCourseTee(male: TeeInformation(rating: 35, slope: 125)),
+                    ]
+                ),
+                SubCourse(
+                    name: "Back",
+                    holes: [Hole(number: 10, par: 5, yardages: ["Blue": 500, "Blue/White": 480, "White": 480])],
+                    tees: ["Blue/White": SubCourseTee(male: TeeInformation(rating: 35, slope: 126))]
+                ),
+            ]
+        )
+
+        let merged = CourseInfoUpdater.merge(existing, with: fetched)
+
+        #expect(merged.tees.map(\.name) == ["Blue", "White"])
+        #expect(merged.comboTees == existing.comboTees)
+        #expect(merged.subCourses[0].tees.keys.sorted() == ["Blue"])
+        #expect(merged.subCourses[0].comboTees["Blue/White"]?.male?.slope == 125)
+        #expect(merged.subCourses[0].holes[0].yardages == ["Blue": 400, "White": 380])
+        #expect(merged.subCourses[0].holes[0].comboTees == ["Blue/White": "White"])
+        #expect(merged.subCourses[1].tees.isEmpty)
+        #expect(merged.subCourses[1].comboTees["Blue/White"]?.male?.slope == 126)
+        #expect(merged.subCourses[1].holes[0].yardages == ["Blue": 500, "White": 480])
+    }
+
     private func makeCourse(name: String, tees: [TeeDefinition], subCourses: [SubCourse]) -> Course {
         Course(
             name: name,

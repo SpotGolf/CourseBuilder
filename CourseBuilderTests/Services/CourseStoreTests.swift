@@ -32,6 +32,20 @@ final class CourseStoreTests: XCTestCase {
         XCTAssertEqual(loaded?.id, idA)
     }
 
+    func testSaveAndLoadKeepsComboTees() throws {
+        var course = makeCourse(id: idA)
+        course.tees = [TeeDefinition(name: "Blue", color: "#0000FF"), TeeDefinition(name: "White", color: "#FFFFFF")]
+        course.comboTees = [ComboTeeDefinition(name: "Blue/White", tees: ["Blue", "White"])]
+        course.subCourses = [SubCourse(
+            name: "Front",
+            holes: [Hole(number: 1, par: 4, comboTees: ["Blue/White": "Blue"])],
+            comboTees: ["Blue/White": SubCourseTee(male: TeeInformation(rating: 35, slope: 125))]
+        )]
+        try store.save(course)
+
+        XCTAssertEqual(try store.load(id: idA), course)
+    }
+
     func testListCourses() throws {
         try store.save(makeCourse(id: idA))
         try store.save(makeCourse(id: idB))

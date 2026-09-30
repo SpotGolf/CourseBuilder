@@ -9,6 +9,9 @@ struct ScorecardView: View {
     @State private var showImagePicker = false
     @State private var exportWarnings: [String]?
     @State private var cleanupActions: [String]?
+    @State private var showUpdateInfoConfirmation = false
+    @State private var isUpdatingInfo = false
+    @AppStorage("golfCourseAPIKey") private var apiKey: String = ""
     @Environment(\.openWindow) private var openWindow
 
     var body: some View {
@@ -18,6 +21,9 @@ struct ScorecardView: View {
                 // Action buttons
                 HStack {
                     Spacer()
+                    Button("Update course info...") { showUpdateInfoConfirmation = true }
+                        .disabled(course.golfCourseAPIIds.isEmpty || apiKey.isEmpty || isUpdatingInfo)
+                        .help(updateInfoHelp)
                     Button("Cleanup") { runCleanup() }
                     Button("Export JSON...") { exportJSON() }
                     Button("Import Image...") { showImagePicker = true }
@@ -154,6 +160,16 @@ struct ScorecardView: View {
             ScorecardTableView(course: $course)
 
         }
+        .confirmationDialog(
+            "Update \(course.name) from GolfCourseAPI?",
+            isPresented: $showUpdateInfoConfirmation,
+            titleVisibility: .visible
+        ) {
+            Button("Update") { updateCourseInfo() }
+            Button("Cancel", role: .cancel) {}
+        } message: {
+            Text("Names, address, tees, ratings, slopes, par, handicaps, and yardages are replaced. Map features, centerlines, and tee box assignments are kept.")
+        }
         .fileImporter(isPresented: $showImagePicker, allowedContentTypes: [.image, .pdf]) { result in
             if case .success(let url) = result {
                 importFromImage(url: url)
@@ -212,6 +228,37 @@ struct ScorecardView: View {
             statusMessage = "OCR imported \(totalHoles) holes"
         } catch {
             statusMessage = "OCR failed: \(error.localizedDescription)"
+        }
+    }
+
+    private var updateInfoHelp: String {
+        if course.golfCourseAPIIds.isEmpty {
+            "This course was not imported from GolfCourseAPI"
+        } else if apiKey.isEmpty {
+            "Set the GolfCourseAPI key in Settings"
+        } else {
+            "Reload the scorecard data from GolfCourseAPI"
+        }
+    }
+
+    private func updateCourseInfo() {
+        let ids = course.golfCourseAPIIds
+        isUpdatingInfo = true
+        statusMessage = "Updating course info..."
+        Task {
+            do {
+                let client = GolfCourseAPIClient(apiKey: apiKey)
+                var details: [GolfCourseAPIClient.CourseDetail] = []
+                for id in ids {
+                    details.append(try await client.fetchCourse(id: id))
+                }
+                let fetched = try GolfCourseAPIClient.convertToCourse(details: details)
+                course = CourseInfoUpdater.merge(course, with: fetched)
+                statusMessage = "Updated course info from GolfCourseAPI"
+            } catch {
+                statusMessage = "Update failed: \(error.localizedDescription)"
+            }
+            isUpdatingInfo = false
         }
     }
 

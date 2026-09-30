@@ -110,10 +110,10 @@ xcrun notarytool log <submission-id> --keychain-profile "notarytool"
 ### 7. Commit, Tag & Release
 
 ```bash
-git tag v<version>
+git tag <version>
 git push origin <branch> --tags
 
-gh release create v<version> \
+gh release create <version> \
   build/<AppName>-<version>.dmg \
   --title "<AppName> v<version>" \
   --generate-notes

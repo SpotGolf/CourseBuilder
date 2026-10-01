@@ -109,21 +109,24 @@ xcrun notarytool log <submission-id> --keychain-profile "notarytool"
 
 ### 7. Commit, Tag & Release
 
+Never prefix the version with `v`. The tag, release, and title use the bare version (for example `1.2.0`, not `v1.2.0`).
+
 ```bash
 git tag <version>
 git push origin <branch> --tags
 
 gh release create <version> \
   build/<AppName>-<version>.dmg \
-  --title "<AppName> v<version>" \
+  --title "<AppName> <version>" \
   --generate-notes
 ```
 
 ## Common Mistakes
 
-| Mistake | Fix |
-|---------|-----|
-| Forgot to sign the DMG itself | Both the .app AND the .dmg need signing |
-| Notarization rejects unsigned frameworks | Ensure all embedded frameworks are signed with `--deep` or individually |
-| Staple before notarization completes | Use `--wait` flag with notarytool |
-| Archive uses wrong signing identity | Explicitly pass `CODE_SIGN_IDENTITY` to xcodebuild |
+| Mistake                                               | Fix                                                                     |
+|-------------------------------------------------------|-------------------------------------------------------------------------|
+| Forgot to sign the DMG itself                         | Both the .app AND the .dmg need signing                                 |
+| Notarization rejects unsigned frameworks              | Ensure all embedded frameworks are signed with `--deep` or individually |
+| Staple before notarization completes                  | Use `--wait` flag with notarytool                                       |
+| Archive uses wrong signing identity                   | Explicitly pass `CODE_SIGN_IDENTITY` to xcodebuild                      |
+| Tag or title starts with `v` (copied from an old tag) | Use the bare version, such as `1.2.0`                                   |

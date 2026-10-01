@@ -44,6 +44,17 @@ enum ElevationUpdater {
         return updated
     }
 
+    /// Returns a copy of the course with `elevation` on every coordinate that lacked one.
+    static func fillingMissingElevations(of course: Course, with elevation: Double) -> Course {
+        var updated = course
+        forEachCoordinate(in: &updated) { coordinate in
+            if coordinate.elevation == nil {
+                coordinate.elevation = elevation
+            }
+        }
+        return updated
+    }
+
     /// Visits every coordinate in the course file, always in the same order.
     private static func forEachCoordinate(in course: inout Course, _ body: (inout Coordinate) -> Void) {
         body(&course.location.coordinate)

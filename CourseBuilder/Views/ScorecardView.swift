@@ -20,8 +20,9 @@ struct ScorecardView: View {
         VStack(spacing: 0) {
             // Header
             VStack(alignment: .leading, spacing: 8) {
-                // Action buttons
+                // Section heading and action buttons
                 HStack {
+                    sectionHeading("Course Info")
                     Spacer()
                     Button("Update course info...") { showUpdateInfoConfirmation = true }
                         .disabled(course.golfCourseAPIIds.isEmpty || apiKey.isEmpty || isUpdatingInfo)
@@ -89,11 +90,16 @@ struct ScorecardView: View {
                     }
                 }
 
+                Divider()
+                    .padding(.vertical, 12)
+
+                sectionHeading("Tees")
+
                 // Tee definitions, with combo tees to the right
                 HStack(alignment: .top, spacing: 32) {
                     VStack(alignment: .leading, spacing: 8) {
                         HStack {
-                            Text("Tees").font(.caption).foregroundStyle(.secondary)
+                            Text("Main Tees").font(.caption).foregroundStyle(.secondary)
                             Button(action: {
                                 course.tees.append(TeeDefinition(name: "", color: "#FFFFFF"))
                             }) {
@@ -182,6 +188,10 @@ struct ScorecardView: View {
             .padding()
 
             Divider()
+
+            sectionHeading("Yardages")
+                .frame(maxWidth: .infinity, alignment: .leading)
+                .padding([.horizontal, .top])
 
             if !statusMessage.isEmpty {
                 Text(statusMessage)
@@ -457,6 +467,11 @@ struct CleanupResultsSheet: View {
 }
 
 // MARK: - ScorecardTableView
+
+/// A heading for a section of the scorecard, slightly larger than the field labels.
+private func sectionHeading(_ title: String) -> some View {
+    Text(title).font(.headline)
+}
 
 struct ScorecardTableView: View {
     @Binding var course: Course

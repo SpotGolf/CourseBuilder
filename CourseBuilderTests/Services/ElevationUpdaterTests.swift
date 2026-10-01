@@ -99,6 +99,34 @@ final class ElevationUpdaterTests: XCTestCase {
         XCTAssertEqual(StubUSGSProtocol.requestCount, 0)
     }
 
+    // MARK: - fillingMissingElevations
+
+    func testFillingMissingElevationsSetsOnlyMissingOnes() {
+        let feature = Feature(id: 1, type: .green, polygon: [
+            Coordinate(latitude: 56.3, longitude: -2.8),
+            Coordinate(latitude: 56.4, longitude: -2.8, elevation: 5),
+        ])
+        let course = makeCourse(features: [feature], centerline: [Coordinate(latitude: 56.5, longitude: -2.8)])
+
+        let updated = ElevationUpdater.fillingMissingElevations(of: course, with: 0)
+
+        XCTAssertFalse(updated.isMissingElevations)
+        XCTAssertEqual(updated.location.coordinate.elevation, 0)
+        XCTAssertEqual(updated.features[0].polygon.map(\.elevation), [0, 5])
+        XCTAssertEqual(updated.subCourses[0].holes[0].centerline[0].elevation, 0)
+    }
+
+    // MARK: - isOutsideUnitedStates
+
+    func testIsOutsideUnitedStates() {
+        typealias ElevationError = USGSElevationClient.ElevationError
+        XCTAssertTrue(ElevationError.requestRejected(message: "Out of extent.").isOutsideUnitedStates)
+        XCTAssertTrue(ElevationError.noData(missing: 3, total: 3).isOutsideUnitedStates)
+        XCTAssertFalse(ElevationError.noData(missing: 1, total: 3).isOutsideUnitedStates)
+        XCTAssertFalse(ElevationError.serverError(statusCode: 504).isOutsideUnitedStates)
+        XCTAssertFalse(ElevationError.invalidResponse.isOutsideUnitedStates)
+    }
+
     // MARK: - Helpers
 
     private func makeClient() -> USGSElevationClient {

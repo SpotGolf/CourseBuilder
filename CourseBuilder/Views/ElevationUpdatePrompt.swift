@@ -4,8 +4,10 @@ import CourseDataSwift
 /// Alerts the user that a course file is missing elevations.
 ///
 /// Set `course` to a loaded course that needs updating. Cancel drops the course (it is not loaded).
-/// Continue looks up the elevations and passes the updated course to `onUpdated`. If the lookup
-/// fails, an error is shown and the course is not loaded.
+/// Continue looks up the elevations and passes the updated course to `onUpdated`. If USGS has no
+/// data because the course is outside the United States, the missing elevations are set to sea level,
+/// the course is passed to `onUpdated`, and a warning is shown. If the lookup fails for any other
+/// reason, an error is shown and the course is not loaded.
 struct ElevationUpdatePrompt: ViewModifier {
     @Binding var course: Course?
     let onUpdated: (Course) throws -> Void
@@ -14,6 +16,7 @@ struct ElevationUpdatePrompt: ViewModifier {
     @State private var completed = 0
     @State private var total = 0
     @State private var errorMessage: String?
+    @State private var warningCourseName: String?
 
     func body(content: Content) -> some View {
         content
@@ -56,6 +59,15 @@ struct ElevationUpdatePrompt: ViewModifier {
             } message: { message in
                 Text("\(message)\n\nThe course was not loaded.")
             }
+            .alert(
+                "Elevations Set to Sea Level",
+                isPresented: Binding(get: { warningCourseName != nil }, set: { if !$0 { warningCourseName = nil } }),
+                presenting: warningCourseName
+            ) { _ in
+                Button("OK", role: .cancel) {}
+            } message: { name in
+                Text("\"\(name)\" is outside the United States, so USGS has no elevation data for it. All missing elevations were set to sea level (0 m).")
+            }
     }
 
     @MainActor
@@ -74,6 +86,13 @@ struct ElevationUpdatePrompt: ViewModifier {
                 try onUpdated(updated)
             } catch is CancellationError {
             } catch let error as URLError where error.code == .cancelled {
+            } catch let error as USGSElevationClient.ElevationError where error.isOutsideUnitedStates {
+                do {
+                    try onUpdated(ElevationUpdater.fillingMissingElevations(of: course, with: 0))
+                    warningCourseName = course.name
+                } catch {
+                    errorMessage = error.localizedDescription
+                }
             } catch {
                 errorMessage = error.localizedDescription
             }

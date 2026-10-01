@@ -24,6 +24,18 @@ actor USGSElevationClient {
                 "USGS has no elevation data for \(missing) of \(total) points. USGS only covers the United States."
             }
         }
+
+        /// Whether USGS has no data for any of the requested points, which means they are outside the United States.
+        var isOutsideUnitedStates: Bool {
+            switch self {
+            case .requestRejected:
+                true
+            case .noData(let missing, let total):
+                missing == total
+            case .serverError, .invalidResponse:
+                false
+            }
+        }
     }
 
     static let endpoint = URL(string: "https://elevation.nationalmap.gov/arcgis/rest/services/3DEPElevation/ImageServer/getSamples")!

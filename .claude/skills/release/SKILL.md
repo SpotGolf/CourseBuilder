@@ -77,12 +77,13 @@ xcodebuild -exportArchive \
 
 ### 4. Create DMG
 
+`scripts/make-dmg.sh` stages the app next to an `Applications` link, draws an arrow background with `scripts/make-dmg-background.swift`, lays out the Finder window (app on the left, arrow, Applications on the right), and compresses the image.
+
 ```bash
-hdiutil create -volname "<AppName>" \
-  -srcfolder build/export/<AppName>.app \
-  -ov -format UDZO \
-  build/<AppName>-<version>.dmg
+scripts/make-dmg.sh build/export/<AppName>.app build/<AppName>-<version>.dmg
 ```
+
+The script drives Finder with AppleScript to save the window layout, so it must run on a logged-in desktop session.
 
 ### 5. Sign DMG
 

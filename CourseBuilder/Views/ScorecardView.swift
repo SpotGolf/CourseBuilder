@@ -128,15 +128,7 @@ struct ScorecardView: View {
                                 .buttonStyle(.borderless)
                                 .disabled(index == course.tees.count - 1)
 
-                                TextField(
-                                    "Tee Name",
-                                    text: Binding(
-                                        get: { course.tees[index].name },
-                                        set: { CourseIntegrity.renameTee(at: index, to: $0, in: &course) }
-                                    )
-                                )
-                                    .textFieldStyle(.roundedBorder)
-                                    .frame(maxWidth: 150)
+                                TeeNameField(index: index, course: $course)
                                 ColorPicker(
                                     "",
                                     selection: Binding(

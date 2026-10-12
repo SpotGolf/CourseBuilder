@@ -48,6 +48,43 @@ final class GolfCourseAPIClientTests: XCTestCase {
         XCTAssertEqual(response.courses[0].location.city, "Broomfield")
     }
 
+    /// The live API omits `city` (and sometimes `state`) for some courses. One such result must
+    /// not make the whole search response fail to decode.
+    func testParseCourseSearchResponseWithMissingCity() throws {
+        let json = """
+        {
+            "courses": [
+                {
+                    "id": "d0rc26ak",
+                    "club_name": "Greensmere G & Cc",
+                    "course_name": "Legacy",
+                    "location": {
+                        "state": "Unknown",
+                        "country": "Unknown"
+                    }
+                },
+                {
+                    "id": "5h5cq4b5",
+                    "club_name": "Legacy Ridge Golf Club",
+                    "course_name": "Legacy Ridge Golf Club",
+                    "location": {
+                        "city": "Westminster",
+                        "state": "CO",
+                        "country": "US"
+                    },
+                    "holes": 18
+                }
+            ]
+        }
+        """.data(using: .utf8)!
+
+        let response = try JSONDecoder().decode(GolfCourseAPIClient.SearchResponse.self, from: json)
+        XCTAssertEqual(response.courses.count, 2)
+        XCTAssertNil(response.courses[0].location.city)
+        XCTAssertEqual(response.courses[0].location.state, "Unknown")
+        XCTAssertEqual(response.courses[1].location.city, "Westminster")
+    }
+
     func testParseCourseDetailResponse() throws {
         let json = """
         {
@@ -148,7 +185,7 @@ final class GolfCourseAPIClientTests: XCTestCase {
         XCTAssertFalse(response.courses.isEmpty, "Expected at least one search result")
         print("Search returned \(response.courses.count) results:")
         for course in response.courses {
-            print("  [\(course.id)] \(course.courseName) - \(course.clubName) (\(course.location.city), \(course.location.state))")
+            print("  [\(course.id)] \(course.courseName) - \(course.clubName) (\(course.location.city ?? ""), \(course.location.state ?? ""))")
         }
     }
 

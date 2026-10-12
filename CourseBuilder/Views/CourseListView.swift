@@ -321,7 +321,9 @@ struct AddCourseSheet: View {
                                 Text(group.clubName)
                                     .font(.headline)
                                 if let loc = group.courses.first?.location {
-                                    Text(loc.state.isEmpty ? loc.city : "\(loc.city), \(loc.state)")
+                                    let city = loc.city ?? ""
+                                    let state = loc.state ?? ""
+                                    Text(state.isEmpty ? city : city.isEmpty ? state : "\(city), \(state)")
                                         .font(.caption)
                                         .foregroundStyle(.secondary)
                                 }

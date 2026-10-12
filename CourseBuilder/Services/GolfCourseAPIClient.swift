@@ -57,8 +57,8 @@ actor GolfCourseAPIClient {
 
     struct APILocation: Codable, Hashable {
         let address: String?
-        let city: String
-        let state: String
+        let city: String?
+        let state: String?
         let country: String?
         let zipCode: String?
         let latitude: Double?
@@ -212,8 +212,8 @@ actor GolfCourseAPIClient {
 
         let location = CourseLocation(
             address: first.location.address ?? "",
-            city: first.location.city,
-            state: first.location.state,
+            city: first.location.city ?? "",
+            state: first.location.state ?? "",
             country: first.location.country ?? "",
             coordinate: Coordinate(
                 latitude: first.location.latitude ?? 0,

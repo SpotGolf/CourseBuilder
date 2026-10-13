@@ -60,13 +60,7 @@ final class OSMImportIntegrationTests: XCTestCase {
 
         // If there's a course boundary, refetch within it
         var finalResult = osmResult
-        if let boundary = osmResult.courseBoundary, boundary.count >= 3 {
-            let lats = boundary.map(\.latitude)
-            let lons = boundary.map(\.longitude)
-            let bbox = OverpassAPIClient.BoundingBox(
-                south: lats.min()!, west: lons.min()!,
-                north: lats.max()!, east: lons.max()!
-            ).padded(by: 0.25)
+        if let bbox = OverpassAPIClient.boundaryBoundingBox(for: osmResult.courseBoundary) {
             finalResult = try await osmClient.fetchFeatures(bbox: bbox)
         }
 

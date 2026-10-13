@@ -25,6 +25,35 @@ actor OverpassAPIClient {
         let north: Double
         let east: Double
 
+        /// Smallest box containing every coordinate. Returns nil for an empty list.
+        init?(containing coordinates: [Coordinate]) {
+            guard let first = coordinates.first else { return nil }
+            var south = first.latitude, north = first.latitude
+            var west = first.longitude, east = first.longitude
+            for c in coordinates.dropFirst() {
+                south = min(south, c.latitude)
+                north = max(north, c.latitude)
+                west = min(west, c.longitude)
+                east = max(east, c.longitude)
+            }
+            self.init(south: south, west: west, north: north, east: east)
+        }
+
+        init(south: Double, west: Double, north: Double, east: Double) {
+            self.south = south
+            self.west = west
+            self.north = north
+            self.east = east
+        }
+
+        /// Longest side of the box in meters.
+        var spanMeters: Double {
+            let midLat = (south + north) / 2
+            let latMeters = (north - south) * 111_320.0
+            let lonMeters = (east - west) * 111_320.0 * cos(midLat * .pi / 180)
+            return max(latMeters, lonMeters)
+        }
+
         func padded(by fraction: Double) -> BoundingBox {
             let latSpan = north - south
             let lonSpan = east - west
@@ -51,6 +80,19 @@ actor OverpassAPIClient {
     struct ParsedFeature {
         let type: FeatureType
         let polygon: [Coordinate]
+    }
+
+    /// A course outline narrower than this is not a real boundary (e.g. a mistagged
+    /// building) and is ignored in favor of the default search radius.
+    static let minimumBoundarySpanMeters = 300.0
+
+    /// Bounding box to refetch within when the parsed course boundary is usable.
+    /// Returns nil when there is no boundary, it has too few points, or it is too small.
+    static func boundaryBoundingBox(for boundary: [Coordinate]?, padding: Double = 0.25) -> BoundingBox? {
+        guard let boundary, boundary.count >= 3,
+              let bbox = BoundingBox(containing: boundary),
+              bbox.spanMeters >= minimumBoundarySpanMeters else { return nil }
+        return bbox.padded(by: padding)
     }
 
     private let session: URLSession
@@ -204,12 +246,20 @@ actor OverpassAPIClient {
                 features.append(ParsedFeature(type: .water, polygon: coords))
             }
 
-            if tags["leisure"] == "golf_course" {
+            if isCourseBoundary(tags: tags) {
                 courseBoundary = coords
             }
         }
 
         return ParsedResult(features: features, centerlines: centerlines, courseBoundary: courseBoundary)
+    }
+
+    /// A course outline is tagged `leisure=golf_course`. Some mappers put that tag on the
+    /// clubhouse building as well, which must not be mistaken for the outline.
+    static func isCourseBoundary(tags: [String: String]) -> Bool {
+        tags["leisure"] == "golf_course"
+            && tags["golf"] != "clubhouse"
+            && tags["building"] == nil
     }
 
     /// Extract coordinates from a way or relation, supporting both inline geometry (`out geom;`)

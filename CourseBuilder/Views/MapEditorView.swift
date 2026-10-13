@@ -1594,13 +1594,7 @@ struct MapEditorView: View {
             logger.info("Initial query: \(result.features.count, privacy: .public) features, \(result.centerlines.count, privacy: .public) centerlines, boundary: \(result.courseBoundary != nil, privacy: .public)")
 
             var finalResult = result
-            if let boundary = result.courseBoundary, boundary.count >= 3 {
-                let lats = boundary.map(\.latitude)
-                let lons = boundary.map(\.longitude)
-                let bbox = OverpassAPIClient.BoundingBox(
-                    south: lats.min()!, west: lons.min()!,
-                    north: lats.max()!, east: lons.max()!
-                ).padded(by: 0.25)
+            if let bbox = OverpassAPIClient.boundaryBoundingBox(for: result.courseBoundary) {
                 osmImportStatus = "Fetching features within course boundary..."
                 finalResult = try await client.fetchFeatures(bbox: bbox)
                 logger.info("Full query: \(finalResult.features.count, privacy: .public) features")

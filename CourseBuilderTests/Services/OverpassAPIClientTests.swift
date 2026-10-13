@@ -137,6 +137,75 @@ final class OverpassAPIClientTests: XCTestCase {
         XCTAssertEqual(result.courseBoundary?.count, 5)
     }
 
+    func testClubhouseTaggedAsGolfCourseIsNotBoundary() throws {
+        // Bear Dance: the clubhouse building carries leisure=golf_course by mistake.
+        let json = """
+        {
+          "elements": [
+            {
+              "type": "way",
+              "id": 237236029,
+              "tags": { "building": "yes", "golf": "clubhouse", "leisure": "golf_course", "name": "Golf Club at Bear Dance" },
+              "geometry": [
+                { "lat": 39.2660, "lon": -104.9107 },
+                { "lat": 39.2662, "lon": -104.9107 },
+                { "lat": 39.2662, "lon": -104.9104 },
+                { "lat": 39.2660, "lon": -104.9104 },
+                { "lat": 39.2660, "lon": -104.9107 }
+              ]
+            }
+          ]
+        }
+        """
+        let result = try OverpassAPIClient.parseResponse(data: json.data(using: .utf8)!)
+        XCTAssertNil(result.courseBoundary)
+        XCTAssertTrue(result.features.isEmpty)
+    }
+
+    func testIsCourseBoundary() {
+        XCTAssertTrue(OverpassAPIClient.isCourseBoundary(tags: ["leisure": "golf_course"]))
+        XCTAssertTrue(OverpassAPIClient.isCourseBoundary(tags: ["leisure": "golf_course", "name": "Broadlands"]))
+        XCTAssertFalse(OverpassAPIClient.isCourseBoundary(tags: ["leisure": "golf_course", "golf": "clubhouse"]))
+        XCTAssertFalse(OverpassAPIClient.isCourseBoundary(tags: ["leisure": "golf_course", "building": "yes"]))
+        XCTAssertFalse(OverpassAPIClient.isCourseBoundary(tags: ["golf": "fairway"]))
+    }
+
+    func testBoundaryBoundingBoxRejectsSmallOrMissingBoundary() {
+        XCTAssertNil(OverpassAPIClient.boundaryBoundingBox(for: nil))
+        XCTAssertNil(OverpassAPIClient.boundaryBoundingBox(for: [
+            Coordinate(latitude: 39.0, longitude: -105.0),
+            Coordinate(latitude: 39.01, longitude: -105.0),
+        ]))
+        // A building-sized polygon (~44 m x 31 m) is not a course outline
+        let building = [
+            Coordinate(latitude: 39.2660, longitude: -104.9107),
+            Coordinate(latitude: 39.2664, longitude: -104.9107),
+            Coordinate(latitude: 39.2664, longitude: -104.9103),
+            Coordinate(latitude: 39.2660, longitude: -104.9103),
+        ]
+        XCTAssertNil(OverpassAPIClient.boundaryBoundingBox(for: building))
+    }
+
+    func testBoundaryBoundingBoxUsesRealOutline() throws {
+        // ~1.1 km x 1.5 km outline
+        let outline = [
+            Coordinate(latitude: 39.00, longitude: -105.00),
+            Coordinate(latitude: 39.01, longitude: -105.00),
+            Coordinate(latitude: 39.01, longitude: -104.98),
+            Coordinate(latitude: 39.00, longitude: -104.98),
+        ]
+        let bbox = try XCTUnwrap(OverpassAPIClient.boundaryBoundingBox(for: outline))
+        XCTAssertEqual(bbox.south, 39.00 - 0.01 * 0.25, accuracy: 0.0001)
+        XCTAssertEqual(bbox.north, 39.01 + 0.01 * 0.25, accuracy: 0.0001)
+        XCTAssertEqual(bbox.west, -105.00 - 0.02 * 0.25, accuracy: 0.0001)
+        XCTAssertEqual(bbox.east, -104.98 + 0.02 * 0.25, accuracy: 0.0001)
+    }
+
+    func testBoundingBoxSpanMeters() {
+        let bbox = OverpassAPIClient.BoundingBox(south: 39.0, west: -105.0, north: 39.01, east: -105.0)
+        XCTAssertEqual(bbox.spanMeters, 1113.2, accuracy: 1)
+    }
+
     func testParseNaturalWater() throws {
         let json = """
         {

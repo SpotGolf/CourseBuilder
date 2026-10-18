@@ -206,6 +206,12 @@ struct MapEditorView: View {
         return course.features(for: hole)
     }
 
+    /// Current hole's features ordered farthest from the green to closest, for the sidebar list.
+    private var currentHoleFeaturesByDistanceFromGreen: [Feature] {
+        guard let hole = currentHole else { return [] }
+        return FeatureSorter.sortedByDistanceFromGreen(currentHoleFeatures, hole: hole)
+    }
+
     private var unassociatedFeatures: [Feature] {
         let assigned = allAssignedFeatureIDs
         return course.features.filter { !assigned.contains($0.id) }
@@ -394,7 +400,7 @@ struct MapEditorView: View {
             VStack(alignment: .leading, spacing: 0) {
                 sectionHeader(title: "Features - Hole \(currentHole?.number ?? 0)", collapsed: $featuresCollapsed)
                 if !featuresCollapsed {
-                    let holeFeatures = currentHoleFeatures
+                    let holeFeatures = currentHoleFeaturesByDistanceFromGreen
                     List(holeFeatures) { feature in
                         HStack {
                             Circle()

@@ -104,7 +104,7 @@ struct SharedCourseBindingTests {
         try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
         defer { try? FileManager.default.removeItem(at: directory) }
 
-        let store = CourseStore(directory: directory)
+        let store = CourseStore(directory: directory, elevationWorker: ElevationWorker(fetch: { $0.map { _ in 1 } }))
         var hole = Hole(number: 1, par: 4)
         hole.yardages["Blue"] = 0
         let course = Course(

@@ -9,6 +9,8 @@ struct ScorecardView: View {
     @State private var showImagePicker = false
     @State private var exportWarnings: [String]?
     @State private var cleanupActions: [String]?
+    @State private var cleanupError: String?
+    @State private var isCleaningUp = false
     @State private var showUpdateInfoConfirmation = false
     @State private var isUpdatingInfo = false
     @State private var comboTeeName: String?
@@ -27,7 +29,18 @@ struct ScorecardView: View {
                     Button("Update course info...") { showUpdateInfoConfirmation = true }
                         .disabled(course.golfCourseAPIIds.isEmpty || apiKey.isEmpty || isUpdatingInfo)
                         .help(updateInfoHelp)
-                    Button("Cleanup") { runCleanup() }
+                    Button {
+                        runCleanup()
+                    } label: {
+                        HStack(spacing: 4) {
+                            if isCleaningUp {
+                                ProgressView()
+                                    .scaleEffect(0.6)
+                            }
+                            Text("Cleanup")
+                        }
+                    }
+                    .disabled(isCleaningUp)
                     Button("Export JSON...") { exportJSON() }
                     Button("Import Image...") { showImagePicker = true }
                     Button("Open Map Editor") {
@@ -266,8 +279,9 @@ struct ScorecardView: View {
                 set: { if !$0 { cleanupActions = nil } }
             )
         ) {
-            CleanupResultsSheet(actions: cleanupActions ?? []) {
+            CleanupResultsSheet(actions: cleanupActions ?? [], errorMessage: cleanupError) {
                 cleanupActions = nil
+                cleanupError = nil
             }
         }
     }
@@ -354,9 +368,38 @@ struct ScorecardView: View {
         }
     }
 
+    /// Looks up missing elevations, then repairs the course data. If the elevation lookup fails,
+    /// the rest of the cleanup still runs and the results sheet shows the error.
     private func runCleanup() {
-        let report = CourseIntegrity.cleanup(&course)
-        cleanupActions = report.actions
+        guard !isCleaningUp else { return }
+        isCleaningUp = true
+        Task {
+            var elevationActions: [String] = []
+            var elevationError: String?
+            let missing = ElevationUpdater.missingCoordinates(in: course).count
+            if missing > 0 {
+                statusMessage = "Looking up elevations for \(missing) point(s)..."
+                do {
+                    let lookup = try await ElevationUpdater.lookUpMissingElevations(in: course)
+                    ElevationUpdater.apply(lookup.elevations, to: &course)
+                    let found = lookup.elevations.count - lookup.seaLevelPoints
+                    if found > 0 {
+                        elevationActions.append("Looked up elevations for \(found) point(s)")
+                    }
+                    if lookup.seaLevelPoints > 0 {
+                        elevationActions.append("Set \(lookup.seaLevelPoints) point(s) to sea level because USGS has no elevation data for them")
+                    }
+                } catch {
+                    elevationError = "Could not look up elevations. \(error.localizedDescription)"
+                }
+                statusMessage = ""
+            }
+
+            let report = CourseIntegrity.cleanup(&course)
+            cleanupError = elevationError
+            cleanupActions = elevationActions + report.actions
+            isCleaningUp = false
+        }
     }
 
     private func showSavePanelAndExport() {
@@ -427,17 +470,24 @@ struct ExportWarningsSheet: View {
 
 struct CleanupResultsSheet: View {
     let actions: [String]
+    var errorMessage: String?
     let onDismiss: () -> Void
 
     var body: some View {
         VStack(alignment: .leading, spacing: 12) {
-            Text("Cleanup Complete")
+            Text(errorMessage == nil ? "Cleanup Complete" : "Cleanup Incomplete")
                 .font(.headline)
 
-            if actions.isEmpty {
+            if let errorMessage {
+                Label(errorMessage, systemImage: "exclamationmark.triangle.fill")
+                    .foregroundStyle(.red)
+                    .fixedSize(horizontal: false, vertical: true)
+            }
+
+            if actions.isEmpty && errorMessage == nil {
                 Text("No cleanup was needed.")
                     .foregroundStyle(.secondary)
-            } else {
+            } else if !actions.isEmpty {
                 Text("The following cleanup actions were performed:")
                     .foregroundStyle(.secondary)
 

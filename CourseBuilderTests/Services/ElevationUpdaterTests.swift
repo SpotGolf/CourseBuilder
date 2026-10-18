@@ -189,3 +189,90 @@ private final class StubUSGSProtocol: URLProtocol {
         return json["points"] as? [[Double]] ?? []
     }
 }
+
+final class ElevationUpdaterLocationTests: XCTestCase {
+    func testMissingCoordinatesListsEachPositionOnce() {
+        let shared = Coordinate(latitude: 39.1, longitude: -105.0)
+        var course = Course(
+            name: "Test",
+            location: CourseLocation(address: "", city: "", state: "", country: "US", coordinate: Coordinate(latitude: 39.0, longitude: -105.0, elevation: 1)),
+            features: [
+                Feature(id: 1, type: .green, polygon: [shared, Coordinate(latitude: 39.2, longitude: -105.0, elevation: 2)]),
+                Feature(id: 2, type: .bunker, polygon: [shared]),
+            ],
+            subCourses: [SubCourse(name: "Front", holes: [Hole(number: 1, par: 4, centerline: [Coordinate(latitude: 39.3, longitude: -105.0)])])]
+        )
+
+        XCTAssertEqual(ElevationUpdater.missingCoordinates(in: course), [shared, Coordinate(latitude: 39.3, longitude: -105.0)])
+
+        ElevationUpdater.apply([
+            ElevationUpdater.Location(shared): 10,
+            ElevationUpdater.Location(Coordinate(latitude: 39.2, longitude: -105.0)): 99,
+            ElevationUpdater.Location(Coordinate(latitude: 50, longitude: 50)): 7,
+        ], to: &course)
+
+        XCTAssertEqual(course.features[0].polygon.map(\.elevation), [10, 2])
+        XCTAssertEqual(course.features[1].polygon.map(\.elevation), [10])
+        XCTAssertNil(course.subCourses[0].holes[0].centerline[0].elevation)
+    }
+}
+
+final class LookUpMissingElevationsTests: XCTestCase {
+    func testPointsWithoutDataAreSetToSeaLevel() async throws {
+        let course = makeCourse()
+
+        let lookup = try await ElevationUpdater.lookUpMissingElevations(in: course) { coordinates in
+            coordinates.map { $0.latitude == 39.2 ? nil : 100 }
+        }
+
+        XCTAssertEqual(lookup.seaLevelPoints, 1)
+        XCTAssertEqual(lookup.elevations[ElevationUpdater.Location(Coordinate(latitude: 39.1, longitude: -105.0))], 100)
+        XCTAssertEqual(lookup.elevations[ElevationUpdater.Location(Coordinate(latitude: 39.2, longitude: -105.0))], 0)
+    }
+
+    func testCourseOutsideUnitedStatesIsSetToSeaLevel() async throws {
+        let lookup = try await ElevationUpdater.lookUpMissingElevations(in: makeCourse()) { _ in
+            throw USGSElevationClient.ElevationError.requestRejected(message: "Out of extent.")
+        }
+
+        XCTAssertEqual(lookup.seaLevelPoints, 3)
+        XCTAssertEqual(Set(lookup.elevations.values), [0])
+    }
+
+    func testServerErrorIsThrown() async {
+        do {
+            _ = try await ElevationUpdater.lookUpMissingElevations(in: makeCourse()) { _ in
+                throw USGSElevationClient.ElevationError.serverError(statusCode: 503)
+            }
+            XCTFail("Expected serverError")
+        } catch USGSElevationClient.ElevationError.serverError(let statusCode) {
+            XCTAssertEqual(statusCode, 503)
+        } catch {
+            XCTFail("Unexpected error: \(error)")
+        }
+    }
+
+    func testNetworkErrorIsThrown() async {
+        do {
+            _ = try await ElevationUpdater.lookUpMissingElevations(in: makeCourse()) { _ in
+                throw URLError(.cannotConnectToHost)
+            }
+            XCTFail("Expected URLError")
+        } catch let error as URLError {
+            XCTAssertEqual(error.code, .cannotConnectToHost)
+        } catch {
+            XCTFail("Unexpected error: \(error)")
+        }
+    }
+
+    private func makeCourse() -> Course {
+        Course(
+            name: "Test",
+            location: CourseLocation(address: "", city: "", state: "", country: "US", coordinate: Coordinate(latitude: 39.0, longitude: -105.0)),
+            features: [Feature(id: 1, type: .green, polygon: [
+                Coordinate(latitude: 39.1, longitude: -105.0),
+                Coordinate(latitude: 39.2, longitude: -105.0),
+            ])]
+        )
+    }
+}

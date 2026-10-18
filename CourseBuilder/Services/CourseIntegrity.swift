@@ -117,6 +117,11 @@ struct CourseIntegrity {
             warnings.append("\(unassignedFeatures.count) unassigned feature(s): \(ids)")
         }
 
+        let missingElevations = ElevationUpdater.missingCoordinates(in: course).count
+        if missingElevations > 0 {
+            warnings.append("\(missingElevations) point(s) are missing elevations. Cleanup looks them up.")
+        }
+
         return warnings
     }
 

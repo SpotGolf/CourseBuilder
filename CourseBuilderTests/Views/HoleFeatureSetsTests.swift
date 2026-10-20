@@ -11,7 +11,7 @@ struct HoleFeatureSetsTests {
         back.features = [2]
         let course = Course(
             name: "Test",
-            location: CourseLocation(address: "", city: "", state: "", country: "US", coordinate: Coordinate(latitude: 0, longitude: 0)),
+            location: CourseLocation(address: "", city: "", state: "", country: "US", coordinate: Coordinate(lat: 0, lon: 0)),
             features: [1, 2, 3, 4, 5].map { Feature(id: $0, type: .bunker, polygon: []) },
             subCourses: [SubCourse(name: "Front", holes: [front, back])]
         )
@@ -27,7 +27,7 @@ struct HoleFeatureSetsTests {
     @Test func noHoleShowsOnlyUnassociatedFeatures() {
         let course = Course(
             name: "Test",
-            location: CourseLocation(address: "", city: "", state: "", country: "US", coordinate: Coordinate(latitude: 0, longitude: 0)),
+            location: CourseLocation(address: "", city: "", state: "", country: "US", coordinate: Coordinate(lat: 0, lon: 0)),
             features: [Feature(id: 1, type: .green, polygon: [])]
         )
 

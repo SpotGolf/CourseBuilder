@@ -71,7 +71,7 @@ enum PolygonEditorOperations {
         holeIndex: Int,
         to course: inout Course
     ) -> Feature {
-        let feature = Feature(id: course.nextFeatureID, type: type, polygon: polygon)
+        let feature = Feature(id: course.nextFeatureID, type: type, polygon: CoordinatePath(polygon))
         course.features.append(feature)
         if course.subCourses.indices.contains(subCourseIndex),
            course.subCourses[subCourseIndex].holes.indices.contains(holeIndex) {
@@ -104,7 +104,7 @@ enum PolygonEditorOperations {
             return restoreFeature(deleted, to: &course)
         case .replacedPolygon(let featureID, let oldPolygon):
             guard let index = course.features.firstIndex(where: { $0.id == featureID }) else { return false }
-            course.features[index].polygon = oldPolygon
+            course.features[index].polygon = CoordinatePath(oldPolygon)
             return true
         case .added(let featureID):
             return deleteFeature(id: featureID, from: &course) != nil

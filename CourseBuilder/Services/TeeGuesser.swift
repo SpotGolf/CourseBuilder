@@ -98,15 +98,15 @@ enum TeeGuesser {
 
         var totalLength: Double { cumulative.last ?? 0 }
 
-        init(_ centerline: [Coordinate]) {
+        init(_ centerline: CoordinatePath) {
             origin = centerline[0]
-            metersPerDegreeLongitude = metersPerDegreeLongitudeAtEquator * cos(origin.latitude * .pi / 180)
+            metersPerDegreeLongitude = metersPerDegreeLongitudeAtEquator * cos(origin.lat * .pi / 180)
             var points: [(x: Double, y: Double)] = []
             var cumulative: [Double] = []
             for coordinate in centerline {
                 let point = (
-                    x: (coordinate.longitude - origin.longitude) * metersPerDegreeLongitude,
-                    y: (coordinate.latitude - origin.latitude) * metersPerDegreeLatitude
+                    x: (coordinate.lon - origin.lon) * metersPerDegreeLongitude,
+                    y: (coordinate.lat - origin.lat) * metersPerDegreeLatitude
                 )
                 if let last = points.last {
                     cumulative.append(cumulative.last! + hypot(point.x - last.x, point.y - last.y))
@@ -122,8 +122,8 @@ enum TeeGuesser {
         /// Distance in meters along the centerline to the point's projection. Points behind the
         /// start are negative and points past the end are greater than the total length.
         func position(of coordinate: Coordinate) -> Double {
-            let px = (coordinate.longitude - origin.longitude) * metersPerDegreeLongitude
-            let py = (coordinate.latitude - origin.latitude) * metersPerDegreeLatitude
+            let px = (coordinate.lon - origin.lon) * metersPerDegreeLongitude
+            let py = (coordinate.lat - origin.lat) * metersPerDegreeLatitude
 
             var bestDistSq = Double.greatestFiniteMagnitude
             var bestPosition = 0.0

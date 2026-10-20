@@ -17,20 +17,20 @@ final class ElevationUpdaterTests: XCTestCase {
 
     func testCourseWithPolygonPointLackingElevationIsMissingElevations() {
         let feature = Feature(id: 1, type: .green, polygon: [
-            Coordinate(latitude: 39.0, longitude: -105.0, elevation: 1600),
-            Coordinate(latitude: 39.1, longitude: -105.1),
+            Coordinate(lat: 39.0, lon: -105.0, ele: 1600),
+            Coordinate(lat: 39.1, lon: -105.1),
         ])
         XCTAssertTrue(makeCourse(features: [feature], centerline: []).isMissingElevations)
     }
 
     func testCourseWithCenterlinePointLackingElevationIsMissingElevations() {
-        let centerline = [Coordinate(latitude: 39.0, longitude: -105.0)]
+        let centerline: CoordinatePath = [Coordinate(lat: 39.0, lon: -105.0)]
         XCTAssertTrue(makeCourse(features: [], centerline: centerline).isMissingElevations)
     }
 
     func testCourseWithAllElevationsIsNotMissingElevations() {
-        let feature = Feature(id: 1, type: .green, polygon: [Coordinate(latitude: 39.0, longitude: -105.0, elevation: 1600)])
-        let centerline = [Coordinate(latitude: 39.0, longitude: -105.0, elevation: 1601)]
+        let feature = Feature(id: 1, type: .green, polygon: [Coordinate(lat: 39.0, lon: -105.0, ele: 1600)])
+        let centerline: CoordinatePath = [Coordinate(lat: 39.0, lon: -105.0, ele: 1601)]
         XCTAssertFalse(makeCourse(features: [feature], centerline: centerline).isMissingElevations)
     }
 
@@ -42,18 +42,18 @@ final class ElevationUpdaterTests: XCTestCase {
             points.enumerated().map { index, point in (locationId: index, value: point[1] * 10) }
         }
         let feature = Feature(id: 1, type: .green, polygon: [
-            Coordinate(latitude: 39.1, longitude: -105.0),
-            Coordinate(latitude: 39.2, longitude: -105.0, elevation: 5),
-            Coordinate(latitude: 39.3, longitude: -105.0),
+            Coordinate(lat: 39.1, lon: -105.0),
+            Coordinate(lat: 39.2, lon: -105.0, ele: 5),
+            Coordinate(lat: 39.3, lon: -105.0),
         ])
-        let course = makeCourse(features: [feature], centerline: [Coordinate(latitude: 39.4, longitude: -105.0)])
+        let course = makeCourse(features: [feature], centerline: [Coordinate(lat: 39.4, lon: -105.0)])
 
         let updated = try await ElevationUpdater.update(course, using: makeClient())
 
         XCTAssertFalse(updated.isMissingElevations)
-        XCTAssertEqual(updated.location.coordinate.elevation, 390)
-        XCTAssertEqual(updated.features[0].polygon.map(\.elevation), [391, 5, 393])
-        XCTAssertEqual(updated.subCourses[0].holes[0].centerline[0].elevation, 394)
+        XCTAssertEqual(updated.location.coordinate.ele, 390)
+        XCTAssertEqual(updated.features[0].polygon.compactMap(\.ele), [391, 5, 393].map(pathElevation))
+        XCTAssertEqual(updated.subCourses[0].holes[0].centerline[0].ele, pathElevation(394))
     }
 
     func testUpdateSplitsLargeCoursesIntoBatches() async throws {
@@ -61,21 +61,21 @@ final class ElevationUpdaterTests: XCTestCase {
             points.enumerated().map { index, point in (locationId: index, value: point[1]) }
         }
         let count = USGSElevationClient.batchSize * 2 + 5
-        let polygon = (0..<count).map { Coordinate(latitude: Double($0), longitude: -105.0) }
-        let course = makeCourse(features: [Feature(id: 1, type: .fairway, polygon: polygon)], centerline: [])
+        let polygon = (0..<count).map { Coordinate(lat: Double($0), lon: -105.0) }
+        let course = makeCourse(features: [Feature(id: 1, type: .fairway, polygon: CoordinatePath(polygon))], centerline: [])
 
         let updated = try await ElevationUpdater.update(course, using: makeClient())
 
         // +1 point for the course location.
         XCTAssertEqual(StubUSGSProtocol.requestCount, 3)
-        XCTAssertEqual(updated.features[0].polygon.map(\.elevation), (0..<count).map { Double($0) })
+        XCTAssertEqual(updated.features[0].polygon.compactMap(\.ele), (0..<count).map { pathElevation(Double($0)) })
     }
 
     func testUpdateThrowsWhenUSGSHasNoDataForAPoint() async {
         StubUSGSProtocol.handler = { points in
             points.indices.dropLast().map { (locationId: $0, value: 100) }
         }
-        let feature = Feature(id: 1, type: .green, polygon: [Coordinate(latitude: 56.3, longitude: -2.8)])
+        let feature = Feature(id: 1, type: .green, polygon: [Coordinate(lat: 56.3, lon: -2.8)])
         let course = makeCourse(features: [feature], centerline: [])
 
         do {
@@ -91,7 +91,7 @@ final class ElevationUpdaterTests: XCTestCase {
 
     func testUpdateMakesNoRequestWhenNothingIsMissing() async throws {
         var course = makeCourse(features: [], centerline: [])
-        course.location.coordinate.elevation = 1600
+        course.location.coordinate.ele = 1600
 
         let updated = try await ElevationUpdater.update(course, using: makeClient())
 
@@ -103,17 +103,17 @@ final class ElevationUpdaterTests: XCTestCase {
 
     func testFillingMissingElevationsSetsOnlyMissingOnes() {
         let feature = Feature(id: 1, type: .green, polygon: [
-            Coordinate(latitude: 56.3, longitude: -2.8),
-            Coordinate(latitude: 56.4, longitude: -2.8, elevation: 5),
+            Coordinate(lat: 56.3, lon: -2.8),
+            Coordinate(lat: 56.4, lon: -2.8, ele: 5),
         ])
-        let course = makeCourse(features: [feature], centerline: [Coordinate(latitude: 56.5, longitude: -2.8)])
+        let course = makeCourse(features: [feature], centerline: [Coordinate(lat: 56.5, lon: -2.8)])
 
         let updated = ElevationUpdater.fillingMissingElevations(of: course, with: 0)
 
         XCTAssertFalse(updated.isMissingElevations)
-        XCTAssertEqual(updated.location.coordinate.elevation, 0)
-        XCTAssertEqual(updated.features[0].polygon.map(\.elevation), [0, 5])
-        XCTAssertEqual(updated.subCourses[0].holes[0].centerline[0].elevation, 0)
+        XCTAssertEqual(updated.location.coordinate.ele, 0)
+        XCTAssertEqual(updated.features[0].polygon.compactMap(\.ele), [0, 5].map(pathElevation))
+        XCTAssertEqual(updated.subCourses[0].holes[0].centerline[0].ele, 0)
     }
 
     // MARK: - isOutsideUnitedStates
@@ -135,12 +135,12 @@ final class ElevationUpdaterTests: XCTestCase {
         return USGSElevationClient(session: URLSession(configuration: configuration))
     }
 
-    private func makeCourse(features: [Feature], centerline: [Coordinate]) -> Course {
+    private func makeCourse(features: [Feature], centerline: CoordinatePath) -> Course {
         Course(
             name: "Test Course",
             location: CourseLocation(
                 address: "", city: "Denver", state: "CO", country: "US",
-                coordinate: Coordinate(latitude: 39.0, longitude: -105.0)
+                coordinate: Coordinate(lat: 39.0, lon: -105.0)
             ),
             features: features,
             subCourses: [SubCourse(name: "Front", holes: [Hole(number: 1, par: 4, centerline: centerline)])]
@@ -192,28 +192,28 @@ private final class StubUSGSProtocol: URLProtocol {
 
 final class ElevationUpdaterLocationTests: XCTestCase {
     func testMissingCoordinatesListsEachPositionOnce() {
-        let shared = Coordinate(latitude: 39.1, longitude: -105.0)
+        let shared = Coordinate(lat: 39.1, lon: -105.0)
         var course = Course(
             name: "Test",
-            location: CourseLocation(address: "", city: "", state: "", country: "US", coordinate: Coordinate(latitude: 39.0, longitude: -105.0, elevation: 1)),
+            location: CourseLocation(address: "", city: "", state: "", country: "US", coordinate: Coordinate(lat: 39.0, lon: -105.0, ele: 1)),
             features: [
-                Feature(id: 1, type: .green, polygon: [shared, Coordinate(latitude: 39.2, longitude: -105.0, elevation: 2)]),
+                Feature(id: 1, type: .green, polygon: [shared, Coordinate(lat: 39.2, lon: -105.0, ele: 2)]),
                 Feature(id: 2, type: .bunker, polygon: [shared]),
             ],
-            subCourses: [SubCourse(name: "Front", holes: [Hole(number: 1, par: 4, centerline: [Coordinate(latitude: 39.3, longitude: -105.0)])])]
+            subCourses: [SubCourse(name: "Front", holes: [Hole(number: 1, par: 4, centerline: [Coordinate(lat: 39.3, lon: -105.0)])])]
         )
 
-        XCTAssertEqual(ElevationUpdater.missingCoordinates(in: course), [shared, Coordinate(latitude: 39.3, longitude: -105.0)])
+        XCTAssertEqual(ElevationUpdater.missingCoordinates(in: course), [shared, Coordinate(lat: 39.3, lon: -105.0)])
 
         ElevationUpdater.apply([
             ElevationUpdater.Location(shared): 10,
-            ElevationUpdater.Location(Coordinate(latitude: 39.2, longitude: -105.0)): 99,
-            ElevationUpdater.Location(Coordinate(latitude: 50, longitude: 50)): 7,
+            ElevationUpdater.Location(Coordinate(lat: 39.2, lon: -105.0)): 99,
+            ElevationUpdater.Location(Coordinate(lat: 50, lon: 50)): 7,
         ], to: &course)
 
-        XCTAssertEqual(course.features[0].polygon.map(\.elevation), [10, 2])
-        XCTAssertEqual(course.features[1].polygon.map(\.elevation), [10])
-        XCTAssertNil(course.subCourses[0].holes[0].centerline[0].elevation)
+        XCTAssertEqual(course.features[0].polygon.compactMap(\.ele), [10, 2].map(pathElevation))
+        XCTAssertEqual(course.features[1].polygon.compactMap(\.ele), [pathElevation(10)])
+        XCTAssertNil(course.subCourses[0].holes[0].centerline[0].ele)
     }
 }
 
@@ -222,12 +222,12 @@ final class LookUpMissingElevationsTests: XCTestCase {
         let course = makeCourse()
 
         let lookup = try await ElevationUpdater.lookUpMissingElevations(in: course) { coordinates in
-            coordinates.map { $0.latitude == 39.2 ? nil : 100 }
+            coordinates.map { $0.lat == 39.2 ? nil : 100 }
         }
 
         XCTAssertEqual(lookup.seaLevelPoints, 1)
-        XCTAssertEqual(lookup.elevations[ElevationUpdater.Location(Coordinate(latitude: 39.1, longitude: -105.0))], 100)
-        XCTAssertEqual(lookup.elevations[ElevationUpdater.Location(Coordinate(latitude: 39.2, longitude: -105.0))], 0)
+        XCTAssertEqual(lookup.elevations[ElevationUpdater.Location(Coordinate(lat: 39.1, lon: -105.0))], 100)
+        XCTAssertEqual(lookup.elevations[ElevationUpdater.Location(Coordinate(lat: 39.2, lon: -105.0))], 0)
     }
 
     func testCourseOutsideUnitedStatesIsSetToSeaLevel() async throws {
@@ -268,10 +268,10 @@ final class LookUpMissingElevationsTests: XCTestCase {
     private func makeCourse() -> Course {
         Course(
             name: "Test",
-            location: CourseLocation(address: "", city: "", state: "", country: "US", coordinate: Coordinate(latitude: 39.0, longitude: -105.0)),
+            location: CourseLocation(address: "", city: "", state: "", country: "US", coordinate: Coordinate(lat: 39.0, lon: -105.0)),
             features: [Feature(id: 1, type: .green, polygon: [
-                Coordinate(latitude: 39.1, longitude: -105.0),
-                Coordinate(latitude: 39.2, longitude: -105.0),
+                Coordinate(lat: 39.1, lon: -105.0),
+                Coordinate(lat: 39.2, lon: -105.0),
             ])]
         )
     }

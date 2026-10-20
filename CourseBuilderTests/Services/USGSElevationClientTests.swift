@@ -5,8 +5,8 @@ import CourseDataSwift
 final class USGSElevationClientTests: XCTestCase {
     func testBuildRequest() throws {
         let request = USGSElevationClient.buildRequest(for: [
-            Coordinate(latitude: 39.639, longitude: -104.8846),
-            Coordinate(latitude: 39.64, longitude: -104.8855),
+            Coordinate(lat: 39.639, lon: -104.8846),
+            Coordinate(lat: 39.64, lon: -104.8855),
         ])
 
         XCTAssertEqual(request.httpMethod, "POST")

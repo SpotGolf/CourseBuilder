@@ -85,7 +85,7 @@ struct FeatureEditorView: View {
             .foregroundStyle(.secondary)
 
             HStack {
-                Text(String(format: "Centroid: %.6f, %.6f", centroid.latitude, centroid.longitude))
+                Text(String(format: "Centroid: %.6f, %.6f", centroid.lat, centroid.lon))
                     .font(.caption)
                     .foregroundStyle(.secondary)
             }
@@ -103,10 +103,10 @@ struct FeatureEditorView: View {
                                 .font(.caption2.monospacedDigit())
                                 .frame(width: 20)
                                 .foregroundStyle(.secondary)
-                            TextField("Lat", value: $feature.polygon[index].latitude, format: .number)
+                            TextField("Lat", value: vertexBinding(index, \.lat), format: .number)
                                 .textFieldStyle(.roundedBorder)
                                 .font(.caption)
-                            TextField("Lon", value: $feature.polygon[index].longitude, format: .number)
+                            TextField("Lon", value: vertexBinding(index, \.lon), format: .number)
                                 .textFieldStyle(.roundedBorder)
                                 .font(.caption)
                         }
@@ -118,5 +118,18 @@ struct FeatureEditorView: View {
         }
         .padding()
         .frame(maxWidth: .infinity, alignment: .leading)
+    }
+
+    /// A binding to one value of a polygon vertex. A path's points can't be changed in place, so
+    /// setting it replaces the polygon.
+    private func vertexBinding(_ index: Int, _ keyPath: WritableKeyPath<Coordinate, Double>) -> Binding<Double> {
+        Binding(
+            get: { feature.polygon[index][keyPath: keyPath] },
+            set: { value in
+                var points = Array(feature.polygon)
+                points[index][keyPath: keyPath] = value
+                feature.polygon = CoordinatePath(points)
+            }
+        )
     }
 }

@@ -10,7 +10,7 @@ enum SyntheticImagery {
     }
 
     static let zoom = 19
-    static let center = Coordinate(latitude: 40.0, longitude: -105.0)
+    static let center = Coordinate(lat: 40.0, lon: -105.0)
 
     static let grass = Color(r: 60, g: 110, b: 50, nir: 180)
     static let sand = Color(r: 210, g: 195, b: 160, nir: 210)
@@ -24,7 +24,7 @@ enum SyntheticImagery {
     static let realRough = Color(r: 68, g: 93, b: 54, nir: 199)
 
     static var metersPerPixel: Double {
-        WebMercator.metersPerPixel(latitude: center.latitude, zoom: zoom)
+        WebMercator.metersPerPixel(latitude: center.lat, zoom: zoom)
     }
 
     /// A size×size patch centered on `center`. `paint` gets each pixel center's offset in
@@ -54,8 +54,8 @@ enum SyntheticImagery {
 
     static func coordinate(east: Double, north: Double) -> Coordinate {
         Coordinate(
-            latitude: center.latitude + north / 111_320.0,
-            longitude: center.longitude + east / (111_320.0 * cos(center.latitude * .pi / 180))
+            lat: center.lat + north / 111_320.0,
+            lon: center.lon + east / (111_320.0 * cos(center.lat * .pi / 180))
         )
     }
 
@@ -70,10 +70,10 @@ enum SyntheticImagery {
     /// Polygon area in square meters.
     static func area(_ polygon: [Coordinate]) -> Double {
         guard polygon.count >= 3 else { return 0 }
-        let lat0 = polygon[0].latitude
+        let lat0 = polygon[0].lat
         let points = polygon.map { c in
-            (x: (c.longitude - polygon[0].longitude) * 111_320.0 * cos(lat0 * .pi / 180),
-             y: (c.latitude - lat0) * 111_320.0)
+            (x: (c.lon - polygon[0].lon) * 111_320.0 * cos(lat0 * .pi / 180),
+             y: (c.lat - lat0) * 111_320.0)
         }
         var sum = 0.0
         for i in points.indices {
@@ -86,7 +86,7 @@ enum SyntheticImagery {
     /// Centroid offset in meters east and north of `center`.
     static func centroidOffset(_ polygon: [Coordinate]) -> (east: Double, north: Double) {
         let c = PolygonGeometry.centroid(of: polygon)
-        return ((c.longitude - center.longitude) * 111_320.0 * cos(center.latitude * .pi / 180),
-                (c.latitude - center.latitude) * 111_320.0)
+        return ((c.lon - center.lon) * 111_320.0 * cos(center.lat * .pi / 180),
+                (c.lat - center.lat) * 111_320.0)
     }
 }

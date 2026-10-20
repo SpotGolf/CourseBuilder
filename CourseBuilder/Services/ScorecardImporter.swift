@@ -102,7 +102,7 @@ class ScorecardImporter: ObservableObject {
         }
         return Course(
             name: name,
-            location: CourseLocation(address: "", city: city, state: state, country: "", coordinate: Coordinate(latitude: 0, longitude: 0)),
+            location: CourseLocation(address: "", city: city, state: state, country: "", coordinate: Coordinate(lat: 0, lon: 0)),
             subCourses: subCourses
         )
     }
@@ -126,7 +126,7 @@ class ScorecardImporter: ObservableObject {
 
         return Course(
             name: name,
-            location: CourseLocation(address: "", city: city, state: state, country: "", coordinate: Coordinate(latitude: 0, longitude: 0)),
+            location: CourseLocation(address: "", city: city, state: state, country: "", coordinate: Coordinate(lat: 0, lon: 0)),
             tees: tees,
             subCourses: subCourses
         )

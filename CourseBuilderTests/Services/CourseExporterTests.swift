@@ -12,11 +12,11 @@ struct CourseExporterTests {
                 city: "Denver",
                 state: "CO",
                 country: "US",
-                coordinate: Coordinate(latitude: 39, longitude: -105)
+                coordinate: Coordinate(lat: 39, lon: -105)
             ),
             tees: [TeeDefinition(name: "Blue", color: "#0000FF"), TeeDefinition(name: "White", color: "#FFFFFF")],
             comboTees: [ComboTeeDefinition(name: "Blue/White", tees: ["Blue", "White"])],
-            features: [Feature(id: 1, type: .tee, polygon: [Coordinate(latitude: 39, longitude: -105, elevation: 1600)])],
+            features: [Feature(id: 1, type: .tee, polygon: [Coordinate(lat: 39, lon: -105, ele: 1600)])],
             subCourses: [SubCourse(
                 name: "Front",
                 holes: [Hole(

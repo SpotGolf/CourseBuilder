@@ -87,7 +87,7 @@ final class OverpassAPIClientTests: XCTestCase {
     }
 
     func testBoundingBoxFromCoordinateWithPadding() {
-        let center = Coordinate(latitude: 39.7879, longitude: -74.9580)
+        let center = Coordinate(lat: 39.7879, lon: -74.9580)
         let bbox = OverpassAPIClient.boundingBox(around: center, radiusMeters: 1000)
         XCTAssertLessThan(bbox.south, 39.7879)
         XCTAssertGreaterThan(bbox.north, 39.7879)
@@ -173,15 +173,15 @@ final class OverpassAPIClientTests: XCTestCase {
     func testBoundaryBoundingBoxRejectsSmallOrMissingBoundary() {
         XCTAssertNil(OverpassAPIClient.boundaryBoundingBox(for: nil))
         XCTAssertNil(OverpassAPIClient.boundaryBoundingBox(for: [
-            Coordinate(latitude: 39.0, longitude: -105.0),
-            Coordinate(latitude: 39.01, longitude: -105.0),
+            Coordinate(lat: 39.0, lon: -105.0),
+            Coordinate(lat: 39.01, lon: -105.0),
         ]))
         // A building-sized polygon (~44 m x 31 m) is not a course outline
         let building = [
-            Coordinate(latitude: 39.2660, longitude: -104.9107),
-            Coordinate(latitude: 39.2664, longitude: -104.9107),
-            Coordinate(latitude: 39.2664, longitude: -104.9103),
-            Coordinate(latitude: 39.2660, longitude: -104.9103),
+            Coordinate(lat: 39.2660, lon: -104.9107),
+            Coordinate(lat: 39.2664, lon: -104.9107),
+            Coordinate(lat: 39.2664, lon: -104.9103),
+            Coordinate(lat: 39.2660, lon: -104.9103),
         ]
         XCTAssertNil(OverpassAPIClient.boundaryBoundingBox(for: building))
     }
@@ -189,10 +189,10 @@ final class OverpassAPIClientTests: XCTestCase {
     func testBoundaryBoundingBoxUsesRealOutline() throws {
         // ~1.1 km x 1.5 km outline
         let outline = [
-            Coordinate(latitude: 39.00, longitude: -105.00),
-            Coordinate(latitude: 39.01, longitude: -105.00),
-            Coordinate(latitude: 39.01, longitude: -104.98),
-            Coordinate(latitude: 39.00, longitude: -104.98),
+            Coordinate(lat: 39.00, lon: -105.00),
+            Coordinate(lat: 39.01, lon: -105.00),
+            Coordinate(lat: 39.01, lon: -104.98),
+            Coordinate(lat: 39.00, lon: -104.98),
         ]
         let bbox = try XCTUnwrap(OverpassAPIClient.boundaryBoundingBox(for: outline))
         XCTAssertEqual(bbox.south, 39.00 - 0.01 * 0.25, accuracy: 0.0001)

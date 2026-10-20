@@ -33,7 +33,7 @@ struct CourseInfoUpdaterTests {
     }
 
     @Test func mapWorkIsKept() {
-        let centerline = [Coordinate(latitude: 1, longitude: 2, elevation: 3), Coordinate(latitude: 4, longitude: 5, elevation: 6)]
+        let centerline: CoordinatePath = [Coordinate(lat: 1, lon: 2, ele: 3), Coordinate(lat: 4, lon: 5, ele: 6)]
         var existing = makeCourse(
             name: "Course",
             tees: [TeeDefinition(name: "Blue", color: "#0000FF")],
@@ -47,7 +47,7 @@ struct CourseInfoUpdaterTests {
             )])]
         )
         existing.features = [Feature(id: 1, type: .tee, polygon: []), Feature(id: 2, type: .green, polygon: [])]
-        existing.location.coordinate = Coordinate(latitude: 40, longitude: -105)
+        existing.location.coordinate = Coordinate(lat: 40, lon: -105)
         existing.golfCourseAPIIds = ["42"]
         let fetched = makeCourse(
             name: "Course",
@@ -59,7 +59,7 @@ struct CourseInfoUpdaterTests {
 
         #expect(merged.id == existing.id)
         #expect(merged.features == existing.features)
-        #expect(merged.location.coordinate == Coordinate(latitude: 40, longitude: -105))
+        #expect(merged.location.coordinate == Coordinate(lat: 40, lon: -105))
         #expect(merged.golfCourseAPIIds == ["42"])
         #expect(merged.subCourses[0].id == existing.subCourses[0].id)
         #expect(merged.subCourses[0].name == "Out")
@@ -167,7 +167,7 @@ struct CourseInfoUpdaterTests {
                 city: "Boulder",
                 state: "CO",
                 country: "US",
-                coordinate: Coordinate(latitude: 0, longitude: 0)
+                coordinate: Coordinate(lat: 0, lon: 0)
             ),
             tees: tees,
             subCourses: subCourses

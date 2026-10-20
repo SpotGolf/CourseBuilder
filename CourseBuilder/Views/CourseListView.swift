@@ -380,7 +380,7 @@ struct AddCourseSheet: View {
         case .manualEntry:
             guard let lat = Double(latitude), let lon = Double(longitude) else { return }
             isGeocodingManual = true
-            let coord = Coordinate(latitude: lat, longitude: lon)
+            let coord = Coordinate(lat: lat, lon: lon)
             let courseName = name
             let courseClubName = clubName
             let courseHoleCount = holeCount

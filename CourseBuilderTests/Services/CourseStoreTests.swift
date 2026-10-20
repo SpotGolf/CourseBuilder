@@ -89,7 +89,7 @@ final class CourseStoreTests: XCTestCase {
                 city: "Denver",
                 state: "CO",
                 country: "",
-                coordinate: Coordinate(latitude: 39.0, longitude: -105.0)
+                coordinate: Coordinate(lat: 39.0, lon: -105.0)
             )
         )
     }
@@ -114,7 +114,7 @@ struct SharedCourseBindingTests {
                 city: "Denver",
                 state: "CO",
                 country: "US",
-                coordinate: Coordinate(latitude: 39.0, longitude: -105.0)
+                coordinate: Coordinate(lat: 39.0, lon: -105.0)
             ),
             tees: [
                 TeeDefinition(name: "Blue", color: "#0000FF"),

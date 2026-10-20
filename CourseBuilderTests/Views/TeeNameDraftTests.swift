@@ -84,7 +84,7 @@ struct TeeNameDraftTests {
                 city: "Denver",
                 state: "CO",
                 country: "US",
-                coordinate: Coordinate(latitude: 0, longitude: 0)
+                coordinate: Coordinate(lat: 0, lon: 0)
             ),
             features: [],
             subCourses: [SubCourse(name: "Front", holes: [hole])]

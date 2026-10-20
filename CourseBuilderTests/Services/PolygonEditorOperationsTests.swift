@@ -15,13 +15,13 @@ struct PolygonEditorOperationsTests {
 
     @Test func nearestVertexUsesPointerCoordinate() {
         let polygon = [
-            Coordinate(latitude: 0, longitude: 0),
-            Coordinate(latitude: 0, longitude: 1),
-            Coordinate(latitude: 1, longitude: 1),
+            Coordinate(lat: 0, lon: 0),
+            Coordinate(lat: 0, lon: 1),
+            Coordinate(lat: 1, lon: 1),
         ]
 
         let index = PolygonEditorOperations.nearestVertexIndex(
-            to: Coordinate(latitude: 0.9, longitude: 0.9),
+            to: Coordinate(lat: 0.9, lon: 0.9),
             in: polygon
         )
 
@@ -66,9 +66,9 @@ struct PolygonEditorOperationsTests {
     }
 
     @Test func deleteAndRestorePreservesFeatureAndHoleOrdering() throws {
-        let first = Feature(id: 1, type: .tee, polygon: square)
-        let deleted = Feature(id: 2, type: .fairway, polygon: square)
-        let last = Feature(id: 3, type: .green, polygon: square)
+        let first = Feature(id: 1, type: .tee, polygon: CoordinatePath(square))
+        let deleted = Feature(id: 2, type: .fairway, polygon: CoordinatePath(square))
+        let last = Feature(id: 3, type: .green, polygon: CoordinatePath(square))
         var course = makeCourse(features: [first, deleted, last])
         course.subCourses[0].holes[0].features = [1, 2, 3]
         course.subCourses[0].holes[1].features = [2, 3]
@@ -92,7 +92,7 @@ struct PolygonEditorOperationsTests {
     }
 
     @Test func restoringSameDeletionTwiceIsRejected() throws {
-        var course = makeCourse(features: [Feature(id: 2, type: .fairway, polygon: square)])
+        var course = makeCourse(features: [Feature(id: 2, type: .fairway, polygon: CoordinatePath(square))])
         let record = try #require(PolygonEditorOperations.deleteFeature(id: 2, from: &course))
 
         #expect(PolygonEditorOperations.restoreFeature(record, to: &course))
@@ -101,7 +101,7 @@ struct PolygonEditorOperationsTests {
     }
 
     @Test func addFeatureAddsToCourseAndHole() {
-        var course = makeCourse(features: [Feature(id: 5, type: .tee, polygon: square)])
+        var course = makeCourse(features: [Feature(id: 5, type: .tee, polygon: CoordinatePath(square))])
         course.subCourses[0].holes[1].features = [5]
 
         let feature = PolygonEditorOperations.addFeature(type: .bunker, polygon: square, subCourseIndex: 0, holeIndex: 1, to: &course)
@@ -121,16 +121,16 @@ struct PolygonEditorOperationsTests {
 
     @Test func undoReplacedPolygonRestoresOldOutline() {
         let oldPolygon = square
-        var course = makeCourse(features: [Feature(id: 1, type: .bunker, polygon: oldPolygon)])
-        course.features[0].polygon = Array(oldPolygon.prefix(3))
+        var course = makeCourse(features: [Feature(id: 1, type: .bunker, polygon: CoordinatePath(oldPolygon))])
+        course.features[0].polygon = CoordinatePath(oldPolygon.prefix(3))
 
         #expect(PolygonEditorOperations.undo(.replacedPolygon(featureID: 1, oldPolygon: oldPolygon), in: &course))
-        #expect(course.features[0].polygon == oldPolygon)
+        #expect(Array(course.features[0].polygon) == oldPolygon)
         #expect(!PolygonEditorOperations.undo(.replacedPolygon(featureID: 9, oldPolygon: oldPolygon), in: &course))
     }
 
     @Test func undoAddedFeatureRemovesFeatureAndHoleReference() {
-        var course = makeCourse(features: [Feature(id: 1, type: .tee, polygon: square), Feature(id: 2, type: .bunker, polygon: square)])
+        var course = makeCourse(features: [Feature(id: 1, type: .tee, polygon: CoordinatePath(square)), Feature(id: 2, type: .bunker, polygon: CoordinatePath(square))])
         course.subCourses[0].holes[0].features = [1, 2]
 
         #expect(PolygonEditorOperations.undo(.added(featureID: 2), in: &course))
@@ -140,7 +140,7 @@ struct PolygonEditorOperationsTests {
     }
 
     @Test func undoDeletedRestoresFeature() throws {
-        var course = makeCourse(features: [Feature(id: 2, type: .fairway, polygon: square)])
+        var course = makeCourse(features: [Feature(id: 2, type: .fairway, polygon: CoordinatePath(square))])
         let record = try #require(PolygonEditorOperations.deleteFeature(id: 2, from: &course))
 
         #expect(PolygonEditorOperations.undo(.deleted(record), in: &course))
@@ -149,10 +149,10 @@ struct PolygonEditorOperationsTests {
 
     private var square: [Coordinate] {
         [
-            Coordinate(latitude: 0, longitude: 0),
-            Coordinate(latitude: 0, longitude: 10),
-            Coordinate(latitude: 10, longitude: 10),
-            Coordinate(latitude: 10, longitude: 0),
+            Coordinate(lat: 0, lon: 0),
+            Coordinate(lat: 0, lon: 10),
+            Coordinate(lat: 10, lon: 10),
+            Coordinate(lat: 10, lon: 0),
         ]
     }
 
@@ -168,7 +168,7 @@ struct PolygonEditorOperationsTests {
                 city: "Denver",
                 state: "CO",
                 country: "US",
-                coordinate: Coordinate(latitude: 0, longitude: 0)
+                coordinate: Coordinate(lat: 0, lon: 0)
             ),
             features: features,
             subCourses: [

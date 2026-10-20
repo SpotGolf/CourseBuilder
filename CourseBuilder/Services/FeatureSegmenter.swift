@@ -27,8 +27,8 @@ struct SegmentationProfile {
 }
 
 /// Type rules come from NAIP pixels measured inside each feature type at Colorado National
-/// (2023, 30 cm): median NDVI bunker 0.02, water 0.19, green 0.32, tee 0.39, fairway 0.44,
-/// rough 0.46; median lightness green 51, tee 47, fairway 41, rough 40, water 32.
+/// (2023, 30 cm): median NDVI bunker 0.02, water 0.19, green 0.32, tee 0.39, fairway 0.44;
+/// median lightness green 51, tee 47, fairway 41, water 32.
 extension FeatureType {
     var segmentationProfile: SegmentationProfile {
         switch self {
@@ -53,11 +53,6 @@ extension FeatureType {
                                 errorLimitMeters: 1.0, minSpacingMeters: 3, safetyLimit: 150,
                                 refinesFit: true, splitsGrownRegion: true,
                                 accepts: { ndvi, _ in ndvi > 0.25 })
-        case .rough:
-            SegmentationProfile(tolerance: 3.0, maxRadiusMeters: 400, fitMarginMeters: 15,
-                                errorLimitMeters: 1.5, minSpacingMeters: 3, safetyLimit: 150,
-                                refinesFit: true, splitsGrownRegion: true,
-                                accepts: { ndvi, _ in ndvi > 0.2 })
         }
     }
 }

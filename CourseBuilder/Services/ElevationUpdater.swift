@@ -4,8 +4,8 @@ import CourseDataSwift
 extension Course {
     /// Whether any feature polygon point or hole centerline point has no elevation.
     var isMissingElevations: Bool {
-        features.contains { $0.polygon.contains { $0.elevation == nil } }
-            || subCourses.contains { $0.holes.contains { $0.centerline.contains { $0.elevation == nil } } }
+        features.contains { $0.polygon.contains { $0.ele == nil } }
+            || subCourses.contains { $0.holes.contains { $0.centerline.contains { $0.ele == nil } } }
     }
 }
 
@@ -23,7 +23,7 @@ enum ElevationUpdater {
         var updated = course
         var missing: [Coordinate] = []
         forEachCoordinate(in: &updated) { coordinate in
-            if coordinate.elevation == nil {
+            if coordinate.ele == nil {
                 missing.append(coordinate)
             }
         }
@@ -37,8 +37,8 @@ enum ElevationUpdater {
 
         var next = resolved.makeIterator()
         forEachCoordinate(in: &updated) { coordinate in
-            if coordinate.elevation == nil {
-                coordinate.elevation = next.next()
+            if coordinate.ele == nil {
+                coordinate.ele = next.next()
             }
         }
         return updated
@@ -48,8 +48,8 @@ enum ElevationUpdater {
     static func fillingMissingElevations(of course: Course, with elevation: Double) -> Course {
         var updated = course
         forEachCoordinate(in: &updated) { coordinate in
-            if coordinate.elevation == nil {
-                coordinate.elevation = elevation
+            if coordinate.ele == nil {
+                coordinate.ele = elevation
             }
         }
         return updated
@@ -61,8 +61,8 @@ enum ElevationUpdater {
         let longitude: Double
 
         init(_ coordinate: Coordinate) {
-            latitude = coordinate.latitude
-            longitude = coordinate.longitude
+            latitude = coordinate.lat
+            longitude = coordinate.lon
         }
     }
 
@@ -71,7 +71,7 @@ enum ElevationUpdater {
         var seen: Set<Location> = []
         var missing: [Coordinate] = []
         forEachCoordinate(in: course) { coordinate in
-            if coordinate.elevation == nil, seen.insert(Location(coordinate)).inserted {
+            if coordinate.ele == nil, seen.insert(Location(coordinate)).inserted {
                 missing.append(coordinate)
             }
         }
@@ -122,8 +122,8 @@ enum ElevationUpdater {
     static func apply(_ elevations: [Location: Double], to course: inout Course) {
         guard !elevations.isEmpty else { return }
         forEachCoordinate(in: &course) { coordinate in
-            if coordinate.elevation == nil, let elevation = elevations[Location(coordinate)] {
-                coordinate.elevation = elevation
+            if coordinate.ele == nil, let elevation = elevations[Location(coordinate)] {
+                coordinate.ele = elevation
             }
         }
     }
@@ -145,16 +145,21 @@ enum ElevationUpdater {
     private static func forEachCoordinate(in course: inout Course, _ body: (inout Coordinate) -> Void) {
         body(&course.location.coordinate)
         for f in course.features.indices {
-            for p in course.features[f].polygon.indices {
-                body(&course.features[f].polygon[p])
-            }
+            course.features[f].polygon = updating(course.features[f].polygon, body)
         }
         for s in course.subCourses.indices {
             for h in course.subCourses[s].holes.indices {
-                for c in course.subCourses[s].holes[h].centerline.indices {
-                    body(&course.subCourses[s].holes[h].centerline[c])
-                }
+                course.subCourses[s].holes[h].centerline = updating(course.subCourses[s].holes[h].centerline, body)
             }
         }
+    }
+
+    /// Returns a copy of the path with `body` applied to each point. A path's points can't be changed in place.
+    private static func updating(_ path: CoordinatePath, _ body: (inout Coordinate) -> Void) -> CoordinatePath {
+        CoordinatePath(path.map { coordinate in
+            var coordinate = coordinate
+            body(&coordinate)
+            return coordinate
+        })
     }
 }

@@ -101,7 +101,7 @@ actor USGSElevationClient {
 
     static func buildRequest(for coordinates: [Coordinate]) -> URLRequest {
         let geometry: [String: Any] = [
-            "points": coordinates.map { [$0.longitude, $0.latitude] },
+            "points": coordinates.map { [$0.lon, $0.lat] },
             "spatialReference": ["wkid": 4326],
         ]
         let geometryJSON = String(data: try! JSONSerialization.data(withJSONObject: geometry), encoding: .utf8)!

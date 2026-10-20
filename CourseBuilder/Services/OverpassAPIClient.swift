@@ -28,13 +28,13 @@ actor OverpassAPIClient {
         /// Smallest box containing every coordinate. Returns nil for an empty list.
         init?(containing coordinates: [Coordinate]) {
             guard let first = coordinates.first else { return nil }
-            var south = first.latitude, north = first.latitude
-            var west = first.longitude, east = first.longitude
+            var south = first.lat, north = first.lat
+            var west = first.lon, east = first.lon
             for c in coordinates.dropFirst() {
-                south = min(south, c.latitude)
-                north = max(north, c.latitude)
-                west = min(west, c.longitude)
-                east = max(east, c.longitude)
+                south = min(south, c.lat)
+                north = max(north, c.lat)
+                west = min(west, c.lon)
+                east = max(east, c.lon)
             }
             self.init(south: south, west: west, north: north, east: east)
         }
@@ -119,12 +119,12 @@ actor OverpassAPIClient {
 
     static func boundingBox(around center: Coordinate, radiusMeters: Double) -> BoundingBox {
         let latDelta = radiusMeters / 111_320.0
-        let lonDelta = radiusMeters / (111_320.0 * cos(center.latitude * .pi / 180))
+        let lonDelta = radiusMeters / (111_320.0 * cos(center.lat * .pi / 180))
         return BoundingBox(
-            south: center.latitude - latDelta,
-            west: center.longitude - lonDelta,
-            north: center.latitude + latDelta,
-            east: center.longitude + lonDelta
+            south: center.lat - latDelta,
+            west: center.lon - lonDelta,
+            north: center.lat + latDelta,
+            east: center.lon + lonDelta
         )
     }
 
@@ -191,7 +191,7 @@ actor OverpassAPIClient {
                let id = element["id"] as? Int,
                let lat = element["lat"] as? Double,
                let lon = element["lon"] as? Double {
-                nodeLookup[id] = Coordinate(latitude: lat, longitude: lon)
+                nodeLookup[id] = Coordinate(lat: lat, lon: lon)
             }
         }
 
@@ -233,8 +233,6 @@ actor OverpassAPIClient {
                     features.append(ParsedFeature(type: .bunker, polygon: coords))
                 case "water_hazard", "lateral_water_hazard":
                     features.append(ParsedFeature(type: .water, polygon: coords))
-                case "rough":
-                    features.append(ParsedFeature(type: .rough, polygon: coords))
                 case "hole":
                     let ref = tags["ref"]
                     let holeNumber = ref.flatMap { Int($0) }
@@ -305,7 +303,7 @@ actor OverpassAPIClient {
         geometry.compactMap { point in
             guard let lat = point["lat"] as? Double,
                   let lon = point["lon"] as? Double else { return nil }
-            return Coordinate(latitude: lat, longitude: lon)
+            return Coordinate(lat: lat, lon: lon)
         }
     }
 }

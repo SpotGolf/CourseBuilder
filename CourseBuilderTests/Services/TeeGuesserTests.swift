@@ -12,8 +12,8 @@ final class TeeGuesserTests: XCTestCase {
     private func point(north: Double, east: Double = 0) -> Coordinate {
         let metersPerDegreeLongitude = 111_320.0 * cos(baseLat * .pi / 180)
         return Coordinate(
-            latitude: baseLat + north / metersPerDegreeLatitude,
-            longitude: baseLon + east / metersPerDegreeLongitude
+            lat: baseLat + north / metersPerDegreeLatitude,
+            lon: baseLon + east / metersPerDegreeLongitude
         )
     }
 

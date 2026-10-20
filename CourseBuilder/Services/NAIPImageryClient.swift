@@ -67,7 +67,7 @@ actor NAIPImageryClient {
     /// Fetches a patch of the newest NAIP imagery covering the box.
     func patch(covering box: BoundingBox) async throws -> (patch: ImagePatch, imagery: Imagery) {
         let imagery = try await imagery(for: box)
-        let center = Coordinate(latitude: (box.south + box.north) / 2, longitude: (box.west + box.east) / 2)
+        let center = Coordinate(lat: (box.south + box.north) / 2, lon: (box.west + box.east) / 2)
         let offset = NAD83.offset(near: center)
         // Tiles are placed by NAD83 coordinates, so pick them for the box shifted into NAD83.
         let tileBox = BoundingBox(
@@ -193,8 +193,8 @@ actor NAIPImageryClient {
     static func tileRange(for box: BoundingBox, zoom: Int) -> (zoom: Int, minX: Int, minY: Int, maxX: Int, maxY: Int) {
         var zoom = zoom
         while true {
-            let topLeft = WebMercator.pixel(for: Coordinate(latitude: box.north, longitude: box.west), zoom: zoom)
-            let bottomRight = WebMercator.pixel(for: Coordinate(latitude: box.south, longitude: box.east), zoom: zoom)
+            let topLeft = WebMercator.pixel(for: Coordinate(lat: box.north, lon: box.west), zoom: zoom)
+            let bottomRight = WebMercator.pixel(for: Coordinate(lat: box.south, lon: box.east), zoom: zoom)
             let size = CGFloat(WebMercator.tileSize)
             let minX = Int((topLeft.x / size).rounded(.down))
             let minY = Int((topLeft.y / size).rounded(.down))
@@ -295,12 +295,12 @@ extension OverpassAPIClient.BoundingBox: Equatable {
     /// Box of the given radius in meters around a coordinate.
     init(around center: Coordinate, radiusMeters: Double) {
         let latDelta = radiusMeters / 111_320.0
-        let lonDelta = radiusMeters / (111_320.0 * cos(center.latitude * .pi / 180))
+        let lonDelta = radiusMeters / (111_320.0 * cos(center.lat * .pi / 180))
         self.init(
-            south: center.latitude - latDelta,
-            west: center.longitude - lonDelta,
-            north: center.latitude + latDelta,
-            east: center.longitude + lonDelta
+            south: center.lat - latDelta,
+            west: center.lon - lonDelta,
+            north: center.lat + latDelta,
+            east: center.lon + lonDelta
         )
     }
 

@@ -90,8 +90,8 @@ struct AutoPolygonSession {
     mutating func recompute() {
         result = nil
         guard let box = Self.requiredBox(mode: mode, operations: operations) else { return }
-        let topLeft = patch.pixel(for: Coordinate(latitude: box.north, longitude: box.west))
-        let bottomRight = patch.pixel(for: Coordinate(latitude: box.south, longitude: box.east))
+        let topLeft = patch.pixel(for: Coordinate(lat: box.north, lon: box.west))
+        let bottomRight = patch.pixel(for: Coordinate(lat: box.south, lon: box.east))
         let window = PixelWindow(
             covering: CGRect(x: topLeft.x, y: topLeft.y, width: bottomRight.x - topLeft.x, height: bottomRight.y - topLeft.y),
             in: patch
@@ -244,7 +244,7 @@ final class AutoPolygonController {
 
     /// Starts a Fit to Imagery preview for a feature.
     func startFit(feature: Feature) {
-        run(mode: .fit(featureID: feature.id, type: feature.type, oldPolygon: feature.polygon), operations: [], tolerance: nil)
+        run(mode: .fit(featureID: feature.id, type: feature.type, oldPolygon: Array(feature.polygon)), operations: [], tolerance: nil)
     }
 
     func add(at coordinate: Coordinate) {

@@ -13,7 +13,7 @@ struct CourseFileWriterTests {
         let writer = CourseFileWriter(directory: directory)
         var course = Course(
             name: "Old",
-            location: CourseLocation(address: "", city: "", state: "", country: "US", coordinate: Coordinate(latitude: 0, longitude: 0))
+            location: CourseLocation(address: "", city: "", state: "", country: "US", coordinate: Coordinate(lat: 0, lon: 0))
         )
         let oldVersion = writer.nextVersion(for: course.id)
         let newVersion = writer.nextVersion(for: course.id)

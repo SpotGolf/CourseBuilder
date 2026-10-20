@@ -125,7 +125,7 @@ struct ComboTeeBuilderTests {
                 city: "Boulder",
                 state: "CO",
                 country: "US",
-                coordinate: Coordinate(latitude: 0, longitude: 0)
+                coordinate: Coordinate(lat: 0, lon: 0)
             ),
             tees: teeNames.map { TeeDefinition(name: $0, color: TeeDefinition.defaultColor(for: $0)) }
         )

@@ -57,7 +57,7 @@ struct NAIPImageryClientTests {
     }
 
     @Test func tileRangeCoversBox() {
-        let box = BoundingBox(around: Coordinate(latitude: 40, longitude: -105), radiusMeters: 40)
+        let box = BoundingBox(around: Coordinate(lat: 40, lon: -105), radiusMeters: 40)
         let range = NAIPImageryClient.tileRange(for: box, zoom: 19)
         #expect(range.zoom == 19)
         let count = (range.maxX - range.minX + 1) * (range.maxY - range.minY + 1)
@@ -65,7 +65,7 @@ struct NAIPImageryClientTests {
     }
 
     @Test func tileRangeLowersZoomForLargeAreas() {
-        let box = BoundingBox(around: Coordinate(latitude: 40, longitude: -105), radiusMeters: 400)
+        let box = BoundingBox(around: Coordinate(lat: 40, lon: -105), radiusMeters: 400)
         let range = NAIPImageryClient.tileRange(for: box, zoom: 19)
         #expect(range.zoom < 19)
         #expect((range.maxX - range.minX + 1) * (range.maxY - range.minY + 1) <= NAIPImageryClient.maxTiles)

@@ -2,19 +2,11 @@ import XCTest
 @testable import CourseBuilder
 import CourseDataSwift
 
+/// The GolfCourseAPI.com key saved in the app's Settings. The tests run inside the app, so they
+/// share its settings. Live tests are skipped when no key is saved.
 private func loadAPIKey() throws -> String {
-    // #filePath gives us the real filesystem path, bypassing sandbox remapping
-    let filePath = #filePath
-    let components = filePath.split(separator: "/")
-    guard components.count >= 2 else {
-        throw NSError(domain: "TestConfig", code: 2, userInfo: [NSLocalizedDescriptionKey: "Cannot determine home directory from \(filePath)"])
-    }
-    let home = "/\(components[0])/\(components[1])"
-    let path = "\(home)/.config/CourseBuilder/test/keys.plist"
-    let data = try Data(contentsOf: URL(fileURLWithPath: path))
-    let plist = try PropertyListSerialization.propertyList(from: data, format: nil) as? [String: Any]
-    guard let key = plist?["golfCourseAPIKey"] as? String else {
-        throw NSError(domain: "TestConfig", code: 1, userInfo: [NSLocalizedDescriptionKey: "golfCourseAPIKey not found in keys.plist"])
+    guard let key = UserDefaults.standard.string(forKey: "golfCourseAPIKey"), !key.isEmpty else {
+        throw XCTSkip("No GolfCourseAPI.com key is saved in the app's Settings")
     }
     return key
 }

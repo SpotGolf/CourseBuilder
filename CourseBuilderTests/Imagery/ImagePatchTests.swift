@@ -14,7 +14,7 @@ struct ImagePatchTests {
 
     @Test func webMercatorMatchesKnownTile() {
         // Colorado National Golf Club falls in tile 19/109192/198475.
-        let pixel = WebMercator.pixel(for: Coordinate(latitude: 40.0046, longitude: -105.0234), zoom: 19)
+        let pixel = WebMercator.pixel(for: Coordinate(lat: 40.0046, lon: -105.0234), zoom: 19)
         #expect(Int(pixel.x) / 256 == 109_192)
         #expect(Int(pixel.y) / 256 == 198_475)
     }

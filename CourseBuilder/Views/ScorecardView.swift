@@ -91,13 +91,13 @@ struct ScorecardView: View {
                     }
                     VStack(alignment: .leading, spacing: 2) {
                         Text("Latitude").font(.caption).foregroundStyle(.secondary)
-                        TextField("Latitude", value: $course.location.coordinate.latitude, format: .number)
+                        TextField("Latitude", value: $course.location.coordinate.lat, format: .number)
                             .textFieldStyle(.roundedBorder)
                             .frame(maxWidth: 120)
                     }
                     VStack(alignment: .leading, spacing: 2) {
                         Text("Longitude").font(.caption).foregroundStyle(.secondary)
-                        TextField("Longitude", value: $course.location.coordinate.longitude, format: .number)
+                        TextField("Longitude", value: $course.location.coordinate.lon, format: .number)
                             .textFieldStyle(.roundedBorder)
                             .frame(maxWidth: 120)
                     }

@@ -14,8 +14,8 @@ enum WebMercator {
 
     static func pixel(for coordinate: Coordinate, zoom: Int) -> CGPoint {
         let size = worldSize(zoom: zoom)
-        let x = (coordinate.longitude + 180) / 360 * size
-        let sinLat = sin(coordinate.latitude * .pi / 180)
+        let x = (coordinate.lon + 180) / 360 * size
+        let sinLat = sin(coordinate.lat * .pi / 180)
         let y = (0.5 - log((1 + sinLat) / (1 - sinLat)) / (4 * .pi)) * size
         return CGPoint(x: x, y: y)
     }
@@ -25,7 +25,7 @@ enum WebMercator {
         let longitude = Double(pixel.x) / size * 360 - 180
         let n = .pi - 2 * .pi * Double(pixel.y) / size
         let latitude = atan(sinh(n)) * 180 / .pi
-        return Coordinate(latitude: latitude, longitude: longitude)
+        return Coordinate(lat: latitude, lon: longitude)
     }
 
     static func metersPerPixel(latitude: Double, zoom: Int) -> Double {
@@ -70,8 +70,8 @@ struct ImagePatch {
 
     /// Position of a coordinate in patch pixels. Pixel (x, y) covers x..<x+1, y..<y+1.
     func pixel(for coordinate: Coordinate) -> CGPoint {
-        let shifted = Coordinate(latitude: coordinate.latitude + datumOffset.latitude,
-                                 longitude: coordinate.longitude + datumOffset.longitude)
+        let shifted = Coordinate(lat: coordinate.lat + datumOffset.latitude,
+                                 lon: coordinate.lon + datumOffset.longitude)
         let global = WebMercator.pixel(for: shifted, zoom: zoom)
         return CGPoint(x: global.x - CGFloat(originX), y: global.y - CGFloat(originY))
     }
@@ -81,18 +81,18 @@ struct ImagePatch {
             forPixel: CGPoint(x: pixel.x + CGFloat(originX), y: pixel.y + CGFloat(originY)),
             zoom: zoom
         )
-        return Coordinate(latitude: placed.latitude - datumOffset.latitude,
-                          longitude: placed.longitude - datumOffset.longitude)
+        return Coordinate(lat: placed.lat - datumOffset.latitude,
+                          lon: placed.lon - datumOffset.longitude)
     }
 
     var metersPerPixel: Double {
         let center = coordinate(forPixel: CGPoint(x: Double(width) / 2, y: Double(height) / 2))
-        return WebMercator.metersPerPixel(latitude: center.latitude, zoom: zoom)
+        return WebMercator.metersPerPixel(latitude: center.lat, zoom: zoom)
     }
 
     func contains(_ box: OverpassAPIClient.BoundingBox) -> Bool {
-        let topLeft = pixel(for: Coordinate(latitude: box.north, longitude: box.west))
-        let bottomRight = pixel(for: Coordinate(latitude: box.south, longitude: box.east))
+        let topLeft = pixel(for: Coordinate(lat: box.north, lon: box.west))
+        let bottomRight = pixel(for: Coordinate(lat: box.south, lon: box.east))
         return topLeft.x >= 0 && topLeft.y >= 0
             && bottomRight.x <= CGFloat(width) && bottomRight.y <= CGFloat(height)
     }

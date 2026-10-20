@@ -224,14 +224,14 @@ struct CourseIntegrityTests {
     /// Blue and White tees, and a Blue/White combo tee where hole 1 plays from White.
     @Test func validationReportsMissingElevations() {
         var course = makeCourse(features: [Feature(id: 1, type: .green, polygon: [
-            Coordinate(latitude: 1, longitude: 1),
-            Coordinate(latitude: 2, longitude: 2, elevation: 10),
+            Coordinate(lat: 1, lon: 1),
+            Coordinate(lat: 2, lon: 2, ele: 10),
         ])])
 
         #expect(CourseIntegrity.validateCourse(course).contains("2 point(s) are missing elevations. Cleanup looks them up."))
 
-        course.location.coordinate.elevation = 5
-        course.features[0].polygon[0].elevation = 5
+        course.location.coordinate.ele = 5
+        course.features[0].polygon = [Coordinate(lat: 1, lon: 1, ele: 5), Coordinate(lat: 2, lon: 2, ele: 10)]
 
         #expect(!CourseIntegrity.validateCourse(course).contains { $0.contains("elevation") })
     }
@@ -256,7 +256,7 @@ struct CourseIntegrityTests {
                 city: "Denver",
                 state: "CO",
                 country: "US",
-                coordinate: Coordinate(latitude: 0, longitude: 0)
+                coordinate: Coordinate(lat: 0, lon: 0)
             ),
             features: features,
             subCourses: [

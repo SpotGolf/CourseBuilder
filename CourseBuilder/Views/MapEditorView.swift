@@ -777,7 +777,7 @@ struct MapEditorView: View {
                                   let feature = course.findFeature(id: featureID),
                                   let edge = PolygonEditorOperations.nearestEdge(
                                     to: tap.location,
-                                    polygon: feature.polygon,
+                                    polygon: Array(feature.polygon),
                                     convert: { proxy.convert($0, to: .local) }
                                   ),
                                   let coordinate = proxy.convert(edge.point, from: .local) else { return }
@@ -1080,7 +1080,6 @@ struct MapEditorView: View {
         case .bunker: 2
         case .water: 3
         case .fairway: 4
-        case .rough: 5
         }
     }
 
@@ -1091,7 +1090,6 @@ struct MapEditorView: View {
         case .tee: .blue
         case .bunker: .yellow
         case .water: .cyan
-        case .rough: .brown
         }
     }
 
@@ -1180,22 +1178,22 @@ struct MapEditorView: View {
         }
 
         // Check all features, sorted by type priority so small features (tees, greens)
-        // are hit before large ones (fairways, rough). Use bounding-box pre-filter to
+        // are hit before large ones (fairways). Use bounding-box pre-filter to
         // avoid expensive point-in-polygon tests on distant features.
         let candidates = course.features
             .filter { feature in
-                let lats = feature.polygon.map(\.latitude)
-                let lons = feature.polygon.map(\.longitude)
+                let lats = feature.polygon.map(\.lat)
+                let lons = feature.polygon.map(\.lon)
                 guard let minLat = lats.min(), let maxLat = lats.max(),
                       let minLon = lons.min(), let maxLon = lons.max() else { return false }
-                return point.latitude >= minLat && point.latitude <= maxLat
-                    && point.longitude >= minLon && point.longitude <= maxLon
+                return point.lat >= minLat && point.lat <= maxLat
+                    && point.lon >= minLon && point.lon <= maxLon
             }
             .sorted { featureHitPriority($0.type) < featureHitPriority($1.type) }
 
         // Small features (tees, greens, bunkers, water) are hit before the centerline,
-        // which usually runs through them. The centerline is hit before fairways and
-        // rough, which usually lie under it.
+        // which usually runs through them. The centerline is hit before fairways, which
+        // usually lie under it.
         let centerlinePriority = featureHitPriority(.fairway)
         if let feature = candidates.first(where: {
             featureHitPriority($0.type) < centerlinePriority && PolygonGeometry.contains(point, in: $0.polygon)
@@ -1251,7 +1249,7 @@ struct MapEditorView: View {
 
         isEditingFeature = true
         if let hoveredCoordinate = mapTracker.hoveredCoordinate {
-            selectedVertexIndex = PolygonEditorOperations.nearestVertexIndex(to: hoveredCoordinate, in: feature.polygon)
+            selectedVertexIndex = PolygonEditorOperations.nearestVertexIndex(to: hoveredCoordinate, in: Array(feature.polygon))
         } else {
             selectedVertexIndex = nil
         }
@@ -1289,7 +1287,7 @@ struct MapEditorView: View {
         selectedVertexIndex = insertionIndex
     }
 
-    private func distanceToPolyline(from point: Coordinate, polyline: [Coordinate]) -> Double {
+    private func distanceToPolyline(from point: Coordinate, polyline: CoordinatePath) -> Double {
         var minDist = Double.greatestFiniteMagnitude
         for i in 0..<(polyline.count - 1) {
             let dist = sqrt(PolygonGeometry.squaredDistanceToSegment(point, segStart: polyline[i], segEnd: polyline[i + 1]))
@@ -1301,7 +1299,7 @@ struct MapEditorView: View {
     private func isClose(_ a: Coordinate, to b: Coordinate, pixels: CGFloat = 20) -> Bool {
         guard let region = mapTracker.region else { return false }
         let threshold = region.span.latitudeDelta / (mapTracker.size.height / pixels)
-        return abs(a.latitude - b.latitude) < threshold && abs(a.longitude - b.longitude) < threshold
+        return abs(a.lat - b.lat) < threshold && abs(a.lon - b.lon) < threshold
     }
 
     private func selectCenterlineAt(_ point: Coordinate) {
@@ -1311,7 +1309,7 @@ struct MapEditorView: View {
 
         for (gIdx, group) in centerlineGroups.enumerated() {
             for (clIdx, cl) in group.centerlines.enumerated() {
-                let dist = OSMImporter.distanceToPolyline(from: point, polyline: cl.coordinates)
+                let dist = OSMImporter.distanceToPolyline(from: point, polyline: CoordinatePath(cl.coordinates))
                 if dist < bestDist {
                     bestDist = dist
                     bestGroupIdx = gIdx
@@ -1353,7 +1351,7 @@ struct MapEditorView: View {
             drawingVertices = []
             guard subCourseIndex < course.subCourses.count,
                   holeIndex < course.subCourses[subCourseIndex].holes.count else { return }
-            course.subCourses[subCourseIndex].holes[holeIndex].centerline = vertices
+            course.subCourses[subCourseIndex].holes[holeIndex].centerline = CoordinatePath(vertices)
 
         case .select, .autoPolygon:
             break
@@ -1398,10 +1396,10 @@ struct MapEditorView: View {
         let degreesPerPixelLat = region.span.latitudeDelta / mapViewSize.height
         let degreesPerPixelLng = region.span.longitudeDelta / mapViewSize.width
         var movedCoordinate = course.features[featureIndex].polygon[vertexIndex]
-        movedCoordinate.latitude -= translation.height * degreesPerPixelLat
-        movedCoordinate.longitude += translation.width * degreesPerPixelLng
-        movedCoordinate.elevation = nil
-        course.features[featureIndex].polygon[vertexIndex] = movedCoordinate
+        movedCoordinate.lat -= translation.height * degreesPerPixelLat
+        movedCoordinate.lon += translation.width * degreesPerPixelLng
+        movedCoordinate.ele = nil
+        course.features[featureIndex].polygon.replace(at: vertexIndex, with: movedCoordinate)
     }
 
     private func applyCenterlineVertexDrag(vertexIndex: Int, translation: CGSize) {
@@ -1415,11 +1413,11 @@ struct MapEditorView: View {
         let subCourseIndex = selectedSubCourseIndex
         let holeIndex = selectedHoleIndex
         var movedCoordinate = course.subCourses[subCourseIndex].holes[holeIndex].centerline[vertexIndex]
-        movedCoordinate.latitude -= translation.height * degreesPerPixelLat
-        movedCoordinate.longitude += translation.width * degreesPerPixelLng
+        movedCoordinate.lat -= translation.height * degreesPerPixelLat
+        movedCoordinate.lon += translation.width * degreesPerPixelLng
         // The old elevation belongs to the old position.
-        movedCoordinate.elevation = nil
-        course.subCourses[subCourseIndex].holes[holeIndex].centerline[vertexIndex] = movedCoordinate
+        movedCoordinate.ele = nil
+        course.subCourses[subCourseIndex].holes[holeIndex].centerline.replace(at: vertexIndex, with: movedCoordinate)
     }
 
     // MARK: - Delete Handling
@@ -1611,7 +1609,7 @@ struct MapEditorView: View {
                 autoPolygon.cancel()
                 return
             }
-            course.features[index].polygon = result.polygon
+            course.features[index].polygon = CoordinatePath(result.polygon)
             undoRecords.append(.replacedPolygon(featureID: featureID, oldPolygon: oldPolygon))
             selectedFeatureID = featureID
             statusMessage = "Fitted feature #\(featureID) (\(result.polygon.count) pts)"
@@ -1627,7 +1625,7 @@ struct MapEditorView: View {
         osmImportStatus = "Querying OpenStreetMap..."
         let client = OverpassAPIClient()
         let clubhouseCoord = course.location.coordinate
-        logger.info("Starting OSM import for course '\(course.name, privacy: .public)' at \(clubhouseCoord.latitude, privacy: .public), \(clubhouseCoord.longitude, privacy: .public)")
+        logger.info("Starting OSM import for course '\(course.name, privacy: .public)' at \(clubhouseCoord.lat, privacy: .public), \(clubhouseCoord.lon, privacy: .public)")
         let searchBBox = OverpassAPIClient.boundingBox(around: clubhouseCoord, radiusMeters: 1000)
         do {
             let result = try await client.fetchFeatures(bbox: searchBBox)
@@ -1808,7 +1806,7 @@ struct MapEditorView: View {
 
     private func centerMapOnCourse() {
         let coord = course.location.coordinate
-        if coord.latitude != 0 || coord.longitude != 0 {
+        if coord.lat != 0 || coord.lon != 0 {
             let region = MKCoordinateRegion(
                 center: coord.clCoordinate,
                 span: MKCoordinateSpan(latitudeDelta: 0.004, longitudeDelta: 0.004)

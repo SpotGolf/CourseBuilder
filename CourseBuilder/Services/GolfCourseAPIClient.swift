@@ -216,8 +216,8 @@ actor GolfCourseAPIClient {
             state: first.location.state ?? "",
             country: first.location.country ?? "",
             coordinate: Coordinate(
-                latitude: first.location.latitude ?? 0,
-                longitude: first.location.longitude ?? 0
+                lat: first.location.latitude ?? 0,
+                lon: first.location.longitude ?? 0
             )
         )
 

@@ -8,28 +8,28 @@ final class OSMImporterTests: XCTestCase {
         let fairway = OverpassAPIClient.ParsedFeature(
             type: .fairway,
             polygon: [
-                Coordinate(latitude: 39.7869, longitude: -74.9571),
-                Coordinate(latitude: 39.7869, longitude: -74.9569),
-                Coordinate(latitude: 39.7871, longitude: -74.9569),
-                Coordinate(latitude: 39.7871, longitude: -74.9571)
+                Coordinate(lat: 39.7869, lon: -74.9571),
+                Coordinate(lat: 39.7869, lon: -74.9569),
+                Coordinate(lat: 39.7871, lon: -74.9569),
+                Coordinate(lat: 39.7871, lon: -74.9571)
             ]
         )
         // Green centroid sits at the centerline endpoint
         let green = OverpassAPIClient.ParsedFeature(
             type: .green,
             polygon: [
-                Coordinate(latitude: 39.7844, longitude: -74.9541),
-                Coordinate(latitude: 39.7844, longitude: -74.9539),
-                Coordinate(latitude: 39.7846, longitude: -74.9539),
-                Coordinate(latitude: 39.7846, longitude: -74.9541)
+                Coordinate(lat: 39.7844, lon: -74.9541),
+                Coordinate(lat: 39.7844, lon: -74.9539),
+                Coordinate(lat: 39.7846, lon: -74.9539),
+                Coordinate(lat: 39.7846, lon: -74.9541)
             ]
         )
         let centerline = OverpassAPIClient.ParsedCenterline(
             holeNumber: 1,
             coordinates: [
-                Coordinate(latitude: 39.790, longitude: -74.960),
-                Coordinate(latitude: 39.787, longitude: -74.957),
-                Coordinate(latitude: 39.7845, longitude: -74.954)
+                Coordinate(lat: 39.790, lon: -74.960),
+                Coordinate(lat: 39.787, lon: -74.957),
+                Coordinate(lat: 39.7845, lon: -74.954)
             ]
         )
 
@@ -42,7 +42,7 @@ final class OSMImporterTests: XCTestCase {
         var course = Course(
             name: "Test",
             location: CourseLocation(address: "", city: "", state: "", country: "",
-                                     coordinate: Coordinate(latitude: 39.787, longitude: -74.957)),
+                                     coordinate: Coordinate(lat: 39.787, lon: -74.957)),
             subCourses: [
                 SubCourse(name: "Front", holes: [Hole(number: 1, par: 4)])
             ]
@@ -60,33 +60,33 @@ final class OSMImporterTests: XCTestCase {
         let greenForHole1 = OverpassAPIClient.ParsedFeature(
             type: .green,
             polygon: [
-                Coordinate(latitude: 39.787, longitude: -74.9552),
-                Coordinate(latitude: 39.787, longitude: -74.9548),
-                Coordinate(latitude: 39.788, longitude: -74.9548),
-                Coordinate(latitude: 39.788, longitude: -74.9552)
+                Coordinate(lat: 39.787, lon: -74.9552),
+                Coordinate(lat: 39.787, lon: -74.9548),
+                Coordinate(lat: 39.788, lon: -74.9548),
+                Coordinate(lat: 39.788, lon: -74.9552)
             ]
         )
         let greenForHole2 = OverpassAPIClient.ParsedFeature(
             type: .green,
             polygon: [
-                Coordinate(latitude: 39.7900, longitude: -74.9402),
-                Coordinate(latitude: 39.7900, longitude: -74.9400),
-                Coordinate(latitude: 39.7902, longitude: -74.9400),
-                Coordinate(latitude: 39.7902, longitude: -74.9402)
+                Coordinate(lat: 39.7900, lon: -74.9402),
+                Coordinate(lat: 39.7900, lon: -74.9400),
+                Coordinate(lat: 39.7902, lon: -74.9400),
+                Coordinate(lat: 39.7902, lon: -74.9402)
             ]
         )
         let cl1 = OverpassAPIClient.ParsedCenterline(
             holeNumber: 1,
             coordinates: [
-                Coordinate(latitude: 39.787, longitude: -74.960),
-                Coordinate(latitude: 39.787, longitude: -74.955)
+                Coordinate(lat: 39.787, lon: -74.960),
+                Coordinate(lat: 39.787, lon: -74.955)
             ]
         )
         let cl2 = OverpassAPIClient.ParsedCenterline(
             holeNumber: 2,
             coordinates: [
-                Coordinate(latitude: 39.790, longitude: -74.945),
-                Coordinate(latitude: 39.7901, longitude: -74.9401)
+                Coordinate(lat: 39.790, lon: -74.945),
+                Coordinate(lat: 39.7901, lon: -74.9401)
             ]
         )
 
@@ -99,7 +99,7 @@ final class OSMImporterTests: XCTestCase {
         var course = Course(
             name: "Test",
             location: CourseLocation(address: "", city: "", state: "", country: "",
-                                     coordinate: Coordinate(latitude: 39.787, longitude: -74.957)),
+                                     coordinate: Coordinate(lat: 39.787, lon: -74.957)),
             subCourses: [
                 SubCourse(name: "Front", holes: [Hole(number: 1, par: 4), Hole(number: 2, par: 4)])
             ]
@@ -107,8 +107,8 @@ final class OSMImporterTests: XCTestCase {
 
         OSMImporter.applyParsedResult(parsed, to: &course)
 
-        let green1ID = course.features.first(where: { $0.type == .green && $0.polygon[0].latitude < 39.789 })!.id
-        let green2ID = course.features.first(where: { $0.type == .green && $0.polygon[0].latitude > 39.789 })!.id
+        let green1ID = course.features.first(where: { $0.type == .green && $0.polygon[0].lat < 39.789 })!.id
+        let green2ID = course.features.first(where: { $0.type == .green && $0.polygon[0].lat > 39.789 })!.id
 
         // Each green should be assigned to its closest hole
         XCTAssertTrue(course.subCourses[0].holes[0].features.contains(green1ID))
@@ -122,17 +122,17 @@ final class OSMImporterTests: XCTestCase {
         let bunkerFarAway = OverpassAPIClient.ParsedFeature(
             type: .bunker,
             polygon: [
-                Coordinate(latitude: 39.800, longitude: -74.930),
-                Coordinate(latitude: 39.800, longitude: -74.929),
-                Coordinate(latitude: 39.801, longitude: -74.929),
-                Coordinate(latitude: 39.801, longitude: -74.930)
+                Coordinate(lat: 39.800, lon: -74.930),
+                Coordinate(lat: 39.800, lon: -74.929),
+                Coordinate(lat: 39.801, lon: -74.929),
+                Coordinate(lat: 39.801, lon: -74.930)
             ]
         )
         let cl = OverpassAPIClient.ParsedCenterline(
             holeNumber: 1,
             coordinates: [
-                Coordinate(latitude: 39.787, longitude: -74.960),
-                Coordinate(latitude: 39.787, longitude: -74.955)
+                Coordinate(lat: 39.787, lon: -74.960),
+                Coordinate(lat: 39.787, lon: -74.955)
             ]
         )
 
@@ -145,7 +145,7 @@ final class OSMImporterTests: XCTestCase {
         var course = Course(
             name: "Test",
             location: CourseLocation(address: "", city: "", state: "", country: "",
-                                     coordinate: Coordinate(latitude: 39.787, longitude: -74.957)),
+                                     coordinate: Coordinate(lat: 39.787, lon: -74.957)),
             subCourses: [
                 SubCourse(name: "Front", holes: [Hole(number: 1, par: 4)])
             ]
@@ -164,18 +164,18 @@ final class OSMImporterTests: XCTestCase {
         let fairway = OverpassAPIClient.ParsedFeature(
             type: .fairway,
             polygon: [
-                Coordinate(latitude: 39.786, longitude: -74.960),
-                Coordinate(latitude: 39.786, longitude: -74.950),
-                Coordinate(latitude: 39.788, longitude: -74.950),
-                Coordinate(latitude: 39.788, longitude: -74.960)
+                Coordinate(lat: 39.786, lon: -74.960),
+                Coordinate(lat: 39.786, lon: -74.950),
+                Coordinate(lat: 39.788, lon: -74.950),
+                Coordinate(lat: 39.788, lon: -74.960)
             ]
         )
         // Centerline enters the polygon from one side
         let cl = OverpassAPIClient.ParsedCenterline(
             holeNumber: 1,
             coordinates: [
-                Coordinate(latitude: 39.787, longitude: -74.965),
-                Coordinate(latitude: 39.787, longitude: -74.955)
+                Coordinate(lat: 39.787, lon: -74.965),
+                Coordinate(lat: 39.787, lon: -74.955)
             ]
         )
 
@@ -188,7 +188,7 @@ final class OSMImporterTests: XCTestCase {
         var course = Course(
             name: "Test",
             location: CourseLocation(address: "", city: "", state: "", country: "",
-                                     coordinate: Coordinate(latitude: 39.787, longitude: -74.957)),
+                                     coordinate: Coordinate(lat: 39.787, lon: -74.957)),
             subCourses: [
                 SubCourse(name: "Front", holes: [Hole(number: 1, par: 4)])
             ]
@@ -206,18 +206,18 @@ final class OSMImporterTests: XCTestCase {
         let bunker = OverpassAPIClient.ParsedFeature(
             type: .bunker,
             polygon: [
-                Coordinate(latitude: 39.7872, longitude: -74.957),
-                Coordinate(latitude: 39.7872, longitude: -74.9565),
-                Coordinate(latitude: 39.7875, longitude: -74.9565),
-                Coordinate(latitude: 39.7875, longitude: -74.957)
+                Coordinate(lat: 39.7872, lon: -74.957),
+                Coordinate(lat: 39.7872, lon: -74.9565),
+                Coordinate(lat: 39.7875, lon: -74.9565),
+                Coordinate(lat: 39.7875, lon: -74.957)
             ]
         )
         // Centerline runs horizontally just below the bunker
         let cl = OverpassAPIClient.ParsedCenterline(
             holeNumber: 1,
             coordinates: [
-                Coordinate(latitude: 39.787, longitude: -74.960),
-                Coordinate(latitude: 39.787, longitude: -74.955)
+                Coordinate(lat: 39.787, lon: -74.960),
+                Coordinate(lat: 39.787, lon: -74.955)
             ]
         )
 
@@ -230,7 +230,7 @@ final class OSMImporterTests: XCTestCase {
         var course = Course(
             name: "Test",
             location: CourseLocation(address: "", city: "", state: "", country: "",
-                                     coordinate: Coordinate(latitude: 39.787, longitude: -74.957)),
+                                     coordinate: Coordinate(lat: 39.787, lon: -74.957)),
             subCourses: [
                 SubCourse(name: "Front", holes: [Hole(number: 1, par: 4)])
             ]
@@ -247,19 +247,19 @@ final class OSMImporterTests: XCTestCase {
         let tee = OverpassAPIClient.ParsedFeature(
             type: .tee,
             polygon: [
-                Coordinate(latitude: 39.790, longitude: -74.960),
-                Coordinate(latitude: 39.791, longitude: -74.960),
-                Coordinate(latitude: 39.791, longitude: -74.959),
-                Coordinate(latitude: 39.790, longitude: -74.959)
+                Coordinate(lat: 39.790, lon: -74.960),
+                Coordinate(lat: 39.791, lon: -74.960),
+                Coordinate(lat: 39.791, lon: -74.959),
+                Coordinate(lat: 39.790, lon: -74.959)
             ]
         )
         let green = OverpassAPIClient.ParsedFeature(
             type: .green,
             polygon: [
-                Coordinate(latitude: 39.784, longitude: -74.955),
-                Coordinate(latitude: 39.784, longitude: -74.953),
-                Coordinate(latitude: 39.785, longitude: -74.953),
-                Coordinate(latitude: 39.785, longitude: -74.955)
+                Coordinate(lat: 39.784, lon: -74.955),
+                Coordinate(lat: 39.784, lon: -74.953),
+                Coordinate(lat: 39.785, lon: -74.953),
+                Coordinate(lat: 39.785, lon: -74.955)
             ]
         )
 
@@ -272,7 +272,7 @@ final class OSMImporterTests: XCTestCase {
         var course = Course(
             name: "Test",
             location: CourseLocation(address: "", city: "", state: "", country: "",
-                                     coordinate: Coordinate(latitude: 39.787, longitude: -74.957)),
+                                     coordinate: Coordinate(lat: 39.787, lon: -74.957)),
             subCourses: [
                 SubCourse(name: "Front", holes: [Hole(number: 1, par: 4)])
             ]
@@ -295,48 +295,48 @@ final class OSMImporterTests: XCTestCase {
         let green = OverpassAPIClient.ParsedFeature(
             type: .green,
             polygon: [
-                Coordinate(latitude: 39.784, longitude: -74.955),
-                Coordinate(latitude: 39.784, longitude: -74.953),
-                Coordinate(latitude: 39.785, longitude: -74.953),
-                Coordinate(latitude: 39.785, longitude: -74.955)
+                Coordinate(lat: 39.784, lon: -74.955),
+                Coordinate(lat: 39.784, lon: -74.953),
+                Coordinate(lat: 39.785, lon: -74.953),
+                Coordinate(lat: 39.785, lon: -74.955)
             ]
         )
         // Tee closest to green (~200 yards)
         let teeClose = OverpassAPIClient.ParsedFeature(
             type: .tee,
             polygon: [
-                Coordinate(latitude: 39.786, longitude: -74.956),
-                Coordinate(latitude: 39.786, longitude: -74.955),
-                Coordinate(latitude: 39.787, longitude: -74.955),
-                Coordinate(latitude: 39.787, longitude: -74.956)
+                Coordinate(lat: 39.786, lon: -74.956),
+                Coordinate(lat: 39.786, lon: -74.955),
+                Coordinate(lat: 39.787, lon: -74.955),
+                Coordinate(lat: 39.787, lon: -74.956)
             ]
         )
         // Tee mid distance (~400 yards)
         let teeMid = OverpassAPIClient.ParsedFeature(
             type: .tee,
             polygon: [
-                Coordinate(latitude: 39.788, longitude: -74.958),
-                Coordinate(latitude: 39.788, longitude: -74.957),
-                Coordinate(latitude: 39.789, longitude: -74.957),
-                Coordinate(latitude: 39.789, longitude: -74.958)
+                Coordinate(lat: 39.788, lon: -74.958),
+                Coordinate(lat: 39.788, lon: -74.957),
+                Coordinate(lat: 39.789, lon: -74.957),
+                Coordinate(lat: 39.789, lon: -74.958)
             ]
         )
         // Tee farthest from green (~600 yards)
         let teeFar = OverpassAPIClient.ParsedFeature(
             type: .tee,
             polygon: [
-                Coordinate(latitude: 39.790, longitude: -74.960),
-                Coordinate(latitude: 39.790, longitude: -74.959),
-                Coordinate(latitude: 39.791, longitude: -74.959),
-                Coordinate(latitude: 39.791, longitude: -74.960)
+                Coordinate(lat: 39.790, lon: -74.960),
+                Coordinate(lat: 39.790, lon: -74.959),
+                Coordinate(lat: 39.791, lon: -74.959),
+                Coordinate(lat: 39.791, lon: -74.960)
             ]
         )
         let centerline = OverpassAPIClient.ParsedCenterline(
             holeNumber: 1,
             coordinates: [
-                Coordinate(latitude: 39.791, longitude: -74.960),
-                Coordinate(latitude: 39.788, longitude: -74.957),
-                Coordinate(latitude: 39.7845, longitude: -74.954)
+                Coordinate(lat: 39.791, lon: -74.960),
+                Coordinate(lat: 39.788, lon: -74.957),
+                Coordinate(lat: 39.7845, lon: -74.954)
             ]
         )
 
@@ -349,7 +349,7 @@ final class OSMImporterTests: XCTestCase {
         var course = Course(
             name: "Test",
             location: CourseLocation(address: "", city: "", state: "", country: "",
-                                     coordinate: Coordinate(latitude: 39.787, longitude: -74.957)),
+                                     coordinate: Coordinate(lat: 39.787, lon: -74.957)),
             tees: [
                 TeeDefinition(name: "Black", color: "#000000"),
                 TeeDefinition(name: "White", color: "#FFFFFF"),
@@ -368,11 +368,11 @@ final class OSMImporterTests: XCTestCase {
         // Mid tee → White
         // Closest tee → Red (lowest yardage)
         let teeFeatures = course.features.filter { $0.type == .tee }
-        let farFeatureID = teeFeatures.first(where: { $0.polygon[0].latitude > 39.7895 })!.id
+        let farFeatureID = teeFeatures.first(where: { $0.polygon[0].lat > 39.7895 })!.id
         let midFeatureID = teeFeatures.first(where: {
-            $0.polygon[0].latitude > 39.7875 && $0.polygon[0].latitude < 39.7895
+            $0.polygon[0].lat > 39.7875 && $0.polygon[0].lat < 39.7895
         })!.id
-        let closeFeatureID = teeFeatures.first(where: { $0.polygon[0].latitude < 39.7875 })!.id
+        let closeFeatureID = teeFeatures.first(where: { $0.polygon[0].lat < 39.7875 })!.id
 
         XCTAssertEqual(hole.tees["Black"], farFeatureID)
         XCTAssertEqual(hole.tees["White"], midFeatureID)
@@ -385,38 +385,38 @@ final class OSMImporterTests: XCTestCase {
         let green = OverpassAPIClient.ParsedFeature(
             type: .green,
             polygon: [
-                Coordinate(latitude: 39.784, longitude: -74.955),
-                Coordinate(latitude: 39.784, longitude: -74.953),
-                Coordinate(latitude: 39.785, longitude: -74.953),
-                Coordinate(latitude: 39.785, longitude: -74.955)
+                Coordinate(lat: 39.784, lon: -74.955),
+                Coordinate(lat: 39.784, lon: -74.953),
+                Coordinate(lat: 39.785, lon: -74.953),
+                Coordinate(lat: 39.785, lon: -74.955)
             ]
         )
         // Back tee box (farther from green)
         let teeBack = OverpassAPIClient.ParsedFeature(
             type: .tee,
             polygon: [
-                Coordinate(latitude: 39.790, longitude: -74.960),
-                Coordinate(latitude: 39.790, longitude: -74.959),
-                Coordinate(latitude: 39.791, longitude: -74.959),
-                Coordinate(latitude: 39.791, longitude: -74.960)
+                Coordinate(lat: 39.790, lon: -74.960),
+                Coordinate(lat: 39.790, lon: -74.959),
+                Coordinate(lat: 39.791, lon: -74.959),
+                Coordinate(lat: 39.791, lon: -74.960)
             ]
         )
         // Front tee box (closer to green)
         let teeFront = OverpassAPIClient.ParsedFeature(
             type: .tee,
             polygon: [
-                Coordinate(latitude: 39.786, longitude: -74.956),
-                Coordinate(latitude: 39.786, longitude: -74.955),
-                Coordinate(latitude: 39.787, longitude: -74.955),
-                Coordinate(latitude: 39.787, longitude: -74.956)
+                Coordinate(lat: 39.786, lon: -74.956),
+                Coordinate(lat: 39.786, lon: -74.955),
+                Coordinate(lat: 39.787, lon: -74.955),
+                Coordinate(lat: 39.787, lon: -74.956)
             ]
         )
         let centerline = OverpassAPIClient.ParsedCenterline(
             holeNumber: 1,
             coordinates: [
-                Coordinate(latitude: 39.791, longitude: -74.960),
-                Coordinate(latitude: 39.788, longitude: -74.957),
-                Coordinate(latitude: 39.7845, longitude: -74.954)
+                Coordinate(lat: 39.791, lon: -74.960),
+                Coordinate(lat: 39.788, lon: -74.957),
+                Coordinate(lat: 39.7845, lon: -74.954)
             ]
         )
 
@@ -429,7 +429,7 @@ final class OSMImporterTests: XCTestCase {
         var course = Course(
             name: "Test",
             location: CourseLocation(address: "", city: "", state: "", country: "",
-                                     coordinate: Coordinate(latitude: 39.787, longitude: -74.957)),
+                                     coordinate: Coordinate(lat: 39.787, lon: -74.957)),
             tees: [
                 TeeDefinition(name: "Black", color: "#000000"),
                 TeeDefinition(name: "Blue", color: "#0000FF"),
@@ -448,8 +448,8 @@ final class OSMImporterTests: XCTestCase {
 
         let hole = course.subCourses[0].holes[0]
         let teeFeatures = course.features.filter { $0.type == .tee }
-        let backFeatureID = teeFeatures.first(where: { $0.polygon[0].latitude > 39.789 })!.id
-        let frontFeatureID = teeFeatures.first(where: { $0.polygon[0].latitude < 39.789 })!.id
+        let backFeatureID = teeFeatures.first(where: { $0.polygon[0].lat > 39.789 })!.id
+        let frontFeatureID = teeFeatures.first(where: { $0.polygon[0].lat < 39.789 })!.id
 
         // Black & Blue should share the back tee box
         XCTAssertEqual(hole.tees["Black"], backFeatureID)
@@ -472,38 +472,38 @@ final class OSMImporterTests: XCTestCase {
         let green = OverpassAPIClient.ParsedFeature(
             type: .green,
             polygon: [
-                Coordinate(latitude: 39.784, longitude: -74.955),
-                Coordinate(latitude: 39.784, longitude: -74.953),
-                Coordinate(latitude: 39.785, longitude: -74.953),
-                Coordinate(latitude: 39.785, longitude: -74.955)
+                Coordinate(lat: 39.784, lon: -74.955),
+                Coordinate(lat: 39.784, lon: -74.953),
+                Coordinate(lat: 39.785, lon: -74.953),
+                Coordinate(lat: 39.785, lon: -74.955)
             ]
         )
         // Back tee box — near centerline start
         let teeBack = OverpassAPIClient.ParsedFeature(
             type: .tee,
             polygon: [
-                Coordinate(latitude: 39.790, longitude: -74.961),
-                Coordinate(latitude: 39.790, longitude: -74.959),
-                Coordinate(latitude: 39.791, longitude: -74.959),
-                Coordinate(latitude: 39.791, longitude: -74.961)
+                Coordinate(lat: 39.790, lon: -74.961),
+                Coordinate(lat: 39.790, lon: -74.959),
+                Coordinate(lat: 39.791, lon: -74.959),
+                Coordinate(lat: 39.791, lon: -74.961)
             ]
         )
         // Front tee box — slightly closer to green along centerline
         let teeFront = OverpassAPIClient.ParsedFeature(
             type: .tee,
             polygon: [
-                Coordinate(latitude: 39.789, longitude: -74.960),
-                Coordinate(latitude: 39.789, longitude: -74.958),
-                Coordinate(latitude: 39.790, longitude: -74.958),
-                Coordinate(latitude: 39.790, longitude: -74.960)
+                Coordinate(lat: 39.789, lon: -74.960),
+                Coordinate(lat: 39.789, lon: -74.958),
+                Coordinate(lat: 39.790, lon: -74.958),
+                Coordinate(lat: 39.790, lon: -74.960)
             ]
         )
         let cl = OverpassAPIClient.ParsedCenterline(
             holeNumber: 1,
             coordinates: [
-                Coordinate(latitude: 39.791, longitude: -74.960),
-                Coordinate(latitude: 39.788, longitude: -74.957),
-                Coordinate(latitude: 39.7845, longitude: -74.954)
+                Coordinate(lat: 39.791, lon: -74.960),
+                Coordinate(lat: 39.788, lon: -74.957),
+                Coordinate(lat: 39.7845, lon: -74.954)
             ]
         )
 
@@ -516,7 +516,7 @@ final class OSMImporterTests: XCTestCase {
         var course = Course(
             name: "Test",
             location: CourseLocation(address: "", city: "", state: "", country: "",
-                                     coordinate: Coordinate(latitude: 39.787, longitude: -74.957)),
+                                     coordinate: Coordinate(lat: 39.787, lon: -74.957)),
             tees: [
                 TeeDefinition(name: "Black", color: "#000000"),
                 TeeDefinition(name: "Blue", color: "#0000FF"),
@@ -533,8 +533,8 @@ final class OSMImporterTests: XCTestCase {
 
         let hole = course.subCourses[0].holes[0]
         let teeFeatures = course.features.filter { $0.type == .tee }
-        let backID = teeFeatures.first(where: { $0.polygon[0].latitude > 39.7895 })!.id
-        let frontID = teeFeatures.first(where: { $0.polygon[0].latitude < 39.7895 })!.id
+        let backID = teeFeatures.first(where: { $0.polygon[0].lat > 39.7895 })!.id
+        let frontID = teeFeatures.first(where: { $0.polygon[0].lat < 39.7895 })!.id
 
         XCTAssertEqual(hole.tees["Black"], backID)
         XCTAssertEqual(hole.tees["Blue"], backID)
@@ -549,33 +549,33 @@ final class OSMImporterTests: XCTestCase {
         let green1 = OverpassAPIClient.ParsedFeature(
             type: .green,
             polygon: [
-                Coordinate(latitude: 39.784, longitude: -74.955),
-                Coordinate(latitude: 39.784, longitude: -74.953),
-                Coordinate(latitude: 39.785, longitude: -74.953),
-                Coordinate(latitude: 39.785, longitude: -74.955)
+                Coordinate(lat: 39.784, lon: -74.955),
+                Coordinate(lat: 39.784, lon: -74.953),
+                Coordinate(lat: 39.785, lon: -74.953),
+                Coordinate(lat: 39.785, lon: -74.955)
             ]
         )
         let green2 = OverpassAPIClient.ParsedFeature(
             type: .green,
             polygon: [
-                Coordinate(latitude: 39.790, longitude: -74.945),
-                Coordinate(latitude: 39.790, longitude: -74.943),
-                Coordinate(latitude: 39.791, longitude: -74.943),
-                Coordinate(latitude: 39.791, longitude: -74.945)
+                Coordinate(lat: 39.790, lon: -74.945),
+                Coordinate(lat: 39.790, lon: -74.943),
+                Coordinate(lat: 39.791, lon: -74.943),
+                Coordinate(lat: 39.791, lon: -74.945)
             ]
         )
         let cl1 = OverpassAPIClient.ParsedCenterline(
             holeNumber: 1,
             coordinates: [
-                Coordinate(latitude: 39.790, longitude: -74.960),
-                Coordinate(latitude: 39.7845, longitude: -74.954)
+                Coordinate(lat: 39.790, lon: -74.960),
+                Coordinate(lat: 39.7845, lon: -74.954)
             ]
         )
         let cl2 = OverpassAPIClient.ParsedCenterline(
             holeNumber: 2,
             coordinates: [
-                Coordinate(latitude: 39.784, longitude: -74.950),
-                Coordinate(latitude: 39.7905, longitude: -74.944)
+                Coordinate(lat: 39.784, lon: -74.950),
+                Coordinate(lat: 39.7905, lon: -74.944)
             ]
         )
 
@@ -588,7 +588,7 @@ final class OSMImporterTests: XCTestCase {
         var course = Course(
             name: "Test",
             location: CourseLocation(address: "", city: "", state: "", country: "",
-                                     coordinate: Coordinate(latitude: 39.787, longitude: -74.950)),
+                                     coordinate: Coordinate(lat: 39.787, lon: -74.950)),
             subCourses: [
                 SubCourse(name: "Front", holes: [Hole(number: 1, par: 4), Hole(number: 2, par: 4)])
             ]
@@ -599,10 +599,10 @@ final class OSMImporterTests: XCTestCase {
         let hole1 = course.subCourses[0].holes[0]
         let hole2 = course.subCourses[0].holes[1]
         let green1ID = course.features.first(where: {
-            $0.type == .green && $0.polygon[0].latitude < 39.786
+            $0.type == .green && $0.polygon[0].lat < 39.786
         })!.id
         let green2ID = course.features.first(where: {
-            $0.type == .green && $0.polygon[0].latitude > 39.789
+            $0.type == .green && $0.polygon[0].lat > 39.789
         })!.id
 
         XCTAssertTrue(hole1.features.contains(green1ID))
@@ -615,56 +615,56 @@ final class OSMImporterTests: XCTestCase {
         let teeAtStart1 = OverpassAPIClient.ParsedFeature(
             type: .tee,
             polygon: [
-                Coordinate(latitude: 39.7898, longitude: -74.9602),
-                Coordinate(latitude: 39.7898, longitude: -74.9598),
-                Coordinate(latitude: 39.7902, longitude: -74.9598),
-                Coordinate(latitude: 39.7902, longitude: -74.9602)
+                Coordinate(lat: 39.7898, lon: -74.9602),
+                Coordinate(lat: 39.7898, lon: -74.9598),
+                Coordinate(lat: 39.7902, lon: -74.9598),
+                Coordinate(lat: 39.7902, lon: -74.9602)
             ]
         )
         let teeAtStart2 = OverpassAPIClient.ParsedFeature(
             type: .tee,
             polygon: [
-                Coordinate(latitude: 39.7897, longitude: -74.9602),
-                Coordinate(latitude: 39.7897, longitude: -74.9598),
-                Coordinate(latitude: 39.7901, longitude: -74.9598),
-                Coordinate(latitude: 39.7901, longitude: -74.9602)
+                Coordinate(lat: 39.7897, lon: -74.9602),
+                Coordinate(lat: 39.7897, lon: -74.9598),
+                Coordinate(lat: 39.7901, lon: -74.9598),
+                Coordinate(lat: 39.7901, lon: -74.9602)
             ]
         )
         // Junior tee: far forward along the centerline, near midpoint
         let teeJunior = OverpassAPIClient.ParsedFeature(
             type: .tee,
             polygon: [
-                Coordinate(latitude: 39.7868, longitude: -74.9572),
-                Coordinate(latitude: 39.7868, longitude: -74.9568),
-                Coordinate(latitude: 39.7872, longitude: -74.9568),
-                Coordinate(latitude: 39.7872, longitude: -74.9572)
+                Coordinate(lat: 39.7868, lon: -74.9572),
+                Coordinate(lat: 39.7868, lon: -74.9568),
+                Coordinate(lat: 39.7872, lon: -74.9568),
+                Coordinate(lat: 39.7872, lon: -74.9572)
             ]
         )
         // Tee from a different hole — laterally far from this centerline
         let teeDifferentHole = OverpassAPIClient.ParsedFeature(
             type: .tee,
             polygon: [
-                Coordinate(latitude: 39.780, longitude: -74.950),
-                Coordinate(latitude: 39.780, longitude: -74.949),
-                Coordinate(latitude: 39.781, longitude: -74.949),
-                Coordinate(latitude: 39.781, longitude: -74.950)
+                Coordinate(lat: 39.780, lon: -74.950),
+                Coordinate(lat: 39.780, lon: -74.949),
+                Coordinate(lat: 39.781, lon: -74.949),
+                Coordinate(lat: 39.781, lon: -74.950)
             ]
         )
         let green = OverpassAPIClient.ParsedFeature(
             type: .green,
             polygon: [
-                Coordinate(latitude: 39.784, longitude: -74.955),
-                Coordinate(latitude: 39.784, longitude: -74.953),
-                Coordinate(latitude: 39.785, longitude: -74.953),
-                Coordinate(latitude: 39.785, longitude: -74.955)
+                Coordinate(lat: 39.784, lon: -74.955),
+                Coordinate(lat: 39.784, lon: -74.953),
+                Coordinate(lat: 39.785, lon: -74.953),
+                Coordinate(lat: 39.785, lon: -74.955)
             ]
         )
         let cl = OverpassAPIClient.ParsedCenterline(
             holeNumber: 1,
             coordinates: [
-                Coordinate(latitude: 39.790, longitude: -74.960),
-                Coordinate(latitude: 39.787, longitude: -74.957),
-                Coordinate(latitude: 39.7845, longitude: -74.954)
+                Coordinate(lat: 39.790, lon: -74.960),
+                Coordinate(lat: 39.787, lon: -74.957),
+                Coordinate(lat: 39.7845, lon: -74.954)
             ]
         )
 
@@ -677,7 +677,7 @@ final class OSMImporterTests: XCTestCase {
         var course = Course(
             name: "Test",
             location: CourseLocation(address: "", city: "", state: "", country: "",
-                                     coordinate: Coordinate(latitude: 39.787, longitude: -74.957)),
+                                     coordinate: Coordinate(lat: 39.787, lon: -74.957)),
             subCourses: [
                 SubCourse(name: "Front", holes: [Hole(number: 1, par: 4)])
             ]
@@ -687,7 +687,7 @@ final class OSMImporterTests: XCTestCase {
 
         let hole = course.subCourses[0].holes[0]
         let differentHoleTeeID = course.features.first(where: {
-            $0.type == .tee && $0.polygon[0].latitude < 39.785
+            $0.type == .tee && $0.polygon[0].lat < 39.785
         })!.id
 
         let holeTeeIDs = hole.features.filter { id in
@@ -703,27 +703,27 @@ final class OSMImporterTests: XCTestCase {
         let bunkerBehind = OverpassAPIClient.ParsedFeature(
             type: .bunker,
             polygon: [
-                Coordinate(latitude: 39.792, longitude: -74.962),
-                Coordinate(latitude: 39.792, longitude: -74.961),
-                Coordinate(latitude: 39.793, longitude: -74.961),
-                Coordinate(latitude: 39.793, longitude: -74.962)
+                Coordinate(lat: 39.792, lon: -74.962),
+                Coordinate(lat: 39.792, lon: -74.961),
+                Coordinate(lat: 39.793, lon: -74.961),
+                Coordinate(lat: 39.793, lon: -74.962)
             ]
         )
         let green = OverpassAPIClient.ParsedFeature(
             type: .green,
             polygon: [
-                Coordinate(latitude: 39.784, longitude: -74.955),
-                Coordinate(latitude: 39.784, longitude: -74.953),
-                Coordinate(latitude: 39.785, longitude: -74.953),
-                Coordinate(latitude: 39.785, longitude: -74.955)
+                Coordinate(lat: 39.784, lon: -74.955),
+                Coordinate(lat: 39.784, lon: -74.953),
+                Coordinate(lat: 39.785, lon: -74.953),
+                Coordinate(lat: 39.785, lon: -74.955)
             ]
         )
         let cl = OverpassAPIClient.ParsedCenterline(
             holeNumber: 1,
             coordinates: [
-                Coordinate(latitude: 39.790, longitude: -74.960),
-                Coordinate(latitude: 39.787, longitude: -74.957),
-                Coordinate(latitude: 39.7845, longitude: -74.954)
+                Coordinate(lat: 39.790, lon: -74.960),
+                Coordinate(lat: 39.787, lon: -74.957),
+                Coordinate(lat: 39.7845, lon: -74.954)
             ]
         )
 
@@ -736,7 +736,7 @@ final class OSMImporterTests: XCTestCase {
         var course = Course(
             name: "Test",
             location: CourseLocation(address: "", city: "", state: "", country: "",
-                                     coordinate: Coordinate(latitude: 39.787, longitude: -74.957)),
+                                     coordinate: Coordinate(lat: 39.787, lon: -74.957)),
             subCourses: [
                 SubCourse(name: "Front", holes: [Hole(number: 1, par: 4)])
             ]
@@ -752,32 +752,32 @@ final class OSMImporterTests: XCTestCase {
 
     func testPointForwardOfCenterlineStart() {
         // Centerline goes south-east: (39.790, -74.960) → (39.784, -74.954)
-        let centerline = [
-            Coordinate(latitude: 39.790, longitude: -74.960),
-            Coordinate(latitude: 39.784, longitude: -74.954)
+        let centerline: CoordinatePath = [
+            Coordinate(lat: 39.790, lon: -74.960),
+            Coordinate(lat: 39.784, lon: -74.954)
         ]
         // Point along the centerline direction (south-east of start)
-        let forward = Coordinate(latitude: 39.788, longitude: -74.958)
+        let forward = Coordinate(lat: 39.788, lon: -74.958)
         XCTAssertTrue(OSMImporter.isForwardOfStart(point: forward, centerline: centerline))
     }
 
     func testPointBehindCenterlineStart() {
-        let centerline = [
-            Coordinate(latitude: 39.790, longitude: -74.960),
-            Coordinate(latitude: 39.784, longitude: -74.954)
+        let centerline: CoordinatePath = [
+            Coordinate(lat: 39.790, lon: -74.960),
+            Coordinate(lat: 39.784, lon: -74.954)
         ]
         // Point behind start (north-west of start, opposite to centerline direction)
-        let behind = Coordinate(latitude: 39.792, longitude: -74.962)
+        let behind = Coordinate(lat: 39.792, lon: -74.962)
         XCTAssertFalse(OSMImporter.isForwardOfStart(point: behind, centerline: centerline))
     }
 
     func testPointPerpendicularToCenterline() {
-        let centerline = [
-            Coordinate(latitude: 39.790, longitude: -74.960),
-            Coordinate(latitude: 39.784, longitude: -74.954)
+        let centerline: CoordinatePath = [
+            Coordinate(lat: 39.790, lon: -74.960),
+            Coordinate(lat: 39.784, lon: -74.954)
         ]
         // Point slightly forward and perpendicular to the centerline direction
-        let perp = Coordinate(latitude: 39.7895, longitude: -74.959)
+        let perp = Coordinate(lat: 39.7895, lon: -74.959)
         XCTAssertTrue(OSMImporter.isForwardOfStart(point: perp, centerline: centerline))
     }
 }

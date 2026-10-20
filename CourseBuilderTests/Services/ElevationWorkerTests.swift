@@ -9,32 +9,32 @@ struct ElevationWorkerTests {
     @Test func fillsMissingElevationsAndKeepsExistingOnes() async {
         let log = FetchLog()
         let box = CourseBox(makeCourse(polygon: [
-            Coordinate(latitude: 39.1, longitude: -105.0),
-            Coordinate(latitude: 39.2, longitude: -105.0, elevation: 5),
+            Coordinate(lat: 39.1, lon: -105.0),
+            Coordinate(lat: 39.2, lon: -105.0, ele: 5),
         ]))
         let worker = makeWorker(box: box) { coordinates in
             await log.record(coordinates)
-            return coordinates.map { $0.latitude * 10 }
+            return coordinates.map { $0.lat * 10 }
         }
 
         await change(box, worker)
 
-        #expect(box.course.location.coordinate.elevation == 390)
-        #expect(box.course.features[0].polygon.map(\.elevation) == [391, 5])
+        #expect(box.course.location.coordinate.ele == 390)
+        #expect(box.course.features[0].polygon.compactMap(\.ele) == [391, 5].map(pathElevation))
         #expect(await log.requests.count == 1)
         #expect(worker.statuses[box.course.id] == nil)
     }
 
     @Test func changesDuringTheWaitShareOneLookup() async {
         let log = FetchLog()
-        let box = CourseBox(makeCourse(polygon: [Coordinate(latitude: 39.1, longitude: -105.0)]))
+        let box = CourseBox(makeCourse(polygon: [Coordinate(lat: 39.1, lon: -105.0)]))
         let worker = makeWorker(box: box, debounce: .milliseconds(50)) { coordinates in
             await log.record(coordinates)
             return coordinates.map { _ in 1 }
         }
 
         worker.courseDidChange(box.course.id)
-        box.course.features[0].polygon.append(Coordinate(latitude: 39.2, longitude: -105.0))
+        box.course.features[0].polygon.append(Coordinate(lat: 39.2, lon: -105.0))
         await change(box, worker)
 
         #expect(await log.requests.count == 1)
@@ -43,19 +43,19 @@ struct ElevationWorkerTests {
 
     @Test func pointMovedDuringLookupIsLookedUpAgain() async {
         let log = FetchLog()
-        let box = CourseBox(makeCourse(polygon: [Coordinate(latitude: 39.1, longitude: -105.0)]))
-        let moved = Coordinate(latitude: 39.5, longitude: -105.0)
+        let box = CourseBox(makeCourse(polygon: [Coordinate(lat: 39.1, lon: -105.0)]))
+        let moved = Coordinate(lat: 39.5, lon: -105.0)
         let worker = makeWorker(box: box) { coordinates in
             if await log.requests.isEmpty {
-                await MainActor.run { box.course.features[0].polygon[0] = moved }
+                await MainActor.run { box.course.features[0].polygon = [moved] }
             }
             await log.record(coordinates)
-            return coordinates.map { $0.latitude * 10 }
+            return coordinates.map { $0.lat * 10 }
         }
 
         await change(box, worker)
 
-        #expect(box.course.features[0].polygon[0].elevation == 395)
+        #expect(box.course.features[0].polygon[0].ele == pathElevation(395))
         #expect(await log.requests.count == 2)
         #expect(await log.requests[1] == [moved])
     }
@@ -63,23 +63,23 @@ struct ElevationWorkerTests {
     @Test func pointsWithoutDataAreSetToSeaLevel() async {
         let log = FetchLog()
         let box = CourseBox(makeCourse(polygon: [
-            Coordinate(latitude: 39.1, longitude: -105.0),
-            Coordinate(latitude: 39.2, longitude: -105.0),
+            Coordinate(lat: 39.1, lon: -105.0),
+            Coordinate(lat: 39.2, lon: -105.0),
         ]))
         let worker = makeWorker(box: box) { coordinates in
             await log.record(coordinates)
-            return coordinates.map { $0.latitude == 39.2 ? nil : 100 }
+            return coordinates.map { $0.lat == 39.2 ? nil : 100 }
         }
 
         await change(box, worker)
 
-        #expect(box.course.features[0].polygon.map(\.elevation) == [100, 0])
+        #expect(box.course.features[0].polygon.compactMap(\.ele) == [100, 0].map(pathElevation))
         #expect(worker.statuses[box.course.id] == .setToSeaLevel(points: 1))
     }
 
     @Test func courseOutsideUnitedStatesStopsAskingUSGS() async {
         let log = FetchLog()
-        let box = CourseBox(makeCourse(polygon: [Coordinate(latitude: 56.3, longitude: -2.8)]))
+        let box = CourseBox(makeCourse(polygon: [Coordinate(lat: 56.3, lon: -2.8)]))
         let worker = makeWorker(box: box) { coordinates in
             await log.record(coordinates)
             throw USGSElevationClient.ElevationError.requestRejected(message: "Out of extent.")
@@ -88,10 +88,10 @@ struct ElevationWorkerTests {
         await change(box, worker)
         #expect(!box.course.isMissingElevations)
 
-        box.course.features[0].polygon.append(Coordinate(latitude: 56.4, longitude: -2.8))
+        box.course.features[0].polygon.append(Coordinate(lat: 56.4, lon: -2.8))
         await change(box, worker)
 
-        #expect(box.course.features[0].polygon[1].elevation == 0)
+        #expect(box.course.features[0].polygon[1].ele == 0)
         #expect(await log.requests.count == 1)
     }
 
@@ -106,7 +106,7 @@ struct ElevationWorkerTests {
         await change(box, worker)
 
         #expect(await log.requests.count == 3)
-        #expect(box.course.location.coordinate.elevation == nil)
+        #expect(box.course.location.coordinate.ele == nil)
         guard case .failed = worker.statuses[box.course.id] else {
             Issue.record("Expected a failed status")
             return
@@ -115,8 +115,8 @@ struct ElevationWorkerTests {
 
     @Test func courseWithNoMissingPointsMakesNoRequest() async {
         let log = FetchLog()
-        var course = makeCourse(polygon: [Coordinate(latitude: 39.1, longitude: -105.0, elevation: 5)])
-        course.location.coordinate.elevation = 1600
+        var course = makeCourse(polygon: [Coordinate(lat: 39.1, lon: -105.0, ele: 5)])
+        course.location.coordinate.ele = 1600
         let box = CourseBox(course)
         let worker = makeWorker(box: box) { coordinates in
             await log.record(coordinates)
@@ -147,12 +147,12 @@ struct ElevationWorkerTests {
         return worker
     }
 
-    private func makeCourse(polygon: [Coordinate]) -> Course {
+    private func makeCourse(polygon: CoordinatePath) -> Course {
         Course(
             name: "Test Course",
             location: CourseLocation(
                 address: "", city: "Denver", state: "CO", country: "US",
-                coordinate: Coordinate(latitude: 39.0, longitude: -105.0)
+                coordinate: Coordinate(lat: 39.0, lon: -105.0)
             ),
             features: [Feature(id: 1, type: .green, polygon: polygon)],
             subCourses: [SubCourse(name: "Front", holes: [Hole(number: 1, par: 4)])]

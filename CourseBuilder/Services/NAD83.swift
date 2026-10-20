@@ -20,7 +20,7 @@ enum NAD83 {
     /// value serves a whole imagery patch.
     static func offset(near coordinate: Coordinate, at date: Date = Date()) -> Offset {
         let nad83 = fromWGS84(coordinate, epoch: decimalYear(date))
-        return Offset(latitude: nad83.latitude - coordinate.latitude, longitude: nad83.longitude - coordinate.longitude)
+        return Offset(latitude: nad83.lat - coordinate.lat, longitude: nad83.lon - coordinate.lon)
     }
 
     // MARK: - Transformation
@@ -58,8 +58,8 @@ enum NAD83 {
     private static var eccentricitySquared: Double { flattening * (2 - flattening) }
 
     private static func cartesian(_ c: Coordinate) -> (Double, Double, Double) {
-        let lat = c.latitude * .pi / 180, lon = c.longitude * .pi / 180
-        let h = c.elevation ?? 0
+        let lat = c.lat * .pi / 180, lon = c.lon * .pi / 180
+        let h = c.ele ?? 0
         let n = semiMajorAxis / (1 - eccentricitySquared * sin(lat) * sin(lat)).squareRoot()
         return ((n + h) * cos(lat) * cos(lon),
                 (n + h) * cos(lat) * sin(lon),
@@ -75,7 +75,7 @@ enum NAD83 {
             let h = p / cos(lat) - n
             lat = atan2(z, p * (1 - eccentricitySquared * n / (n + h)))
         }
-        return Coordinate(latitude: lat * 180 / .pi, longitude: lon * 180 / .pi)
+        return Coordinate(lat: lat * 180 / .pi, lon: lon * 180 / .pi)
     }
 
     static func decimalYear(_ date: Date) -> Double {

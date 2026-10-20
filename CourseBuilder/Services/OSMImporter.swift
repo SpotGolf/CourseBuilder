@@ -11,7 +11,7 @@ enum OSMImporter {
         var nextID = course.nextFeatureID
         var features: [Feature] = []
         for parsed in result.features {
-            features.append(Feature(id: nextID, type: parsed.type, polygon: parsed.polygon))
+            features.append(Feature(id: nextID, type: parsed.type, polygon: CoordinatePath(parsed.polygon)))
             nextID += 1
         }
         course.features.append(contentsOf: features)
@@ -29,7 +29,7 @@ enum OSMImporter {
         // Assign centerlines to holes by matching OSM hole numbers to global numbers
         for slot in holeSlots {
             if let cl = result.centerlines.first(where: { $0.holeNumber == slot.global }) {
-                course.subCourses[slot.sub].holes[slot.hole].centerline = cl.coordinates
+                course.subCourses[slot.sub].holes[slot.hole].centerline = CoordinatePath(cl.coordinates)
             }
         }
 
@@ -138,7 +138,7 @@ enum OSMImporter {
                 searchPoint = farthestPointAlongCenterline(polygon: tee.polygon, centerline: cl)
             }
 
-            // Step 3: Associate remaining features (fairways, bunkers, water, rough)
+            // Step 3: Associate remaining features (fairways, bunkers, water)
             // that are within 35 yards of the centerline and forward of the start.
             for feature in features where !assignedIDs.contains(feature.id) {
                 guard isForwardOfStart(point: feature.center, centerline: cl) else { continue }
@@ -159,19 +159,19 @@ enum OSMImporter {
     /// Projects each vertex onto the centerline direction vector and picks the one with
     /// the largest projection value.
     private static func farthestPointAlongCenterline(
-        polygon: [Coordinate],
-        centerline: [Coordinate]
+        polygon: CoordinatePath,
+        centerline: CoordinatePath
     ) -> Coordinate {
         let start = centerline.first!
         let end = centerline.last!
-        let dx = end.longitude - start.longitude
-        let dy = end.latitude - start.latitude
+        let dx = end.lon - start.lon
+        let dy = end.lat - start.lat
 
         var best = polygon[0]
         var bestProjection = -Double.greatestFiniteMagnitude
         for vertex in polygon {
-            let px = vertex.longitude - start.longitude
-            let py = vertex.latitude - start.latitude
+            let px = vertex.lon - start.lon
+            let py = vertex.lat - start.lat
             let projection = px * dx + py * dy
             if projection > bestProjection {
                 bestProjection = projection
@@ -217,7 +217,7 @@ enum OSMImporter {
                 }
             }
 
-            var centerline: [Coordinate] = []
+            var centerline: CoordinatePath = []
             if let tee = bestTee {
                 centerline.append(tee.center)
                 usedTeeIDs.insert(tee.id)
@@ -245,14 +245,14 @@ enum OSMImporter {
     /// Uses the dot product of (point - start) against the centerline direction (start → end).
     /// Points at or forward of the start (dot product >= 0) return true.
     /// Returns true if the centerline has fewer than 2 points (no direction to check).
-    static func isForwardOfStart(point: Coordinate, centerline: [Coordinate]) -> Bool {
+    static func isForwardOfStart(point: Coordinate, centerline: CoordinatePath) -> Bool {
         guard centerline.count >= 2 else { return true }
         let start = centerline.first!
         let end = centerline.last!
-        let dx = end.longitude - start.longitude
-        let dy = end.latitude - start.latitude
-        let px = point.longitude - start.longitude
-        let py = point.latitude - start.latitude
+        let dx = end.lon - start.lon
+        let dy = end.lat - start.lat
+        let px = point.lon - start.lon
+        let py = point.lat - start.lat
         return (px * dx + py * dy) >= 0
     }
 
@@ -260,7 +260,7 @@ enum OSMImporter {
     /// 1. Does the centerline pass through the polygon? (handles large fairways/greens)
     /// 2. Is any polygon vertex within the threshold of the centerline? (handles offset features)
     /// 3. Is the polygon centroid within the threshold of the centerline? (handles small features)
-    static func shouldAssociate(feature: Feature, withCenterline centerline: [Coordinate], threshold: Double) -> Bool {
+    static func shouldAssociate(feature: Feature, withCenterline centerline: CoordinatePath, threshold: Double) -> Bool {
         let polygon = feature.polygon
         guard !polygon.isEmpty, !centerline.isEmpty else { return false }
 
@@ -280,7 +280,7 @@ enum OSMImporter {
     }
 
     /// Minimum distance in meters from a point to a polyline (considering full line segments, not just vertices).
-    static func distanceToPolyline(from point: Coordinate, polyline: [Coordinate]) -> Double {
+    static func distanceToPolyline(from point: Coordinate, polyline: CoordinatePath) -> Double {
         guard !polyline.isEmpty else { return .greatestFiniteMagnitude }
         guard polyline.count > 1 else {
             return point.clLocation.distance(from: polyline[0].clLocation)
@@ -296,8 +296,8 @@ enum OSMImporter {
 
     /// Distance in meters from a point to a line segment, using projection onto the segment.
     private static func distanceToSegment(point: Coordinate, segStart: Coordinate, segEnd: Coordinate) -> Double {
-        let dx = segEnd.longitude - segStart.longitude
-        let dy = segEnd.latitude - segStart.latitude
+        let dx = segEnd.lon - segStart.lon
+        let dy = segEnd.lat - segStart.lat
         let lenSq = dx * dx + dy * dy
 
         if lenSq < 1e-20 {
@@ -305,13 +305,13 @@ enum OSMImporter {
         }
 
         let t = max(0, min(1, (
-            (point.longitude - segStart.longitude) * dx +
-            (point.latitude - segStart.latitude) * dy
+            (point.lon - segStart.lon) * dx +
+            (point.lat - segStart.lat) * dy
         ) / lenSq))
 
         let nearest = Coordinate(
-            latitude: segStart.latitude + t * dy,
-            longitude: segStart.longitude + t * dx
+            lat: segStart.lat + t * dy,
+            lon: segStart.lon + t * dx
         )
         return point.clLocation.distance(from: nearest.clLocation)
     }

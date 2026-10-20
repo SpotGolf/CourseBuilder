@@ -4,12 +4,14 @@ import CourseDataSwift
 enum ToolMode: String, CaseIterable {
     case select = "Select"
     case drawPolygon = "Polygon"
+    case autoPolygon = "Auto"
     case drawCenterline = "Centerline"
 
     var shortcutKey: Character {
         switch self {
         case .select: "s"
         case .drawPolygon: "p"
+        case .autoPolygon: "a"
         case .drawCenterline: "c"
         }
     }
@@ -18,6 +20,7 @@ enum ToolMode: String, CaseIterable {
         switch self {
         case .select: "cursorarrow"
         case .drawPolygon: "pentagon"
+        case .autoPolygon: "wand.and.stars"
         case .drawCenterline: "line.diagonal"
         }
     }

@@ -66,7 +66,8 @@ struct MapEditorView: View {
 
     // Delete confirmation
     @State private var featureToDelete: Int?
-    @State private var deletedFeatureRecords: [DeletedFeatureRecord] = []
+    @State private var undoRecords: [FeatureUndoRecord] = []
+    @State private var autoPolygon = AutoPolygonController()
 
     // Sidebar list heights
     @State private var holesCollapsed = false
@@ -104,7 +105,7 @@ struct MapEditorView: View {
         }
         .focusable()
         .focused($isMapFocused)
-        .onKeyPress(characters: CharacterSet(charactersIn: "spc")) { press in
+        .onKeyPress(characters: CharacterSet(charactersIn: "spac")) { press in
             guard !isMappingMode else { return .ignored }
             if let mode = ToolMode.allCases.first(where: { $0.shortcutKey == press.characters.first }) {
                 switchTool(to: mode)
@@ -119,7 +120,21 @@ struct MapEditorView: View {
         .onKeyPress(characters: CharacterSet(charactersIn: "e")) { _ in
             beginEditingSelectedFeature() ? .handled : .ignored
         }
+        .onKeyPress(characters: CharacterSet(charactersIn: "f")) { _ in
+            fitSelectedFeature() ? .handled : .ignored
+        }
+        .onKeyPress(characters: CharacterSet(charactersIn: "[]")) { press in
+            guard autoPolygon.session != nil else { return .ignored }
+            autoPolygon.adjustTolerance(by: press.characters == "]" ? 1 : -1)
+            return .handled
+        }
         .onKeyPress(.escape) {
+            if autoPolygon.isActive {
+                autoPolygon.cancel()
+                statusMessage = "Preview cancelled"
+                clearStatusAfterDelay()
+                return .handled
+            }
             if !drawingVertices.isEmpty {
                 drawingVertices = []
                 selectedDrawingVertexIndex = nil
@@ -153,7 +168,9 @@ struct MapEditorView: View {
             selectAdjacentPolygonVertex(offset: 1)
         }
         .onKeyPress(.return) {
-            if !drawingVertices.isEmpty {
+            if autoPolygon.result != nil {
+                acceptAutoPolygon()
+            } else if !drawingVertices.isEmpty {
                 finishDrawing()
             } else if isCenterlineSelected && !isEditingCenterline {
                 isEditingCenterline = true
@@ -175,7 +192,7 @@ struct MapEditorView: View {
                 }
                 return .handled
             }
-            return restoreDeletedFeature() ? .handled : .ignored
+            return undoLastChange() ? .handled : .ignored
         }
         .navigationTitle("\(course.name) — \(course.location.cityStateDisplay)")
         .onAppear {
@@ -469,7 +486,7 @@ struct MapEditorView: View {
             }
 
             // Feature type picker (for drawing)
-            if activeTool == .drawPolygon {
+            if activeTool == .drawPolygon || activeTool == .autoPolygon {
                 Picker("Type", selection: $pendingFeatureType) {
                     ForEach(FeatureType.allCases, id: \.self) { type in
                         Text(type.rawValue.capitalized).tag(type)
@@ -572,17 +589,19 @@ struct MapEditorView: View {
                 // Render feature polygons for current hole
                 ForEach(featureSets.current) { feature in
                     let isSelected = selectedFeatureID == feature.id
+                    let isFitting = fittingFeatureID == feature.id
                     MapPolygon(coordinates: feature.polygon.map(\.clCoordinate))
-                        .foregroundStyle(colorForFeatureType(feature.type).opacity(isSelected ? 0.5 : 0.3))
-                        .stroke(colorForFeatureType(feature.type), lineWidth: isSelected ? 3 : 1.5)
+                        .foregroundStyle(colorForFeatureType(feature.type).opacity(isFitting ? 0 : (isSelected ? 0.5 : 0.3)))
+                        .stroke(colorForFeatureType(feature.type).opacity(isFitting ? 0.4 : 1), lineWidth: isSelected ? 3 : 1.5)
                 }
 
                 // Render unassociated features (other-hole features are not rendered
                 // to keep the map responsive with large courses)
                 ForEach(featureSets.unassociated) { feature in
                     let isSelected = selectedFeatureID == feature.id
+                    let isFitting = fittingFeatureID == feature.id
                     MapPolygon(coordinates: feature.polygon.map(\.clCoordinate))
-                        .foregroundStyle(colorForFeatureType(feature.type).opacity(isSelected ? 0.5 : 0.15))
+                        .foregroundStyle(colorForFeatureType(feature.type).opacity(isFitting ? 0 : (isSelected ? 0.5 : 0.15)))
                         .stroke(colorForFeatureType(feature.type).opacity(0.5), lineWidth: isSelected ? 3 : 1)
                 }
 
@@ -591,9 +610,10 @@ struct MapEditorView: View {
                    !featureSets.currentIDs.contains(featureID),
                    !featureSets.unassociatedIDs.contains(featureID),
                    let feature = course.findFeature(id: featureID) {
+                    let isFitting = fittingFeatureID == feature.id
                     MapPolygon(coordinates: feature.polygon.map(\.clCoordinate))
-                        .foregroundStyle(colorForFeatureType(feature.type).opacity(0.5))
-                        .stroke(colorForFeatureType(feature.type), lineWidth: 3)
+                        .foregroundStyle(colorForFeatureType(feature.type).opacity(isFitting ? 0 : 0.5))
+                        .stroke(colorForFeatureType(feature.type).opacity(isFitting ? 0.4 : 1), lineWidth: 3)
                 }
 
                 // Render centerline for current hole
@@ -648,6 +668,13 @@ struct MapEditorView: View {
                         MapPolyline(coordinates: drawingVertices.map(\.clCoordinate))
                             .stroke(.white, style: StrokeStyle(lineWidth: 2, dash: [5, 3]))
                     }
+                }
+
+                // Auto polygon / Fit to Imagery preview
+                if let mode = autoPolygon.mode, let result = autoPolygon.result {
+                    MapPolygon(coordinates: result.polygon.map(\.clCoordinate))
+                        .foregroundStyle(colorForFeatureType(mode.type).opacity(0.2))
+                        .stroke(colorForFeatureType(mode.type), style: StrokeStyle(lineWidth: 2, dash: [5, 3]))
                 }
 
                 // Drawing vertex dots — first vertex is larger to indicate click-to-close
@@ -765,6 +792,13 @@ struct MapEditorView: View {
                         }
                     }
             )
+            .contextMenu {
+                if let featureID = selectedFeatureID, let feature = course.findFeature(id: featureID) {
+                    Button("Fit to Imagery") { startFit(feature) }
+                    Divider()
+                    Button("Delete Feature", role: .destructive) { featureToDelete = featureID }
+                }
+            }
             .overlay(alignment: .topTrailing) {
                 mapStylePicker
                     .padding(8)
@@ -874,6 +908,8 @@ struct MapEditorView: View {
             "Click a polygon to select it.\nDrag vertices to reshape."
         case .drawPolygon:
             "Click to place vertices.\nPress Enter to finish polygon."
+        case .autoPolygon:
+            "Click inside a feature to trace it.\nPress Enter to add it."
         case .drawCenterline:
             "Click to place waypoints.\nPress Enter to finish centerline."
         }
@@ -939,6 +975,38 @@ struct MapEditorView: View {
     }
 
     private var toolHint: String {
+        autoPolygonHint ?? baseToolHint
+    }
+
+    private var autoPolygonHint: String? {
+        guard autoPolygon.isActive || activeTool == .autoPolygon else { return nil }
+        if autoPolygon.isLoading {
+            return "Loading NAIP imagery…"
+        }
+        if let mode = autoPolygon.mode, let result = autoPolygon.result, let tolerance = autoPolygon.tolerance {
+            let toleranceText = String(format: "%.2f", tolerance)
+            var text: String
+            var controls: String
+            switch mode {
+            case .create(let type):
+                text = "\(type.rawValue.capitalized) preview · \(result.polygon.count) pts"
+                controls = "⇧-click add | ⌥-click remove | [ ] tolerance (\(toleranceText)) | Enter to add | Esc to cancel"
+            case .fit:
+                text = "Fit preview · \(result.polygon.count) pts"
+                controls = "[ ] tolerance (\(toleranceText)) | Enter to accept | Esc to cancel"
+            }
+            if result.exceedsSafetyLimit { text += " — more than expected" }
+            if result.areaDiffersFromOriginal { text += " — Result differs a lot from the original" }
+            if let year = autoPolygon.imageryYear { controls += " | Imagery: USDA NAIP \(year)" }
+            return "\(text) | \(controls)"
+        }
+        if let message = autoPolygon.message {
+            return "\(message) | Esc to cancel"
+        }
+        return activeTool == .autoPolygon ? "Click inside a \(pendingFeatureType.rawValue) to trace it from NAIP imagery" : nil
+    }
+
+    private var baseToolHint: String {
         switch activeTool {
         case .select:
             if isEditingCenterline && selectedCenterlineVertexIndex != nil {
@@ -968,6 +1036,8 @@ struct MapEditorView: View {
                     "\(drawingVertices.count) vertices | Click to add (\(3 - drawingVertices.count) more needed) | ⌘Z to undo | Esc to cancel"
                 }
             }
+        case .autoPolygon:
+            ""
         case .drawCenterline:
             if drawingVertices.isEmpty {
                 "Click to place first waypoint"
@@ -1028,6 +1098,9 @@ struct MapEditorView: View {
     // MARK: - Tool Switching
 
     private func switchTool(to mode: ToolMode) {
+        if mode != activeTool {
+            autoPolygon.cancel()
+        }
         if !drawingVertices.isEmpty {
             drawingVertices = []
             selectedDrawingVertexIndex = nil
@@ -1041,9 +1114,21 @@ struct MapEditorView: View {
     // MARK: - Map Tap Handling
 
     private func handleMapTap(at coordinate: Coordinate) {
+        let modifiers = NSEvent.modifierFlags
+        if autoPolygon.session != nil, modifiers.contains(.shift) {
+            autoPolygon.add(at: coordinate)
+            return
+        }
+        if autoPolygon.session != nil, modifiers.contains(.option) {
+            autoPolygon.remove(at: coordinate)
+            return
+        }
+
         switch activeTool {
         case .select:
             selectFeatureAt(coordinate)
+        case .autoPolygon:
+            autoPolygon.startCreate(type: pendingFeatureType, at: coordinate)
         case .drawPolygon:
             // If we have 3+ vertices and the click is near the first vertex, close the polygon
             if drawingVertices.count >= 3, isClose(coordinate, to: drawingVertices[0], pixels: 10) {
@@ -1270,25 +1355,28 @@ struct MapEditorView: View {
                   holeIndex < course.subCourses[subCourseIndex].holes.count else { return }
             course.subCourses[subCourseIndex].holes[holeIndex].centerline = vertices
 
-        case .select:
+        case .select, .autoPolygon:
             break
         }
     }
 
-    /// Adds the drawn polygon to the course. The elevation worker looks up its elevations.
+    /// Adds a feature to the course and the current hole. The elevation worker looks up its elevations.
+    private func addFeature(type: FeatureType, polygon: [Coordinate]) -> Feature {
+        // One write: during an event the course binding still returns the value from before
+        // the event, so a second write would rebuild the course without the first change.
+        PolygonEditorOperations.addFeature(
+            type: type,
+            polygon: polygon,
+            subCourseIndex: selectedSubCourseIndex,
+            holeIndex: selectedHoleIndex,
+            to: &course
+        )
+    }
+
+    /// Adds the drawn polygon to the course.
     private func completePolygon() {
         let featureType = pendingFeatureType
-        let newFeature = Feature(
-            id: course.nextFeatureID,
-            type: featureType,
-            polygon: drawingVertices
-        )
-        course.features.append(newFeature)
-
-        if selectedSubCourseIndex < course.subCourses.count,
-           selectedHoleIndex < course.subCourses[selectedSubCourseIndex].holes.count {
-            course.subCourses[selectedSubCourseIndex].holes[selectedHoleIndex].features.append(newFeature.id)
-        }
+        let newFeature = addFeature(type: featureType, polygon: drawingVertices)
 
         selectedFeatureID = newFeature.id
         selectedVertexIndex = nil
@@ -1458,20 +1546,78 @@ struct MapEditorView: View {
 
     private func deleteFeature(id: Int) {
         guard let record = PolygonEditorOperations.deleteFeature(id: id, from: &course) else { return }
-        deletedFeatureRecords.append(record)
+        undoRecords.append(.deleted(record))
         selectedFeatureID = nil
         selectedVertexIndex = nil
         isEditingFeature = false
     }
 
     @discardableResult
-    private func restoreDeletedFeature() -> Bool {
-        guard let record = deletedFeatureRecords.popLast(),
-              PolygonEditorOperations.restoreFeature(record, to: &course) else { return false }
-        selectedFeatureID = record.feature.id
-        statusMessage = "Restored feature #\(record.feature.id)"
+    private func undoLastChange() -> Bool {
+        guard let record = undoRecords.popLast(),
+              PolygonEditorOperations.undo(record, in: &course) else { return false }
+        switch record {
+        case .deleted(let deleted):
+            selectedFeatureID = deleted.feature.id
+            statusMessage = "Restored feature #\(deleted.feature.id)"
+        case .replacedPolygon(let featureID, _):
+            selectedFeatureID = featureID
+            selectedVertexIndex = nil
+            statusMessage = "Restored outline of feature #\(featureID)"
+        case .added(let featureID):
+            if selectedFeatureID == featureID {
+                selectedFeatureID = nil
+                selectedVertexIndex = nil
+                isEditingFeature = false
+            }
+            statusMessage = "Removed feature #\(featureID)"
+        }
         clearStatusAfterDelay()
         return true
+    }
+
+    // MARK: - Auto Polygon / Fit to Imagery
+
+    /// The feature whose Fit to Imagery preview is showing, if any.
+    private var fittingFeatureID: Int? {
+        if case .fit(let featureID, _, _) = autoPolygon.mode { return featureID }
+        return nil
+    }
+
+    private func startFit(_ feature: Feature) {
+        isEditingFeature = false
+        selectedVertexIndex = nil
+        autoPolygon.startFit(feature: feature)
+    }
+
+    private func fitSelectedFeature() -> Bool {
+        guard activeTool == .select,
+              let featureID = selectedFeatureID,
+              let feature = course.findFeature(id: featureID) else { return false }
+        startFit(feature)
+        return true
+    }
+
+    private func acceptAutoPolygon() {
+        guard let mode = autoPolygon.mode, let result = autoPolygon.result else { return }
+        switch mode {
+        case .create(let type):
+            let newFeature = addFeature(type: type, polygon: result.polygon)
+            undoRecords.append(.added(featureID: newFeature.id))
+            selectedFeatureID = newFeature.id
+            statusMessage = "Created \(type.rawValue) feature #\(newFeature.id) (\(result.polygon.count) pts)"
+        case .fit(let featureID, _, let oldPolygon):
+            guard let index = course.features.firstIndex(where: { $0.id == featureID }) else {
+                autoPolygon.cancel()
+                return
+            }
+            course.features[index].polygon = result.polygon
+            undoRecords.append(.replacedPolygon(featureID: featureID, oldPolygon: oldPolygon))
+            selectedFeatureID = featureID
+            statusMessage = "Fitted feature #\(featureID) (\(result.polygon.count) pts)"
+        }
+        autoPolygon.cancel()
+        clearStatusAfterDelay()
     }
 
     // MARK: - OSM Import

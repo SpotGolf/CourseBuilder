@@ -100,6 +100,53 @@ struct PolygonEditorOperationsTests {
         #expect(course.features.map(\.id) == [2])
     }
 
+    @Test func addFeatureAddsToCourseAndHole() {
+        var course = makeCourse(features: [Feature(id: 5, type: .tee, polygon: square)])
+        course.subCourses[0].holes[1].features = [5]
+
+        let feature = PolygonEditorOperations.addFeature(type: .bunker, polygon: square, subCourseIndex: 0, holeIndex: 1, to: &course)
+
+        #expect(feature.id == 6)
+        #expect(course.features.map(\.id) == [5, 6])
+        #expect(course.subCourses[0].holes[1].features == [5, 6])
+        #expect(course.subCourses[0].holes[0].features.isEmpty)
+    }
+
+    @Test func addFeatureWithoutValidHoleOnlyAddsToCourse() {
+        var course = makeCourse(features: [])
+        PolygonEditorOperations.addFeature(type: .green, polygon: square, subCourseIndex: 0, holeIndex: 9, to: &course)
+        #expect(course.features.map(\.id) == [1])
+        #expect(course.subCourses[0].holes.allSatisfy { $0.features.isEmpty })
+    }
+
+    @Test func undoReplacedPolygonRestoresOldOutline() {
+        let oldPolygon = square
+        var course = makeCourse(features: [Feature(id: 1, type: .bunker, polygon: oldPolygon)])
+        course.features[0].polygon = Array(oldPolygon.prefix(3))
+
+        #expect(PolygonEditorOperations.undo(.replacedPolygon(featureID: 1, oldPolygon: oldPolygon), in: &course))
+        #expect(course.features[0].polygon == oldPolygon)
+        #expect(!PolygonEditorOperations.undo(.replacedPolygon(featureID: 9, oldPolygon: oldPolygon), in: &course))
+    }
+
+    @Test func undoAddedFeatureRemovesFeatureAndHoleReference() {
+        var course = makeCourse(features: [Feature(id: 1, type: .tee, polygon: square), Feature(id: 2, type: .bunker, polygon: square)])
+        course.subCourses[0].holes[0].features = [1, 2]
+
+        #expect(PolygonEditorOperations.undo(.added(featureID: 2), in: &course))
+        #expect(course.features.map(\.id) == [1])
+        #expect(course.subCourses[0].holes[0].features == [1])
+        #expect(!PolygonEditorOperations.undo(.added(featureID: 2), in: &course))
+    }
+
+    @Test func undoDeletedRestoresFeature() throws {
+        var course = makeCourse(features: [Feature(id: 2, type: .fairway, polygon: square)])
+        let record = try #require(PolygonEditorOperations.deleteFeature(id: 2, from: &course))
+
+        #expect(PolygonEditorOperations.undo(.deleted(record), in: &course))
+        #expect(course.features.map(\.id) == [2])
+    }
+
     private var square: [Coordinate] {
         [
             Coordinate(latitude: 0, longitude: 0),

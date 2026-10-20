@@ -8,6 +8,13 @@ struct DeletedFeatureRecord {
     let references: CourseIntegrity.FeatureReferences
 }
 
+/// One change to the course's features that Cmd+Z can reverse.
+enum FeatureUndoRecord {
+    case deleted(DeletedFeatureRecord)
+    case replacedPolygon(featureID: Int, oldPolygon: [Coordinate])
+    case added(featureID: Int)
+}
+
 enum PolygonEditorOperations {
     static func adjacentVertexIndex(current: Int?, count: Int, offset: Int) -> Int? {
         guard count > 0 else { return nil }
@@ -55,6 +62,24 @@ enum PolygonEditorOperations {
         return (nearest.insertionIndex, nearest.point)
     }
 
+    /// Adds a feature with the next free ID to the course and, when the indexes are valid, to that hole.
+    @discardableResult
+    static func addFeature(
+        type: FeatureType,
+        polygon: [Coordinate],
+        subCourseIndex: Int,
+        holeIndex: Int,
+        to course: inout Course
+    ) -> Feature {
+        let feature = Feature(id: course.nextFeatureID, type: type, polygon: polygon)
+        course.features.append(feature)
+        if course.subCourses.indices.contains(subCourseIndex),
+           course.subCourses[subCourseIndex].holes.indices.contains(holeIndex) {
+            course.subCourses[subCourseIndex].holes[holeIndex].features.append(feature.id)
+        }
+        return feature
+    }
+
     static func deleteFeature(id: Int, from course: inout Course) -> DeletedFeatureRecord? {
         guard let featureIndex = course.features.firstIndex(where: { $0.id == id }) else { return nil }
         let feature = course.features[featureIndex]
@@ -69,5 +94,20 @@ enum PolygonEditorOperations {
         course.features.insert(record.feature, at: min(record.featureIndex, course.features.count))
         CourseIntegrity.restoreReferences(record.references, to: record.feature.id, in: &course)
         return true
+    }
+
+    /// Reverses one recorded change. Returns false if the course no longer matches the record.
+    @discardableResult
+    static func undo(_ record: FeatureUndoRecord, in course: inout Course) -> Bool {
+        switch record {
+        case .deleted(let deleted):
+            return restoreFeature(deleted, to: &course)
+        case .replacedPolygon(let featureID, let oldPolygon):
+            guard let index = course.features.firstIndex(where: { $0.id == featureID }) else { return false }
+            course.features[index].polygon = oldPolygon
+            return true
+        case .added(let featureID):
+            return deleteFeature(id: featureID, from: &course) != nil
+        }
     }
 }

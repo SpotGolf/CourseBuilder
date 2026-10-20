@@ -2,7 +2,7 @@ name: CourseBuilder
 options:
   bundleIdPrefix: golf.spot
   deploymentTarget:
-    macOS: "14.0"
+    macOS: "27.0"
   xcodeVersion: "15.0"
   minimumXcodeGenVersion: "2.38.0"
   localPackagesGroup: Packages
@@ -12,7 +12,7 @@ settings:
 packages:
   CourseDataSwift:
     url: https://github.com/SpotGolf/CourseDataSwift
-    exactVersion: 0.4.0
+    exactVersion: 0.5.0
 fileGroups:
   - CLAUDE.md
   - README.md

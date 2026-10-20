@@ -33,7 +33,7 @@ swift test --disable-sandbox
 
 ## Architecture
 
-- macOS 14+ (Sonoma), Swift, SwiftUI, no external packages
+- macOS 27+, Swift, SwiftUI, no external packages
 - **No app sandboxing.** `com.apple.security.app-sandbox` must remain `false`. Data is stored in `~/Library/Application Support/CourseBuilder/` and sandboxing causes data loss across rebuilds.
 - MapKit for satellite map display and course search
 - CoreImage for satellite imagery color analysis (green/tee detection)

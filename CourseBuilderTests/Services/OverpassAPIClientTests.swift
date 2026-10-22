@@ -55,10 +55,49 @@ final class OverpassAPIClientTests: XCTestCase {
         XCTAssertEqual(result.features[0].type, .fairway)
         XCTAssertEqual(result.features[0].polygon.count, 3)
         XCTAssertEqual(result.features[1].type, .green)
+        XCTAssertEqual(result.features.map(\.osmID), ["w12345", "w12346"])
 
         XCTAssertEqual(result.centerlines.count, 1)
         XCTAssertEqual(result.centerlines[0].holeNumber, 1)
         XCTAssertEqual(result.centerlines[0].coordinates.count, 2)
+        XCTAssertEqual(result.centerlines[0].osmID, "w12347")
+    }
+
+    func testParseReadsVersionsFromMetadata() throws {
+        let json = """
+        {
+          "elements": [
+            {
+              "type": "way", "id": 10, "version": 4,
+              "tags": { "golf": "green" },
+              "geometry": [{ "lat": 39.785, "lon": -74.955 }, { "lat": 39.784, "lon": -74.954 }]
+            },
+            {
+              "type": "way", "id": 11, "version": 7,
+              "tags": { "golf": "hole", "ref": "1" },
+              "geometry": [{ "lat": 39.790, "lon": -74.960 }, { "lat": 39.785, "lon": -74.955 }]
+            },
+            {
+              "type": "way", "id": 12,
+              "tags": { "golf": "tee" },
+              "geometry": [{ "lat": 39.790, "lon": -74.960 }, { "lat": 39.791, "lon": -74.961 }]
+            }
+          ]
+        }
+        """
+        let result = try OverpassAPIClient.parseResponse(data: Data(json.utf8))
+
+        XCTAssertEqual(result.features.map(\.version), [4, nil])
+        XCTAssertEqual(result.centerlines[0].version, 7)
+        XCTAssertTrue(OverpassAPIClient.buildQuery(bbox: .init(south: 0, west: 0, north: 1, east: 1)).contains("out geom meta;"))
+    }
+
+    func testOSMIDUsesElementTypePrefix() {
+        XCTAssertEqual(OverpassAPIClient.osmID(of: ["type": "node", "id": 1]), "n1")
+        XCTAssertEqual(OverpassAPIClient.osmID(of: ["type": "way", "id": 2]), "w2")
+        XCTAssertEqual(OverpassAPIClient.osmID(of: ["type": "relation", "id": 3]), "r3")
+        XCTAssertNil(OverpassAPIClient.osmID(of: ["type": "area", "id": 4]))
+        XCTAssertNil(OverpassAPIClient.osmID(of: ["type": "way"]))
     }
 
     func testParseWaterHazardTypes() throws {

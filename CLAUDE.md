@@ -53,11 +53,12 @@ One JSON file per course. The Swift types live in the `CourseDataSwift` package 
 | Course    | Name, club name, location, tee list (name and color), features, sub-courses                                                                      |
 | Feature   | ID, type (`fairway`, `green`, `tee`, `bunker`, `water`), and a polygon (list of points)                                                          |
 | SubCourse | A group of holes (e.g. "Front", "Back") with rating, slope, yards, and par for each tee                                                          |
-| Hole      | Number, par, handicaps, yardage for each tee, the IDs of its features, its tee boxes (tee name -> feature ID), and a centerline (list of points) |
+| Hole      | Number, par, handicaps, yardage for each tee, the IDs of its features, and a centerline (list of points)                                         |
 | Point     | `[latitude, longitude, elevation]`                                                                                                               |
 
 - Elevation is in meters above sea level. It comes from USGS and is optional: `[latitude, longitude]` is also valid.
 - Features are stored once on the course. Holes point to them by ID.
+- A hole can have any number of tee boxes (`tee` features). They are not tied to tee names.
 - The front, middle, and back of a feature are not stored. They are worked out from the polygon and the hole's centerline.
 
 ## Git

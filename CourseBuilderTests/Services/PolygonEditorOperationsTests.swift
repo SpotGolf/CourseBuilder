@@ -5,6 +5,15 @@ import Testing
 import CourseDataSwift
 
 struct PolygonEditorOperationsTests {
+    @Test func adjacentFeatureStopsAtEnds() {
+        let ids = [7, 3, 9]
+        #expect(PolygonEditorOperations.adjacentFeatureID(current: 3, in: ids, offset: 1) == 9)
+        #expect(PolygonEditorOperations.adjacentFeatureID(current: 3, in: ids, offset: -1) == 7)
+        #expect(PolygonEditorOperations.adjacentFeatureID(current: 9, in: ids, offset: 1) == 9)
+        #expect(PolygonEditorOperations.adjacentFeatureID(current: 7, in: ids, offset: -1) == 7)
+        #expect(PolygonEditorOperations.adjacentFeatureID(current: 5, in: ids, offset: 1) == nil)
+    }
+
     @Test func adjacentSelectionStartsAtExpectedEndAndWraps() {
         #expect(PolygonEditorOperations.adjacentVertexIndex(current: nil, count: 4, offset: 1) == 0)
         #expect(PolygonEditorOperations.adjacentVertexIndex(current: nil, count: 4, offset: -1) == 3)
@@ -72,23 +81,17 @@ struct PolygonEditorOperationsTests {
         var course = makeCourse(features: [first, deleted, last])
         course.subCourses[0].holes[0].features = [1, 2, 3]
         course.subCourses[0].holes[1].features = [2, 3]
-        course.subCourses[0].holes[0].tees = ["Blue": 1, "White": 2]
-        course.subCourses[0].holes[1].tees = ["White": 2]
 
         let record = try #require(PolygonEditorOperations.deleteFeature(id: 2, from: &course))
 
         #expect(course.features.map(\.id) == [1, 3])
         #expect(course.subCourses[0].holes[0].features == [1, 3])
         #expect(course.subCourses[0].holes[1].features == [3])
-        #expect(course.subCourses[0].holes[0].tees == ["Blue": 1])
-        #expect(course.subCourses[0].holes[1].tees.isEmpty)
 
         #expect(PolygonEditorOperations.restoreFeature(record, to: &course))
         #expect(course.features.map(\.id) == [1, 2, 3])
         #expect(course.subCourses[0].holes[0].features == [1, 2, 3])
         #expect(course.subCourses[0].holes[1].features == [2, 3])
-        #expect(course.subCourses[0].holes[0].tees == ["Blue": 1, "White": 2])
-        #expect(course.subCourses[0].holes[1].tees == ["White": 2])
     }
 
     @Test func restoringSameDeletionTwiceIsRejected() throws {

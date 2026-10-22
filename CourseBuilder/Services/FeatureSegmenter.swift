@@ -22,37 +22,60 @@ struct SegmentationProfile {
     /// The auto tool splits each grown area into its two main color groups and keeps the one
     /// clicked (see `FeatureSegmenter.splitFromSurroundings`).
     var splitsGrownRegion = false
-    /// Type rule every pixel must pass, given its NDVI and CIELAB lightness (0–100).
+    /// Type rule every pixel must pass in imagery with near-infrared (NAIP), given its NDVI and
+    /// CIELAB lightness (0–100).
     let accepts: @Sendable (_ ndvi: Float, _ lightness: Float) -> Bool
+    /// Type rule for imagery without near-infrared (Esri), given its green-red index
+    /// (G − R) / (G + R) and CIELAB lightness.
+    let acceptsWithoutNearInfrared: @Sendable (_ greenRed: Float, _ lightness: Float) -> Bool
+
+    /// Whether the pixel passes the type rule for the kind of imagery it came from.
+    func accepts(_ values: PixelValues, at index: Int) -> Bool {
+        values.hasNearInfrared
+            ? accepts(values.vegetation[index], values.lightness[index])
+            : acceptsWithoutNearInfrared(values.vegetation[index], values.lightness[index])
+    }
 }
 
 /// Type rules come from NAIP pixels measured inside each feature type at Colorado National
 /// (2023, 30 cm): median NDVI bunker 0.02, water 0.19, green 0.32, tee 0.39, fairway 0.44;
 /// median lightness green 51, tee 47, fairway 41, water 32.
+///
+/// Rules without near-infrared come from Esri World Imagery pixels (zoom 20, the newest imagery
+/// there) measured inside each feature type at Colorado Golf Club: median green-red index bunker
+/// −0.04, water 0.13, green 0.25, tee 0.25, fairway 0.33; median lightness bunker 79, tee 40,
+/// green 40, fairway 37, water 30. Water varies the most, from dark to green with algae.
 extension FeatureType {
     var segmentationProfile: SegmentationProfile {
         switch self {
         case .bunker:
             SegmentationProfile(tolerance: 3.0, maxRadiusMeters: 40, fitMarginMeters: 5,
                                 errorLimitMeters: 0.3, minSpacingMeters: 0.75, safetyLimit: 80,
-                                accepts: { ndvi, _ in ndvi < 0.15 })
+                                accepts: { ndvi, _ in ndvi < 0.15 },
+                                acceptsWithoutNearInfrared: { greenRed, _ in greenRed < 0.05 })
         case .water:
             SegmentationProfile(tolerance: 3.0, maxRadiusMeters: 300, fitMarginMeters: 15,
                                 errorLimitMeters: 1.0, minSpacingMeters: 2, safetyLimit: 120,
-                                accepts: { ndvi, lightness in ndvi < 0.3 && lightness < 45 })
+                                accepts: { ndvi, lightness in ndvi < 0.3 && lightness < 45 },
+                                acceptsWithoutNearInfrared: { greenRed, lightness in greenRed < 0.4 && lightness < 40 })
         case .green:
             SegmentationProfile(tolerance: 2.0, maxRadiusMeters: 60, fitMarginMeters: 5,
                                 errorLimitMeters: 0.3, minSpacingMeters: 1, safetyLimit: 80, refinesFit: true,
-                                accepts: { ndvi, lightness in ndvi > 0.2 && ndvi < 0.42 && lightness > 42 })
+                                accepts: { ndvi, lightness in ndvi > 0.2 && ndvi < 0.42 && lightness > 42 },
+                                acceptsWithoutNearInfrared: { greenRed, lightness in greenRed > 0.08 && lightness > 30 })
         case .tee:
             SegmentationProfile(tolerance: 2.5, maxRadiusMeters: 40, fitMarginMeters: 5,
                                 errorLimitMeters: 0.3, minSpacingMeters: 1, safetyLimit: 30, refinesFit: true,
-                                accepts: { ndvi, lightness in ndvi > 0.2 && lightness > 40 })
-        case .fairway:
+                                accepts: { ndvi, lightness in ndvi > 0.2 && lightness > 40 },
+                                acceptsWithoutNearInfrared: { greenRed, lightness in greenRed > 0.03 && lightness > 30 })
+        // Centerlines are never traced from imagery. They share the fairway profile only so the
+        // switch is complete.
+        case .fairway, .centerline:
             SegmentationProfile(tolerance: 2.0, maxRadiusMeters: 400, fitMarginMeters: 15,
                                 errorLimitMeters: 1.0, minSpacingMeters: 3, safetyLimit: 150,
                                 refinesFit: true, splitsGrownRegion: true,
-                                accepts: { ndvi, _ in ndvi > 0.25 })
+                                accepts: { ndvi, _ in ndvi > 0.25 },
+                                acceptsWithoutNearInfrared: { greenRed, _ in greenRed > 0.06 })
         }
     }
 }
@@ -287,9 +310,12 @@ struct PixelValues {
     var lightness: [Float]
     var a: [Float]
     var b: [Float]
-    /// (NIR − red) / (NIR + red), −1–1.
-    var ndvi: [Float]
+    /// How green each pixel is, −1–1: NDVI, (NIR − red) / (NIR + red), when the imagery has
+    /// near-infrared, otherwise the green-red index (green − red) / (green + red).
+    var vegetation: [Float]
     var valid: [Bool]
+    /// Whether `vegetation` is NDVI.
+    let hasNearInfrared: Bool
 
     init(patch: ImagePatch, window: PixelWindow) {
         self.window = window
@@ -297,8 +323,9 @@ struct PixelValues {
         lightness = Array(repeating: 0, count: count)
         a = Array(repeating: 0, count: count)
         b = Array(repeating: 0, count: count)
-        ndvi = Array(repeating: 0, count: count)
+        vegetation = Array(repeating: 0, count: count)
         valid = Array(repeating: false, count: count)
+        hasNearInfrared = patch.hasNearInfrared
         for wy in 0..<window.height {
             for wx in 0..<window.width {
                 let source = patch.index(window.x + wx, window.y + wy)
@@ -308,15 +335,21 @@ struct PixelValues {
                 lightness[target] = lab.l
                 a[target] = lab.a
                 b[target] = lab.b
-                let red = Float(patch.red[source]), nir = Float(patch.nir[source])
-                ndvi[target] = red + nir > 0 ? (nir - red) / (nir + red) : 0
+                let red = Float(patch.red[source])
+                if patch.hasNearInfrared {
+                    let nir = Float(patch.nir[source])
+                    vegetation[target] = red + nir > 0 ? (nir - red) / (nir + red) : 0
+                } else {
+                    let green = Float(patch.green[source])
+                    vegetation[target] = red + green > 0 ? (green - red) / (green + red) : 0
+                }
                 valid[target] = true
             }
         }
     }
 
     func channels(at i: Int) -> [Float] {
-        [lightness[i], a[i], b[i], ndvi[i]]
+        [lightness[i], a[i], b[i], vegetation[i]]
     }
 
     /// Each value averaged over the square of `radius` pixels around it (valid pixels only).
@@ -352,7 +385,7 @@ struct PixelValues {
         copy.lightness = boxMean(lightness)
         copy.a = boxMean(a)
         copy.b = boxMean(b)
-        copy.ndvi = boxMean(ndvi)
+        copy.vegetation = boxMean(vegetation)
         return copy
     }
 
@@ -394,7 +427,7 @@ struct SeedStatistics: Equatable {
         guard !usable.isEmpty else { return nil }
         var median: [Float] = []
         var spread: [Float] = []
-        for channel in [values.lightness, values.a, values.b, values.ndvi].enumerated() {
+        for channel in [values.lightness, values.a, values.b, values.vegetation].enumerated() {
             let samples = usable.map { channel.element[$0] }
             let m = Self.median(samples)
             let mad = Self.median(samples.map { abs($0 - m) })
@@ -420,7 +453,7 @@ struct SeedStatistics: Equatable {
         let zl = (values.lightness[i] - median[0]) / spread[0]
         let za = (values.a[i] - median[1]) / spread[1]
         let zb = (values.b[i] - median[2]) / spread[2]
-        let zn = (values.ndvi[i] - median[3]) / spread[3]
+        let zn = (values.vegetation[i] - median[3]) / spread[3]
         return ((zl * zl + za * za + zb * zb + zn * zn) / 4).squareRoot()
     }
 
@@ -440,7 +473,7 @@ struct PixelGaussian {
         var sum = [Double](repeating: 0, count: 4), sumSquares = [Double](repeating: 0, count: 4)
         var n = 0
         for i in mask.bits.indices where mask.bits[i] && values.valid[i] {
-            let v = [values.lightness[i], values.a[i], values.b[i], values.ndvi[i]]
+            let v = [values.lightness[i], values.a[i], values.b[i], values.vegetation[i]]
             for c in 0..<4 {
                 sum[c] += Double(v[c])
                 sumSquares[c] += Double(v[c] * v[c])
@@ -457,7 +490,7 @@ struct PixelGaussian {
     }
 
     func logLikelihood(values: PixelValues, at i: Int) -> Float {
-        let v = [values.lightness[i], values.a[i], values.b[i], values.ndvi[i]]
+        let v = [values.lightness[i], values.a[i], values.b[i], values.vegetation[i]]
         var total: Float = 0
         for c in 0..<4 {
             let d = v[c] - mean[c]
@@ -549,7 +582,7 @@ enum FeatureSegmenter {
             var next = BinaryMask(width: mask.width, height: mask.height)
             for i in next.bits.indices
             where allowed.bits[i] && values.valid[i]
-                && profile.accepts(values.ndvi[i], values.lightness[i])
+                && profile.accepts(values, at: i)
                 && feature.logLikelihood(values: smoothed, at: i) + bias > surroundings.logLikelihood(values: smoothed, at: i) {
                 next.bits[i] = true
             }
@@ -578,7 +611,7 @@ enum FeatureSegmenter {
 
         func accepts(_ i: Int) -> Bool {
             values.valid[i] && allowed.bits[i]
-                && profile.accepts(values.ndvi[i], values.lightness[i])
+                && profile.accepts(values, at: i)
                 && statistics.distance(values: values, at: i) <= limit
         }
 

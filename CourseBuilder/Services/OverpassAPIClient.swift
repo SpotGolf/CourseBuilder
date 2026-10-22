@@ -69,6 +69,10 @@ actor OverpassAPIClient {
     struct ParsedCenterline {
         let holeNumber: Int?
         let coordinates: [Coordinate]
+        /// The OSM element in short form, such as `w123456789`.
+        var osmID: String? = nil
+        /// The OSM element's version. Nil when the response has no metadata.
+        var version: Int? = nil
     }
 
     struct ParsedResult {
@@ -80,6 +84,10 @@ actor OverpassAPIClient {
     struct ParsedFeature {
         let type: FeatureType
         let polygon: [Coordinate]
+        /// The OSM element in short form, such as `w123456789`.
+        var osmID: String? = nil
+        /// The OSM element's version. Nil when the response has no metadata.
+        var version: Int? = nil
     }
 
     /// A course outline narrower than this is not a real boundary (e.g. a mistagged
@@ -113,7 +121,7 @@ actor OverpassAPIClient {
           way["natural"="water"](\(b));
           relation["natural"="water"](\(b));
         );
-        out geom;
+        out geom meta;
         """
     }
 
@@ -220,28 +228,30 @@ actor OverpassAPIClient {
 
             let coords = extractCoordinates(from: element, nodeLookup: nodeLookup, wayGeometry: wayGeometry)
             guard !coords.isEmpty else { continue }
+            let osmID = osmID(of: element)
+            let version = element["version"] as? Int
 
             if let golfTag = tags["golf"] {
                 switch golfTag {
                 case "fairway":
-                    features.append(ParsedFeature(type: .fairway, polygon: coords))
+                    features.append(ParsedFeature(type: .fairway, polygon: coords, osmID: osmID, version: version))
                 case "green":
-                    features.append(ParsedFeature(type: .green, polygon: coords))
+                    features.append(ParsedFeature(type: .green, polygon: coords, osmID: osmID, version: version))
                 case "tee":
-                    features.append(ParsedFeature(type: .tee, polygon: coords))
+                    features.append(ParsedFeature(type: .tee, polygon: coords, osmID: osmID, version: version))
                 case "bunker":
-                    features.append(ParsedFeature(type: .bunker, polygon: coords))
+                    features.append(ParsedFeature(type: .bunker, polygon: coords, osmID: osmID, version: version))
                 case "water_hazard", "lateral_water_hazard":
-                    features.append(ParsedFeature(type: .water, polygon: coords))
+                    features.append(ParsedFeature(type: .water, polygon: coords, osmID: osmID, version: version))
                 case "hole":
                     let ref = tags["ref"]
                     let holeNumber = ref.flatMap { Int($0) }
-                    centerlines.append(ParsedCenterline(holeNumber: holeNumber, coordinates: coords))
+                    centerlines.append(ParsedCenterline(holeNumber: holeNumber, coordinates: coords, osmID: osmID, version: version))
                 default:
                     break
                 }
             } else if tags["natural"] == "water" {
-                features.append(ParsedFeature(type: .water, polygon: coords))
+                features.append(ParsedFeature(type: .water, polygon: coords, osmID: osmID, version: version))
             }
 
             if isCourseBoundary(tags: tags) {
@@ -250,6 +260,18 @@ actor OverpassAPIClient {
         }
 
         return ParsedResult(features: features, centerlines: centerlines, courseBoundary: courseBoundary)
+    }
+
+    /// The element's ID in short form: `n`, `w`, or `r` for a node, way, or relation, followed
+    /// by its ID, such as `w123456789`. Returns nil when the type or ID is missing.
+    static func osmID(of element: [String: Any]) -> String? {
+        guard let id = element["id"] as? Int else { return nil }
+        switch element["type"] as? String {
+        case "node": return "n\(id)"
+        case "way": return "w\(id)"
+        case "relation": return "r\(id)"
+        default: return nil
+        }
     }
 
     /// A course outline is tagged `leisure=golf_course`. Some mappers put that tag on the

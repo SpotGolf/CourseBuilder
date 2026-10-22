@@ -53,7 +53,7 @@ final class ElevationUpdaterTests: XCTestCase {
         XCTAssertFalse(updated.isMissingElevations)
         XCTAssertEqual(updated.location.coordinate.ele, 390)
         XCTAssertEqual(updated.features[0].polygon.compactMap(\.ele), [391, 5, 393].map(pathElevation))
-        XCTAssertEqual(updated.subCourses[0].holes[0].centerline[0].ele, pathElevation(394))
+        XCTAssertEqual(updated.centerlinePath(for: updated.subCourses[0].holes[0])[0].ele, pathElevation(394))
     }
 
     func testUpdateSplitsLargeCoursesIntoBatches() async throws {
@@ -113,7 +113,7 @@ final class ElevationUpdaterTests: XCTestCase {
         XCTAssertFalse(updated.isMissingElevations)
         XCTAssertEqual(updated.location.coordinate.ele, 0)
         XCTAssertEqual(updated.features[0].polygon.compactMap(\.ele), [0, 5].map(pathElevation))
-        XCTAssertEqual(updated.subCourses[0].holes[0].centerline[0].ele, 0)
+        XCTAssertEqual(updated.centerlinePath(for: updated.subCourses[0].holes[0])[0].ele, 0)
     }
 
     // MARK: - isOutsideUnitedStates
@@ -136,15 +136,17 @@ final class ElevationUpdaterTests: XCTestCase {
     }
 
     private func makeCourse(features: [Feature], centerline: CoordinatePath) -> Course {
-        Course(
+        var course = Course(
             name: "Test Course",
             location: CourseLocation(
                 address: "", city: "Denver", state: "CO", country: "US",
                 coordinate: Coordinate(lat: 39.0, lon: -105.0)
             ),
             features: features,
-            subCourses: [SubCourse(name: "Front", holes: [Hole(number: 1, par: 4, centerline: centerline)])]
+            subCourses: [SubCourse(name: "Front", holes: [Hole(number: 1, par: 4)])]
         )
+        course.setCenterline(centerline, subCourseIndex: 0, holeIndex: 0)
+        return course
     }
 }
 
@@ -200,8 +202,9 @@ final class ElevationUpdaterLocationTests: XCTestCase {
                 Feature(id: 1, type: .green, polygon: [shared, Coordinate(lat: 39.2, lon: -105.0, ele: 2)]),
                 Feature(id: 2, type: .bunker, polygon: [shared]),
             ],
-            subCourses: [SubCourse(name: "Front", holes: [Hole(number: 1, par: 4, centerline: [Coordinate(lat: 39.3, lon: -105.0)])])]
+            subCourses: [SubCourse(name: "Front", holes: [Hole(number: 1, par: 4)])]
         )
+        course.setCenterline([Coordinate(lat: 39.3, lon: -105.0)], subCourseIndex: 0, holeIndex: 0)
 
         XCTAssertEqual(ElevationUpdater.missingCoordinates(in: course), [shared, Coordinate(lat: 39.3, lon: -105.0)])
 
@@ -213,7 +216,7 @@ final class ElevationUpdaterLocationTests: XCTestCase {
 
         XCTAssertEqual(course.features[0].polygon.compactMap(\.ele), [10, 2].map(pathElevation))
         XCTAssertEqual(course.features[1].polygon.compactMap(\.ele), [pathElevation(10)])
-        XCTAssertNil(course.subCourses[0].holes[0].centerline[0].ele)
+        XCTAssertNil(course.centerlinePath(for: course.subCourses[0].holes[0])[0].ele)
     }
 }
 

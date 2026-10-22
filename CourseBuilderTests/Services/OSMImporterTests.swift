@@ -3,7 +3,7 @@ import XCTest
 import CourseDataSwift
 
 final class OSMImporterTests: XCTestCase {
-    func testAssociateFeaturesViaCenterlines() {
+    func testAssociateFeaturesViaCenterlines() throws {
         // Fairway centroid sits right on the centerline path
         let fairway = OverpassAPIClient.ParsedFeature(
             type: .fairway,
@@ -12,7 +12,8 @@ final class OSMImporterTests: XCTestCase {
                 Coordinate(lat: 39.7869, lon: -74.9569),
                 Coordinate(lat: 39.7871, lon: -74.9569),
                 Coordinate(lat: 39.7871, lon: -74.9571)
-            ]
+            ],
+            osmID: "w1"
         )
         // Green centroid sits at the centerline endpoint
         let green = OverpassAPIClient.ParsedFeature(
@@ -22,7 +23,8 @@ final class OSMImporterTests: XCTestCase {
                 Coordinate(lat: 39.7844, lon: -74.9539),
                 Coordinate(lat: 39.7846, lon: -74.9539),
                 Coordinate(lat: 39.7846, lon: -74.9541)
-            ]
+            ],
+            osmID: "w2"
         )
         let centerline = OverpassAPIClient.ParsedCenterline(
             holeNumber: 1,
@@ -30,7 +32,8 @@ final class OSMImporterTests: XCTestCase {
                 Coordinate(lat: 39.790, lon: -74.960),
                 Coordinate(lat: 39.787, lon: -74.957),
                 Coordinate(lat: 39.7845, lon: -74.954)
-            ]
+            ],
+            osmID: "w3"
         )
 
         let parsed = OverpassAPIClient.ParsedResult(
@@ -50,9 +53,12 @@ final class OSMImporterTests: XCTestCase {
 
         OSMImporter.applyParsedResult(parsed, to: &course)
 
-        XCTAssertEqual(course.features.count, 2)
+        XCTAssertEqual(course.features.count, 3)
         XCTAssertEqual(course.subCourses[0].holes[0].features.count, 2)
-        XCTAssertFalse(course.subCourses[0].holes[0].centerline.isEmpty)
+        let centerlineFeature = try XCTUnwrap(course.subCourses[0].holes[0].centerline(from: course.features))
+        XCTAssertEqual(centerlineFeature.type, .centerline)
+        XCTAssertEqual(centerlineFeature.polygon.count, 3)
+        XCTAssertEqual(course.features.map(\.osmID), ["w1", "w2", "w3"])
     }
 
     func testAssignsFeatureToCorrectHole() {
@@ -155,8 +161,8 @@ final class OSMImporterTests: XCTestCase {
 
         // Bunker is too far from any centerline — should not be assigned
         XCTAssertTrue(course.subCourses[0].holes[0].features.isEmpty)
-        // But it should still exist as a course-level feature
-        XCTAssertEqual(course.features.count, 1)
+        // But it should still exist as a course-level feature, next to the centerline
+        XCTAssertEqual(course.features.map(\.type), [.bunker, .centerline])
     }
 
     func testCenterlinePassesThroughPolygon() {
@@ -280,16 +286,16 @@ final class OSMImporterTests: XCTestCase {
 
         OSMImporter.applyParsedResult(parsed, to: &course)
 
-        XCTAssertFalse(course.subCourses[0].holes[0].centerline.isEmpty)
+        XCTAssertFalse(course.centerlinePath(for: course.subCourses[0].holes[0]).isEmpty)
+        XCTAssertNil(course.subCourses[0].holes[0].centerline(from: course.features)?.osmID)
         XCTAssertEqual(course.subCourses[0].holes[0].features.count, 2)
     }
 
-    // MARK: - Tee Name Assignment
+    // MARK: - Tee Boxes
 
-    func testAssignsTeeNamesWhenCountsMatch() {
-        // 3 tee polygons at different distances from the green, 3 tee names with yardages.
-        // Along the centerline the tee boxes span about 815-968 (far), 508-662 (mid), and
-        // 202-356 (close) yards to the green. Each yardage falls inside one range.
+    func testAssociatesEveryTeeBoxWithTheHole() {
+        // 3 tee polygons but only 1 tee name. Tee boxes are not tied to tee names, so all 3
+        // belong to the hole.
 
         // Green at ~39.784, ~-74.954
         let green = OverpassAPIClient.ParsedFeature(
@@ -350,197 +356,19 @@ final class OSMImporterTests: XCTestCase {
             name: "Test",
             location: CourseLocation(address: "", city: "", state: "", country: "",
                                      coordinate: Coordinate(lat: 39.787, lon: -74.957)),
-            tees: [
-                TeeDefinition(name: "Black", color: "#000000"),
-                TeeDefinition(name: "White", color: "#FFFFFF"),
-                TeeDefinition(name: "Red", color: "#FF0000")
-            ],
+            tees: [TeeDefinition(name: "White", color: "#FFFFFF")],
             subCourses: [
                 SubCourse(name: "Front", holes: [Hole(number: 1, par: 4)])
             ]
         )
-        course.subCourses[0].holes[0].yardages = ["Black": 900, "White": 600, "Red": 300]
+        course.subCourses[0].holes[0].yardages = ["White": 600]
 
         OSMImporter.applyParsedResult(parsed, to: &course)
 
         let hole = course.subCourses[0].holes[0]
-        // Farthest tee → Black (highest yardage)
-        // Mid tee → White
-        // Closest tee → Red (lowest yardage)
-        let teeFeatures = course.features.filter { $0.type == .tee }
-        let farFeatureID = teeFeatures.first(where: { $0.polygon[0].lat > 39.7895 })!.id
-        let midFeatureID = teeFeatures.first(where: {
-            $0.polygon[0].lat > 39.7875 && $0.polygon[0].lat < 39.7895
-        })!.id
-        let closeFeatureID = teeFeatures.first(where: { $0.polygon[0].lat < 39.7875 })!.id
-
-        XCTAssertEqual(hole.tees["Black"], farFeatureID)
-        XCTAssertEqual(hole.tees["White"], midFeatureID)
-        XCTAssertEqual(hole.tees["Red"], closeFeatureID)
-    }
-
-    func testAssignsTeeNamesWhenFewerPolygonsThanNames() {
-        // 2 tee polygons but 4 tee names — multiple names should share a polygon.
-
-        let green = OverpassAPIClient.ParsedFeature(
-            type: .green,
-            polygon: [
-                Coordinate(lat: 39.784, lon: -74.955),
-                Coordinate(lat: 39.784, lon: -74.953),
-                Coordinate(lat: 39.785, lon: -74.953),
-                Coordinate(lat: 39.785, lon: -74.955)
-            ]
-        )
-        // Back tee box (farther from green)
-        let teeBack = OverpassAPIClient.ParsedFeature(
-            type: .tee,
-            polygon: [
-                Coordinate(lat: 39.790, lon: -74.960),
-                Coordinate(lat: 39.790, lon: -74.959),
-                Coordinate(lat: 39.791, lon: -74.959),
-                Coordinate(lat: 39.791, lon: -74.960)
-            ]
-        )
-        // Front tee box (closer to green)
-        let teeFront = OverpassAPIClient.ParsedFeature(
-            type: .tee,
-            polygon: [
-                Coordinate(lat: 39.786, lon: -74.956),
-                Coordinate(lat: 39.786, lon: -74.955),
-                Coordinate(lat: 39.787, lon: -74.955),
-                Coordinate(lat: 39.787, lon: -74.956)
-            ]
-        )
-        let centerline = OverpassAPIClient.ParsedCenterline(
-            holeNumber: 1,
-            coordinates: [
-                Coordinate(lat: 39.791, lon: -74.960),
-                Coordinate(lat: 39.788, lon: -74.957),
-                Coordinate(lat: 39.7845, lon: -74.954)
-            ]
-        )
-
-        let parsed = OverpassAPIClient.ParsedResult(
-            features: [green, teeBack, teeFront],
-            centerlines: [centerline],
-            courseBoundary: nil
-        )
-
-        var course = Course(
-            name: "Test",
-            location: CourseLocation(address: "", city: "", state: "", country: "",
-                                     coordinate: Coordinate(lat: 39.787, lon: -74.957)),
-            tees: [
-                TeeDefinition(name: "Black", color: "#000000"),
-                TeeDefinition(name: "Blue", color: "#0000FF"),
-                TeeDefinition(name: "White", color: "#FFFFFF"),
-                TeeDefinition(name: "Red", color: "#FF0000")
-            ],
-            subCourses: [
-                SubCourse(name: "Front", holes: [Hole(number: 1, par: 4)])
-            ]
-        )
-        // Back tee box centroid is ~890 yards from green, front is ~280 yards.
-        // Black & Blue yardages are close to 890, White & Red close to 280.
-        course.subCourses[0].holes[0].yardages = ["Black": 900, "Blue": 880, "White": 290, "Red": 270]
-
-        OSMImporter.applyParsedResult(parsed, to: &course)
-
-        let hole = course.subCourses[0].holes[0]
-        let teeFeatures = course.features.filter { $0.type == .tee }
-        let backFeatureID = teeFeatures.first(where: { $0.polygon[0].lat > 39.789 })!.id
-        let frontFeatureID = teeFeatures.first(where: { $0.polygon[0].lat < 39.789 })!.id
-
-        // Black & Blue should share the back tee box
-        XCTAssertEqual(hole.tees["Black"], backFeatureID)
-        XCTAssertEqual(hole.tees["Blue"], backFeatureID)
-        // White & Red should share the front tee box
-        XCTAssertEqual(hole.tees["White"], frontFeatureID)
-        XCTAssertEqual(hole.tees["Red"], frontFeatureID)
-        // All 4 tee names should be assigned
-        XCTAssertEqual(hole.tees.count, 4)
-    }
-
-    // MARK: - Shared Tee Boxes
-
-    func testTeeNameClusteringWithUnequalCounts() {
-        // 4 tee names, 2 tee polygons.
-        // Along the centerline the back tee box spans about 815-1025 yards to the green and
-        // the front tee box spans about 662-872 yards.
-        // Black=950, Blue=900 → back polygon
-        // White=800, Red=700 → front polygon
-        let green = OverpassAPIClient.ParsedFeature(
-            type: .green,
-            polygon: [
-                Coordinate(lat: 39.784, lon: -74.955),
-                Coordinate(lat: 39.784, lon: -74.953),
-                Coordinate(lat: 39.785, lon: -74.953),
-                Coordinate(lat: 39.785, lon: -74.955)
-            ]
-        )
-        // Back tee box — near centerline start
-        let teeBack = OverpassAPIClient.ParsedFeature(
-            type: .tee,
-            polygon: [
-                Coordinate(lat: 39.790, lon: -74.961),
-                Coordinate(lat: 39.790, lon: -74.959),
-                Coordinate(lat: 39.791, lon: -74.959),
-                Coordinate(lat: 39.791, lon: -74.961)
-            ]
-        )
-        // Front tee box — slightly closer to green along centerline
-        let teeFront = OverpassAPIClient.ParsedFeature(
-            type: .tee,
-            polygon: [
-                Coordinate(lat: 39.789, lon: -74.960),
-                Coordinate(lat: 39.789, lon: -74.958),
-                Coordinate(lat: 39.790, lon: -74.958),
-                Coordinate(lat: 39.790, lon: -74.960)
-            ]
-        )
-        let cl = OverpassAPIClient.ParsedCenterline(
-            holeNumber: 1,
-            coordinates: [
-                Coordinate(lat: 39.791, lon: -74.960),
-                Coordinate(lat: 39.788, lon: -74.957),
-                Coordinate(lat: 39.7845, lon: -74.954)
-            ]
-        )
-
-        let parsed = OverpassAPIClient.ParsedResult(
-            features: [green, teeBack, teeFront],
-            centerlines: [cl],
-            courseBoundary: nil
-        )
-
-        var course = Course(
-            name: "Test",
-            location: CourseLocation(address: "", city: "", state: "", country: "",
-                                     coordinate: Coordinate(lat: 39.787, lon: -74.957)),
-            tees: [
-                TeeDefinition(name: "Black", color: "#000000"),
-                TeeDefinition(name: "Blue", color: "#0000FF"),
-                TeeDefinition(name: "White", color: "#FFFFFF"),
-                TeeDefinition(name: "Red", color: "#FF0000")
-            ],
-            subCourses: [
-                SubCourse(name: "Front", holes: [Hole(number: 1, par: 4)])
-            ]
-        )
-        course.subCourses[0].holes[0].yardages = ["Black": 950, "Blue": 900, "White": 800, "Red": 700]
-
-        OSMImporter.applyParsedResult(parsed, to: &course)
-
-        let hole = course.subCourses[0].holes[0]
-        let teeFeatures = course.features.filter { $0.type == .tee }
-        let backID = teeFeatures.first(where: { $0.polygon[0].lat > 39.7895 })!.id
-        let frontID = teeFeatures.first(where: { $0.polygon[0].lat < 39.7895 })!.id
-
-        XCTAssertEqual(hole.tees["Black"], backID)
-        XCTAssertEqual(hole.tees["Blue"], backID)
-        XCTAssertEqual(hole.tees["White"], frontID)
-        XCTAssertEqual(hole.tees["Red"], frontID)
-        XCTAssertEqual(hole.tees.count, 4)
+        let teeFeatureIDs = course.features.filter { $0.type == .tee }.map(\.id)
+        XCTAssertEqual(teeFeatureIDs.count, 3)
+        XCTAssertEqual(hole.teeBoxes(from: course.features).map(\.id).sorted(), teeFeatureIDs.sorted())
     }
 
     // MARK: - Phase-Based Association

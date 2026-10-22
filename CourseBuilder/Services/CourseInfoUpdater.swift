@@ -4,9 +4,8 @@ import CourseDataSwift
 /// Updates a course's scorecard data with a fresh copy from GolfCourseAPI.
 ///
 /// The fetched course wins for names, address, tee list, ratings, slopes, par, handicaps, and
-/// yardages. Everything made in the map editor is kept: features, centerlines, tee box
-/// assignments, combo tees, the map coordinate, and tee colors. Tees added by the fetched course
-/// get no tee box. They must be assigned, deleted, or marked as combo tees by hand.
+/// yardages. Everything made in the map editor is kept: features, centerlines, combo tees, the map
+/// coordinate, and tee colors.
 /// Sub-courses and holes are matched by position so renamed sub-courses still line up. Nothing is
 /// removed: tees, sub-courses, and holes that the fetched course does not have are left as they are.
 /// Fetched tees that are combo tees in the course stay combo tees: their ratings and slopes update

@@ -11,7 +11,7 @@ enum OSMImporter {
         var nextID = course.nextFeatureID
         var features: [Feature] = []
         for parsed in result.features {
-            features.append(Feature(id: nextID, type: parsed.type, polygon: CoordinatePath(parsed.polygon)))
+            features.append(Feature(id: nextID, type: parsed.type, polygon: CoordinatePath(parsed.polygon), osmID: parsed.osmID))
             nextID += 1
         }
         course.features.append(contentsOf: features)
@@ -29,13 +29,15 @@ enum OSMImporter {
         // Assign centerlines to holes by matching OSM hole numbers to global numbers
         for slot in holeSlots {
             if let cl = result.centerlines.first(where: { $0.holeNumber == slot.global }) {
-                course.subCourses[slot.sub].holes[slot.hole].centerline = CoordinatePath(cl.coordinates)
+                course.setCenterline(
+                    CoordinatePath(cl.coordinates), osmID: cl.osmID, subCourseIndex: slot.sub, holeIndex: slot.hole
+                )
             }
         }
 
         // Run Phases 1-4 on holes that have centerlines
         let holesWithCenterlines = holeSlots.filter { slot in
-            !course.subCourses[slot.sub].holes[slot.hole].centerline.isEmpty
+            !course.centerlinePath(for: course.subCourses[slot.sub].holes[slot.hole]).isEmpty
         }
         var assignedIDs: Set<Int> = []
         if !holesWithCenterlines.isEmpty {
@@ -46,7 +48,7 @@ enum OSMImporter {
 
         // For holes still missing centerlines, synthesize from leftover features
         let holesWithoutCenterlines = holeSlots.filter { slot in
-            course.subCourses[slot.sub].holes[slot.hole].centerline.isEmpty
+            course.centerlinePath(for: course.subCourses[slot.sub].holes[slot.hole]).isEmpty
         }
         if !holesWithoutCenterlines.isEmpty {
             synthesizeCenterlines(
@@ -58,7 +60,7 @@ enum OSMImporter {
 
             // Run Phases 1-4 on the newly-centerlined holes
             let nowHaveCenterlines = holesWithoutCenterlines.filter { slot in
-                !course.subCourses[slot.sub].holes[slot.hole].centerline.isEmpty
+                !course.centerlinePath(for: course.subCourses[slot.sub].holes[slot.hole]).isEmpty
             }
             if !nowHaveCenterlines.isEmpty {
                 let unassigned = features.filter { !assignedIDs.contains($0.id) }
@@ -82,7 +84,7 @@ enum OSMImporter {
         var assignedIDs: Set<Int> = []
 
         for slot in holeSlots {
-            let cl = course.subCourses[slot.sub].holes[slot.hole].centerline
+            let cl = course.centerlinePath(for: course.subCourses[slot.sub].holes[slot.hole])
 
             // Step 1: Find the green whose polygon contains the centerline endpoint
             if let endpoint = cl.last {
@@ -147,9 +149,6 @@ enum OSMImporter {
                     assignedIDs.insert(feature.id)
                 }
             }
-
-            // Step 4: Assign tee names
-            assignTeeNames(slot: slot, course: &course)
         }
 
         return assignedIDs
@@ -226,18 +225,7 @@ enum OSMImporter {
                 centerline.append(green.center)
                 usedGreenIDs.insert(green.id)
             }
-            course.subCourses[slot.sub].holes[slot.hole].centerline = centerline
-        }
-    }
-
-    /// Assign tee names for a single hole by walking the tee boxes along the centerline.
-    private static func assignTeeNames(
-        slot: (sub: Int, hole: Int, global: Int),
-        course: inout Course
-    ) {
-        let hole = course.subCourses[slot.sub].holes[slot.hole]
-        for (name, featureID) in TeeGuesser.guessTees(for: hole, features: course.features) {
-            course.subCourses[slot.sub].holes[slot.hole].tees[name] = featureID
+            course.setCenterline(centerline, subCourseIndex: slot.sub, holeIndex: slot.hole)
         }
     }
 

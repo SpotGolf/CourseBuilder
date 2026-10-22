@@ -9,10 +9,19 @@ enum WebMercator {
     static let tileSize = 256
 
     static func worldSize(zoom: Int) -> Double {
-        Double(tileSize) * pow(2, Double(zoom))
+        worldSize(zoom: Double(zoom))
+    }
+
+    /// A fractional zoom gives the size of the world on a map scaled between two tile zooms.
+    static func worldSize(zoom: Double) -> Double {
+        Double(tileSize) * pow(2, zoom)
     }
 
     static func pixel(for coordinate: Coordinate, zoom: Int) -> CGPoint {
+        pixel(for: coordinate, zoom: Double(zoom))
+    }
+
+    static func pixel(for coordinate: Coordinate, zoom: Double) -> CGPoint {
         let size = worldSize(zoom: zoom)
         let x = (coordinate.lon + 180) / 360 * size
         let sinLat = sin(coordinate.lat * .pi / 180)
@@ -21,6 +30,10 @@ enum WebMercator {
     }
 
     static func coordinate(forPixel pixel: CGPoint, zoom: Int) -> Coordinate {
+        coordinate(forPixel: pixel, zoom: Double(zoom))
+    }
+
+    static func coordinate(forPixel pixel: CGPoint, zoom: Double) -> Coordinate {
         let size = worldSize(zoom: zoom)
         let longitude = Double(pixel.x) / size * 360 - 180
         let n = .pi - 2 * .pi * Double(pixel.y) / size
@@ -48,6 +61,8 @@ struct ImagePatch {
     var blue: [UInt8]
     var nir: [UInt8]
     var valid: [Bool]
+    /// False for imagery without a near-infrared band (Esri). `nir` is then unused.
+    var hasNearInfrared = true
     /// Added to a WGS84 coordinate to get the coordinate the imagery's pixels are placed by.
     /// NAIP tiles are placed by NAD83 coordinates; see `NAD83`.
     var datumOffset: NAD83.Offset = .zero
@@ -135,6 +150,70 @@ struct ImagePatch {
         }
     }
 
+    /// The patch shrunk by a power of two, `factor` zoom-pixels to a side becoming one, by
+    /// averaging valid pixels. A pixel is valid when at least half of its block is.
+    func downsampled(by factor: Int) -> ImagePatch {
+        guard factor > 1 else { return self }
+        var zoomDrop = 0
+        while (1 << zoomDrop) < factor { zoomDrop += 1 }
+        var result = ImagePatch(
+            zoom: zoom - zoomDrop,
+            originX: originX / factor,
+            originY: originY / factor,
+            width: width / factor,
+            height: height / factor
+        )
+        result.hasNearInfrared = hasNearInfrared
+        result.datumOffset = datumOffset
+        for y in 0..<result.height {
+            for x in 0..<result.width {
+                var sums = (red: 0, green: 0, blue: 0, nir: 0), count = 0
+                for sy in (y * factor)..<((y + 1) * factor) {
+                    for sx in (x * factor)..<((x + 1) * factor) {
+                        let source = index(sx, sy)
+                        guard valid[source] else { continue }
+                        sums.red += Int(red[source])
+                        sums.green += Int(green[source])
+                        sums.blue += Int(blue[source])
+                        sums.nir += Int(nir[source])
+                        count += 1
+                    }
+                }
+                guard count * 2 >= factor * factor else { continue }
+                let target = result.index(x, y)
+                result.red[target] = UInt8(sums.red / count)
+                result.green[target] = UInt8(sums.green / count)
+                result.blue[target] = UInt8(sums.blue / count)
+                result.nir[target] = UInt8(sums.nir / count)
+                result.valid[target] = true
+            }
+        }
+        return result
+    }
+
+    /// Copies a color tile's pixels into place, for imagery without near-infrared.
+    mutating func place(colorTile: CGImage?, tileX: Int, tileY: Int) {
+        let size = WebMercator.tileSize
+        let offsetX = tileX * size - originX
+        let offsetY = tileY * size - originY
+        guard let rgb = colorTile.flatMap(Self.rgbaBytes) else { return }
+
+        for ty in 0..<size {
+            let y = offsetY + ty
+            guard y >= 0, y < height else { continue }
+            for tx in 0..<size {
+                let x = offsetX + tx
+                guard x >= 0, x < width else { continue }
+                let source = (ty * size + tx) * 4
+                let target = index(x, y)
+                red[target] = rgb[source]
+                green[target] = rgb[source + 1]
+                blue[target] = rgb[source + 2]
+                valid[target] = rgb[source + 3] > 0
+            }
+        }
+    }
+
     /// Draws an image into a 256×256 RGBA buffer. Alpha is premultiplied, but NAIP pixels are
     /// either fully opaque or empty, so the color values of data pixels are exact.
     static func rgbaBytes(_ image: CGImage) -> [UInt8]? {
@@ -157,7 +236,8 @@ struct ImagePatch {
         return drawn ? bytes : nil
     }
 
-    static func decodePNG(_ data: Data) -> CGImage? {
+    /// Decodes a PNG or JPEG tile.
+    static func decodeImage(_ data: Data) -> CGImage? {
         guard let source = CGImageSourceCreateWithData(data as CFData, nil) else { return nil }
         return CGImageSourceCreateImageAtIndex(source, 0, nil)
     }

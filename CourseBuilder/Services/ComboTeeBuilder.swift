@@ -52,7 +52,7 @@ enum ComboTeeBuilder {
 
     /// Replaces the tee with a combo tee made of `components`. Each hole plays from the tee in
     /// `assignments`. The tee's ratings and slopes move to the sub-course combo tees. Its yardages
-    /// and tee box assignments are removed, since the combo tee uses those of its component tees.
+    /// are removed, since the combo tee uses those of its component tees.
     static func convert(
         teeNamed teeName: String,
         components: [String],
@@ -66,7 +66,6 @@ enum ComboTeeBuilder {
             }
             for holeIndex in course.subCourses[subCourseIndex].holes.indices {
                 course.subCourses[subCourseIndex].holes[holeIndex].yardages.removeValue(forKey: teeName)
-                course.subCourses[subCourseIndex].holes[holeIndex].tees.removeValue(forKey: teeName)
             }
         }
         update(comboNamed: teeName, components: components, assignments: assignments, in: &course)

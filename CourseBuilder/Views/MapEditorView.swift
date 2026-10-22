@@ -1,22 +1,10 @@
 import SwiftUI
-import MapKit
+import AuthenticationServices
 import CoreLocation
 import os
 import CourseDataSwift
 
 private let logger = Logger(subsystem: "golf.spot.CourseBuilder", category: "MapEditor")
-
-enum MapStyleMode: String, CaseIterable {
-    case satellite = "Satellite"
-    case hybrid = "Hybrid"
-    case standard = "Standard"
-
-    var next: MapStyleMode {
-        let all = Self.allCases
-        let idx = all.firstIndex(of: self)!
-        return all[(idx + 1) % all.count]
-    }
-}
 
 struct MapEditorView: View {
     @Binding var course: Course
@@ -38,21 +26,14 @@ struct MapEditorView: View {
     @State private var pendingFeatureType: FeatureType = .fairway
 
     // Map state
-    @State private var mapPosition: MapCameraPosition = .automatic
-    @State private var mapStyleMode: MapStyleMode = .satellite
-    private var mapStyle: MapStyle {
-        switch mapStyleMode {
-        case .satellite: .imagery(elevation: .realistic)
-        case .hybrid: .hybrid(elevation: .realistic)
-        case .standard: .standard
-        }
-    }
+    @AppStorage("imageryLayer") private var imageryLayer: ImageryLayer = .esri
     @State private var activeTool: ToolMode = .select
     @State private var statusMessage = ""
     @State private var statusTask: Task<Void, Never>?
     @State private var isDraggingVertex = false
-    /// Held in `@State` rather than `@StateObject` so camera and mouse updates do not redraw the editor.
-    @State private var mapTracker = MapViewTracker()
+    /// Read only in event handlers here, so camera and mouse updates do not redraw the editor.
+    @State private var camera = MapCamera()
+    @State private var tileLoader = TileLoader()
     @FocusState private var isMapFocused: Bool
 
     // OSM import state
@@ -64,6 +45,23 @@ struct MapEditorView: View {
     @State private var selectedMappingCenterline: Int? // index into the selected group's centerlines
     private var isMappingMode: Bool { pendingOSMResult != nil }
 
+    // OSM publish state
+    @Environment(\.webAuthenticationSession) private var webAuthenticationSession
+    @State private var osmBaseline: OSMBaseline?
+    @State private var osmChanges: [OSMFeatureChange] = []
+    @State private var isSigningInToOSM = false
+    @State private var publishRequest: PublishRequest?
+    @State private var publishedChangeset: (id: Int, url: URL)?
+    private let baselineStore = OSMBaselineStore()
+
+    /// What the publish dialog needs once the user is signed in.
+    private struct PublishRequest: Identifiable {
+        let id = UUID()
+        let token: String
+        let userName: String
+        let changes: [OSMFeatureChange]
+    }
+
     // Delete confirmation
     @State private var featureToDelete: Int?
     @State private var undoRecords: [FeatureUndoRecord] = []
@@ -73,6 +71,14 @@ struct MapEditorView: View {
     @State private var holesCollapsed = false
     @State private var featuresCollapsed = false
     @State private var unassociatedCollapsed = false
+
+    // Ignored features: taken out of the course, kept so they can be restored
+    @State private var ignoredFeatures: [Feature] = []
+    @State private var showsIgnored = false
+    /// Rows selected in the Unassociated or Ignored list while no single feature is selected,
+    /// for Ignore or Restore. See `UnassociatedSelection`.
+    @State private var unassociatedMultiSelection: Set<Int> = []
+    private let ignoredStore = IgnoredFeatureStore()
 
     var body: some View {
         let featureSets = HoleFeatureSets(course: course, hole: currentHole)
@@ -86,7 +92,7 @@ struct MapEditorView: View {
                         .frame(minWidth: 220, maxWidth: 280)
                 } else {
                     holeSidebar(featureSets)
-                        .frame(minWidth: 180, maxWidth: 220)
+                        .frame(minWidth: 200, maxWidth: 360)
                 }
 
                 VStack(spacing: 0) {
@@ -105,16 +111,24 @@ struct MapEditorView: View {
         }
         .focusable()
         .focused($isMapFocused)
+        .focusedSceneValue(\.mapCamera, camera)
+        .onKeyPress(phases: .down) { press in
+            // ⌘+ is shift-= on most keyboards, so also zoom in on plain ⌘=.
+            guard press.key == KeyEquivalent("="), press.modifiers == .command else { return .ignored }
+            camera.zoomIn()
+            return .handled
+        }
         .onKeyPress(characters: CharacterSet(charactersIn: "spac")) { press in
             guard !isMappingMode else { return .ignored }
-            if let mode = ToolMode.allCases.first(where: { $0.shortcutKey == press.characters.first }) {
+            if let mode = ToolMode.allCases.first(where: { $0.shortcutKey == press.characters.first }),
+               isToolAvailable(mode) {
                 switchTool(to: mode)
                 return .handled
             }
             return .ignored
         }
         .onKeyPress(characters: CharacterSet(charactersIn: "v")) { _ in
-            mapStyleMode = mapStyleMode.next
+            imageryLayer = imageryLayer.next
             return .handled
         }
         .onKeyPress(characters: CharacterSet(charactersIn: "e")) { _ in
@@ -161,6 +175,12 @@ struct MapEditorView: View {
             handleDeleteKey()
             return .handled
         }
+        .onKeyPress(.upArrow) {
+            selectAdjacentFeature(offset: -1)
+        }
+        .onKeyPress(.downArrow) {
+            selectAdjacentFeature(offset: 1)
+        }
         .onKeyPress(.leftArrow) {
             selectAdjacentPolygonVertex(offset: -1)
         }
@@ -198,6 +218,20 @@ struct MapEditorView: View {
         .onAppear {
             centerMapOnCourse()
             isMapFocused = true
+            loadIgnoredFeatures()
+            loadOSMBaseline()
+        }
+        .onChange(of: course.features) {
+            updateOSMChanges()
+        }
+        .sheet(item: $publishRequest) { request in
+            PublishToOSMSheet(
+                changes: request.changes,
+                course: course,
+                userName: request.userName
+            ) { comment in
+                try await publishToOSM(request, comment: comment)
+            }
         }
     }
 
@@ -207,6 +241,11 @@ struct MapEditorView: View {
         guard selectedSubCourseIndex < course.subCourses.count,
               selectedHoleIndex < course.subCourses[selectedSubCourseIndex].holes.count else { return nil }
         return course.subCourses[selectedSubCourseIndex].holes[selectedHoleIndex]
+    }
+
+    /// The points of the selected hole's centerline, or an empty path if it has none.
+    private var currentCenterline: CoordinatePath {
+        currentHole.map { course.centerlinePath(for: $0) } ?? []
     }
 
     // MARK: - Hole Sidebar
@@ -219,7 +258,7 @@ struct MapEditorView: View {
                 .font(.headline)
                 .padding(8)
 
-            Text("Select a group to see its centerlines on the map, then assign it to a sub-course.")
+            Text("Select a group to see its centerlines on the map, then assign it to a sub-course. Remove groups that are not part of this course.")
                 .font(.caption)
                 .foregroundStyle(.secondary)
                 .padding(.horizontal, 8)
@@ -237,6 +276,16 @@ struct MapEditorView: View {
                                     .frame(width: 10, height: 10)
                                 Text(group.label)
                                     .font(.body.bold())
+                                Spacer()
+                                Button {
+                                    removeCenterlineGroup(at: idx)
+                                } label: {
+                                    Image(systemName: "trash")
+                                        .font(.caption)
+                                        .foregroundStyle(.secondary)
+                                }
+                                .buttonStyle(.borderless)
+                                .help("Leave these holes out of the import")
                             }
                             .frame(maxWidth: .infinity, alignment: .leading)
                             .contentShape(Rectangle())
@@ -326,10 +375,17 @@ struct MapEditorView: View {
         let cl = centerlineGroups[fromGroup].centerlines[index]
         centerlineGroups[fromGroup].centerlines.remove(at: index)
         centerlineGroups[toGroup].centerlines.append(cl)
-        // Update label counts
-        centerlineGroups[fromGroup].label = "\(centerlineGroups[fromGroup].centerlines.count) holes (group \(fromGroup + 1))"
-        centerlineGroups[toGroup].label = "\(centerlineGroups[toGroup].centerlines.count) holes (group \(toGroup + 1))"
+        centerlineGroups.relabel()
         selectedMappingGroup = toGroup
+        selectedMappingCenterline = nil
+    }
+
+    /// Leaves a group of OSM holes out of the import, such as holes from a different course.
+    /// Their features are still imported, but no hole uses them.
+    private func removeCenterlineGroup(at index: Int) {
+        guard centerlineGroups.indices.contains(index) else { return }
+        centerlineGroups.removeGroup(at: index)
+        selectedMappingGroup = nil
         selectedMappingCenterline = nil
     }
 
@@ -374,6 +430,9 @@ struct MapEditorView: View {
                                         selectedSubCourseIndex = subIdx
                                         selectedHoleIndex = holeIdx
                                         deselectAll()
+                                        if !isToolAvailable(activeTool) {
+                                            switchTool(to: .select)
+                                        }
                                     }
                                 }
                             }
@@ -387,35 +446,48 @@ struct MapEditorView: View {
             VStack(alignment: .leading, spacing: 0) {
                 sectionHeader(title: "Features - Hole \(currentHole?.number ?? 0)", collapsed: $featuresCollapsed)
                 if !featuresCollapsed {
-                    let holeFeatures = currentHole.map { FeatureSorter.sortedByDistanceFromGreen(featureSets.current, hole: $0) } ?? []
-                    List(holeFeatures) { feature in
-                        HStack {
-                            Circle()
-                                .fill(colorForFeatureType(feature.type))
-                                .frame(width: 10, height: 10)
-                            Text(feature.type.rawValue.capitalized)
-                                .font(.caption)
-                            Text("#\(feature.id)")
-                                .font(.caption2)
-                                .foregroundStyle(.secondary)
-                            Spacer()
-                            Button {
-                                disassociateFeature(id: feature.id)
-                            } label: {
-                                Image(systemName: "xmark")
+                    let holeFeatures = sortedHoleFeatures(featureSets)
+                    ScrollViewReader { proxy in
+                        List(holeFeatures) { feature in
+                            HStack {
+                                Circle()
+                                    .fill(colorForFeatureType(feature.type))
+                                    .frame(width: 10, height: 10)
+                                Text(feature.type.rawValue.capitalized)
+                                    .font(.caption)
+                                Text("#\(feature.id)")
                                     .font(.caption2)
                                     .foregroundStyle(.secondary)
+                                Spacer()
+                                Button {
+                                    disassociateFeature(id: feature.id)
+                                } label: {
+                                    Image(systemName: "xmark")
+                                        .font(.caption2)
+                                        .foregroundStyle(.secondary)
+                                }
+                                .buttonStyle(.borderless)
+                                .help("Disassociate from hole")
                             }
-                            .buttonStyle(.borderless)
-                            .help("Disassociate from hole")
+                            .frame(maxWidth: .infinity, alignment: .leading)
+                            .contentShape(Rectangle())
+                            .onTapGesture {
+                                selectedFeatureID = feature.id
+                                selectedVertexIndex = nil
+                                isEditingFeature = false
+                                activeTool = .select
+                            }
+                            .id(feature.id)
+                            .listRowBackground(
+                                selectedFeatureID == feature.id
+                                    ? RoundedRectangle(cornerRadius: 4).fill(Color.accentColor.opacity(0.2))
+                                    : nil
+                            )
                         }
-                        .frame(maxWidth: .infinity, alignment: .leading)
-                        .contentShape(Rectangle())
-                        .onTapGesture {
-                            selectedFeatureID = feature.id
-                            selectedVertexIndex = nil
-                            isEditingFeature = false
-                            activeTool = .select
+                        // A feature picked on the map may be off screen in the list.
+                        .onChange(of: selectedFeatureID) { _, featureID in
+                            guard let featureID, holeFeatures.contains(where: { $0.id == featureID }) else { return }
+                            withAnimation { proxy.scrollTo(featureID) }
                         }
                     }
                 }
@@ -426,25 +498,27 @@ struct MapEditorView: View {
             VStack(alignment: .leading, spacing: 0) {
                 sectionHeader(title: "Unassociated (\(featureSets.unassociated.count))", collapsed: $unassociatedCollapsed)
                 if !unassociatedCollapsed {
-                    let unassociated = featureSets.unassociated
-                    List(unassociated) { feature in
-                        HStack {
-                            Circle()
-                                .fill(colorForFeatureType(feature.type))
-                                .frame(width: 10, height: 10)
-                            Text(feature.type.rawValue.capitalized)
-                                .font(.caption)
-                            Text("#\(feature.id)")
-                                .font(.caption2)
-                                .foregroundStyle(.secondary)
+                    unassociatedControls
+                    ScrollViewReader { proxy in
+                        List(showsIgnored ? ignoredFeatures : featureSets.unassociated, selection: unassociatedSelectionBinding(featureSets)) { feature in
+                            HStack {
+                                Circle()
+                                    .fill(colorForFeatureType(feature.type))
+                                    .frame(width: 10, height: 10)
+                                Text(feature.type.rawValue.capitalized)
+                                    .font(.caption)
+                                Text("#\(feature.id)")
+                                    .font(.caption2)
+                                    .foregroundStyle(.secondary)
+                            }
+                            .frame(maxWidth: .infinity, alignment: .leading)
+                            .tag(feature.id)
+                            .id(feature.id)
                         }
-                        .frame(maxWidth: .infinity, alignment: .leading)
-                        .contentShape(Rectangle())
-                        .onTapGesture {
-                            selectedFeatureID = feature.id
-                            selectedVertexIndex = nil
-                            isEditingFeature = false
-                            activeTool = .select
+                        // A feature picked on the map or with the arrow keys may be off screen.
+                        .onChange(of: selectedFeatureID) { _, featureID in
+                            guard !showsIgnored, let featureID, featureSets.unassociatedIDs.contains(featureID) else { return }
+                            withAnimation { proxy.scrollTo(featureID) }
                         }
                     }
                 }
@@ -452,6 +526,41 @@ struct MapEditorView: View {
             .frame(minHeight: 30)
         }
         .background(Color(.windowBackgroundColor))
+    }
+
+    /// Unassociated or Ignored, and Ignore or Restore for the selected rows.
+    /// Two rows, so they fit the narrowest sidebar.
+    private var unassociatedControls: some View {
+        VStack(alignment: .leading, spacing: 4) {
+            Picker("List", selection: $showsIgnored) {
+                Text("Unassociated").tag(false)
+                Text("Ignored (\(ignoredFeatures.count))").tag(true)
+            }
+            .pickerStyle(.segmented)
+            .labelsHidden()
+            .frame(maxWidth: .infinity)
+            .onChange(of: showsIgnored) { unassociatedMultiSelection = [] }
+
+            HStack {
+                Text(unassociatedRows.isEmpty ? "⌘-click to select several" : "\(unassociatedRows.count) selected")
+                    .font(.caption2)
+                    .foregroundStyle(.secondary)
+                    .lineLimit(1)
+                Spacer(minLength: 4)
+                if showsIgnored {
+                    Button("Restore") { restoreIgnoredFeatures() }
+                        .disabled(unassociatedRows.isEmpty)
+                        .help("Put the selected features back in the course")
+                } else {
+                    Button("Ignore") { ignoreSelectedFeatures() }
+                        .disabled(unassociatedRows.isEmpty)
+                        .help("Take the selected features out of the course")
+                }
+            }
+        }
+        .controlSize(.small)
+        .padding(.horizontal, 8)
+        .padding(.vertical, 4)
     }
 
     // MARK: - Toolbar
@@ -481,14 +590,14 @@ struct MapEditorView: View {
                         )
                     }
                     .buttonStyle(.plain)
-                    .disabled(isMappingMode && mode != .select)
+                    .disabled((isMappingMode && mode != .select) || !isToolAvailable(mode))
                 }
             }
 
             // Feature type picker (for drawing)
             if activeTool == .drawPolygon || activeTool == .autoPolygon {
                 Picker("Type", selection: $pendingFeatureType) {
-                    ForEach(FeatureType.allCases, id: \.self) { type in
+                    ForEach(FeatureType.polygonTypes, id: \.self) { type in
                         Text(type.rawValue.capitalized).tag(type)
                     }
                 }
@@ -506,13 +615,6 @@ struct MapEditorView: View {
 
             Spacer()
 
-            // Guess tees button
-            Button("Guess Tees") {
-                guessTeesForCurrentHole()
-            }
-            .disabled(currentHole == nil || isMappingMode)
-            .help("Re-guess which tee box each tee plays from, using the centerline")
-
             // Import OSM button
             Button {
                 Task { await importFromOSM() }
@@ -526,6 +628,21 @@ struct MapEditorView: View {
                 }
             }
             .disabled(isImportingOSM || !course.features.isEmpty)
+
+            if osmChanges.contains(where: \.isSent) && !isMappingMode {
+                Button {
+                    Task { await startOSMPublish() }
+                } label: {
+                    HStack(spacing: 4) {
+                        if isSigningInToOSM {
+                            ProgressView()
+                                .scaleEffect(0.6)
+                        }
+                        Text("Publish to OSM")
+                    }
+                }
+                .disabled(isSigningInToOSM || osmBaseline == nil)
+            }
         }
         .padding(.horizontal)
         .padding(.vertical, 6)
@@ -567,254 +684,279 @@ struct MapEditorView: View {
     // MARK: - Map Area
 
     private func mapArea(_ featureSets: HoleFeatureSets) -> some View {
-        MapReader { proxy in
-            Map(position: $mapPosition, interactionModes: isDraggingVertex ? [.zoom, .rotate, .pitch] : .all) {
-                // Render centerline groups during mapping mode
-                if isMappingMode {
-                    ForEach(Array(centerlineGroups.enumerated()), id: \.offset) { groupIdx, group in
-                        let isGroupSelected = selectedMappingGroup == groupIdx
-                        let color = groupColor(for: groupIdx)
-                        ForEach(group.centerlines.indices, id: \.self) { clIdx in
-                            let cl = group.centerlines[clIdx]
-                            let isCLSelected = isGroupSelected && selectedMappingCenterline == clIdx
-                            MapPolyline(coordinates: cl.coordinates.map(\.clCoordinate))
-                                .stroke(
-                                    isCLSelected ? .white : color,
-                                    lineWidth: isCLSelected ? 5 : (isGroupSelected ? 3 : 1.5)
-                                )
+        TileMapView(camera: camera, loader: tileLoader, layer: imageryLayer, panEnabled: !isDraggingVertex) {
+            MapShapesLayer(camera: camera, shapes: mapShapes(featureSets))
+            MapMarkersLayer(camera: camera, markers: mapMarkers)
+        }
+        .overlay {
+            // Drag handle for selected feature vertex (only in edit mode)
+            if activeTool == .select,
+               isEditingFeature,
+               let featureID = selectedFeatureID,
+               let vertexIdx = selectedVertexIndex,
+               let feature = course.findFeature(id: featureID),
+               vertexIdx < feature.polygon.count {
+                VertexDragHandle(
+                    camera: camera,
+                    coordinate: feature.polygon[vertexIdx],
+                    onDragStarted: { isDraggingVertex = true },
+                    onDragEnded: { translation in
+                        updateVertexAfterDrag(featureID: featureID, vertexIndex: vertexIdx, translation: translation)
+                        isDraggingVertex = false
+                    }
+                )
+            }
+        }
+        .overlay {
+            // Drag handle for selected centerline vertex
+            if activeTool == .select,
+               isEditingCenterline,
+               let vertexIdx = selectedCenterlineVertexIndex,
+               vertexIdx < currentCenterline.count {
+                VertexDragHandle(
+                    camera: camera,
+                    coordinate: currentCenterline[vertexIdx],
+                    onDragStarted: { isDraggingVertex = true },
+                    onDragEnded: { translation in
+                        applyCenterlineVertexDrag(vertexIndex: vertexIdx, translation: translation)
+                        isDraggingVertex = false
+                    }
+                )
+            }
+        }
+        .simultaneousGesture(
+            SpatialTapGesture(count: 2)
+                .exclusively(before: SpatialTapGesture())
+                .onEnded { value in
+                    let projection = camera.projection
+                    switch value {
+                    case .first(let tap):
+                        // Double-clicking a polygon edge while editing adds a point; anywhere
+                        // else it zooms in.
+                        guard activeTool == .select,
+                              isEditingFeature,
+                              let featureID = selectedFeatureID,
+                              let feature = course.findFeature(id: featureID),
+                              let edge = PolygonEditorOperations.nearestEdge(
+                                to: tap.location,
+                                polygon: Array(feature.polygon),
+                                convert: { projection.point(for: Coordinate($0)) }
+                              ) else {
+                            camera.zoomIn(anchor: tap.location)
+                            return
                         }
+                        addVertex(
+                            projection.coordinate(at: edge.point),
+                            to: featureID,
+                            at: edge.insertionIndex
+                        )
+                    case .second(let tap):
+                        handleMapTap(at: projection.coordinate(at: tap.location))
                     }
                 }
-
-                // Render feature polygons for current hole
-                ForEach(featureSets.current) { feature in
-                    let isSelected = selectedFeatureID == feature.id
-                    let isFitting = fittingFeatureID == feature.id
-                    MapPolygon(coordinates: feature.polygon.map(\.clCoordinate))
-                        .foregroundStyle(colorForFeatureType(feature.type).opacity(isFitting ? 0 : (isSelected ? 0.5 : 0.3)))
-                        .stroke(colorForFeatureType(feature.type).opacity(isFitting ? 0.4 : 1), lineWidth: isSelected ? 3 : 1.5)
-                }
-
-                // Render unassociated features (other-hole features are not rendered
-                // to keep the map responsive with large courses)
-                ForEach(featureSets.unassociated) { feature in
-                    let isSelected = selectedFeatureID == feature.id
-                    let isFitting = fittingFeatureID == feature.id
-                    MapPolygon(coordinates: feature.polygon.map(\.clCoordinate))
-                        .foregroundStyle(colorForFeatureType(feature.type).opacity(isFitting ? 0 : (isSelected ? 0.5 : 0.15)))
-                        .stroke(colorForFeatureType(feature.type).opacity(0.5), lineWidth: isSelected ? 3 : 1)
-                }
-
-                // Render selected feature if it's not already visible (other-hole feature)
-                if let featureID = selectedFeatureID,
-                   !featureSets.currentIDs.contains(featureID),
-                   !featureSets.unassociatedIDs.contains(featureID),
-                   let feature = course.findFeature(id: featureID) {
-                    let isFitting = fittingFeatureID == feature.id
-                    MapPolygon(coordinates: feature.polygon.map(\.clCoordinate))
-                        .foregroundStyle(colorForFeatureType(feature.type).opacity(isFitting ? 0 : 0.5))
-                        .stroke(colorForFeatureType(feature.type).opacity(isFitting ? 0.4 : 1), lineWidth: 3)
-                }
-
-                // Render centerline for current hole
-                if let hole = currentHole, hole.centerline.count >= 2 {
-                    MapPolyline(coordinates: hole.centerline.map(\.clCoordinate))
-                        .stroke(isCenterlineSelected ? .yellow : .white, lineWidth: isCenterlineSelected ? 3 : 2)
-                }
-
-                // Render vertex handles for selected centerline (in edit mode)
-                if isEditingCenterline, let hole = currentHole, hole.centerline.count >= 2 {
-                    ForEach(Array(hole.centerline.enumerated()), id: \.offset) { index, coord in
-                        Annotation("", coordinate: coord.clCoordinate) {
-                            Circle()
-                                .fill(selectedCenterlineVertexIndex == index ? Color.white : Color.yellow)
-                                .stroke(Color.white, lineWidth: 1.5)
-                                .frame(width: 12, height: 12)
-                                // The drag handle draws the point while it is dragged.
-                                .opacity(selectedCenterlineVertexIndex == index && isDraggingVertex ? 0 : 1)
-                                .onTapGesture {
-                                    selectedCenterlineVertexIndex = index
-                                }
-                        }
-                    }
-                }
-
-                // Render vertex handles for selected feature (only in edit mode)
-                if isEditingFeature,
-                   let featureID = selectedFeatureID,
-                   let feature = course.findFeature(id: featureID) {
-                    ForEach(Array(feature.polygon.enumerated()), id: \.offset) { index, coord in
-                        Annotation("", coordinate: coord.clCoordinate) {
-                            Circle()
-                                .fill(selectedVertexIndex == index ? Color.white : Color.accentColor)
-                                .stroke(Color.white, lineWidth: 1.5)
-                                .frame(width: 12, height: 12)
-                                // The drag handle draws the point while it is dragged.
-                                .opacity(selectedVertexIndex == index && isDraggingVertex ? 0 : 1)
-                                .onTapGesture {
-                                    selectedVertexIndex = index
-                                }
-                        }
-                    }
-                }
-
-                // Render in-progress drawing
-                if drawingVertices.count >= 2 {
-                    if activeTool == .drawPolygon {
-                        MapPolygon(coordinates: drawingVertices.map(\.clCoordinate))
-                            .foregroundStyle(colorForFeatureType(pendingFeatureType).opacity(0.2))
-                            .stroke(colorForFeatureType(pendingFeatureType), style: StrokeStyle(lineWidth: 2, dash: [5, 3]))
-                    } else {
-                        MapPolyline(coordinates: drawingVertices.map(\.clCoordinate))
-                            .stroke(.white, style: StrokeStyle(lineWidth: 2, dash: [5, 3]))
-                    }
-                }
-
-                // Auto polygon / Fit to Imagery preview
-                if let mode = autoPolygon.mode, let result = autoPolygon.result {
-                    MapPolygon(coordinates: result.polygon.map(\.clCoordinate))
-                        .foregroundStyle(colorForFeatureType(mode.type).opacity(0.2))
-                        .stroke(colorForFeatureType(mode.type), style: StrokeStyle(lineWidth: 2, dash: [5, 3]))
-                }
-
-                // Drawing vertex dots — first vertex is larger to indicate click-to-close
-                ForEach(Array(drawingVertices.enumerated()), id: \.offset) { index, coord in
-                    Annotation("", coordinate: coord.clCoordinate) {
-                        if index == 0 && drawingVertices.count >= 3 && activeTool == .drawPolygon {
-                            Circle()
-                                .fill(Color.white)
-                                .stroke(colorForFeatureType(pendingFeatureType), lineWidth: 2)
-                                .frame(width: 14, height: 14)
-                        } else if selectedDrawingVertexIndex == index {
-                            Circle()
-                                .fill(Color.white)
-                                .stroke(Color.yellow, lineWidth: 2)
-                                .frame(width: 12, height: 12)
-                        } else {
-                            Circle()
-                                .fill(Color.yellow)
-                                .stroke(Color.white, lineWidth: 1)
-                                .frame(width: 8, height: 8)
-                        }
-                    }
-                }
+        )
+        .contextMenu {
+            if let featureID = selectedFeatureID, let feature = course.findFeature(id: featureID) {
+                Button("Fit to Imagery") { startFit(feature) }
+                Divider()
+                Button("Delete Feature", role: .destructive) { featureToDelete = featureID }
             }
-            .mapStyle(mapStyle)
-            .mapControls {
-                MapZoomStepper()
-                MapPitchToggle()
-            }
-            .onMapCameraChange(frequency: .continuous) { context in
-                mapTracker.region = context.region
-            }
-            .onContinuousHover { phase in
-                switch phase {
-                case .active(let location):
-                    if let coordinate = proxy.convert(location, from: .local) {
-                        mapTracker.hoveredCoordinate = Coordinate(coordinate)
-                    } else {
-                        mapTracker.hoveredCoordinate = nil
-                    }
-                case .ended:
-                    mapTracker.hoveredCoordinate = nil
-                }
-            }
-            .overlay {
-                GeometryReader { geometry in
-                    Color.clear
-                        .onAppear { mapTracker.size = geometry.size }
-                        .onChange(of: geometry.size) { _, newSize in mapTracker.size = newSize }
-                }
-            }
-            .overlay {
-                // Drag handle for selected feature vertex (only in edit mode)
-                if activeTool == .select,
-                   isEditingFeature,
-                   let featureID = selectedFeatureID,
-                   let vertexIdx = selectedVertexIndex,
-                   let feature = course.findFeature(id: featureID),
-                   vertexIdx < feature.polygon.count {
-                    VertexDragHandle(
-                        tracker: mapTracker,
-                        proxy: proxy,
-                        coordinate: feature.polygon[vertexIdx],
-                        onDragStarted: { isDraggingVertex = true },
-                        onDragEnded: { translation in
-                            updateVertexAfterDrag(featureID: featureID, vertexIndex: vertexIdx, translation: translation)
-                            isDraggingVertex = false
-                        }
-                    )
-                }
-            }
-            .overlay {
-                // Drag handle for selected centerline vertex
-                if activeTool == .select,
-                   isEditingCenterline,
-                   let vertexIdx = selectedCenterlineVertexIndex,
-                   let hole = currentHole,
-                   vertexIdx < hole.centerline.count {
-                    VertexDragHandle(
-                        tracker: mapTracker,
-                        proxy: proxy,
-                        coordinate: hole.centerline[vertexIdx],
-                        onDragStarted: { isDraggingVertex = true },
-                        onDragEnded: { translation in
-                            applyCenterlineVertexDrag(vertexIndex: vertexIdx, translation: translation)
-                            isDraggingVertex = false
-                        }
-                    )
-                }
-            }
-            .simultaneousGesture(
-                SpatialTapGesture(count: 2)
-                    .exclusively(before: SpatialTapGesture())
-                    .onEnded { value in
-                        switch value {
-                        case .first(let tap):
-                            guard activeTool == .select,
-                                  isEditingFeature,
-                                  let featureID = selectedFeatureID,
-                                  let feature = course.findFeature(id: featureID),
-                                  let edge = PolygonEditorOperations.nearestEdge(
-                                    to: tap.location,
-                                    polygon: Array(feature.polygon),
-                                    convert: { proxy.convert($0, to: .local) }
-                                  ),
-                                  let coordinate = proxy.convert(edge.point, from: .local) else { return }
-                            addVertex(
-                                Coordinate(coordinate),
-                                to: featureID,
-                                at: edge.insertionIndex
-                            )
-                        case .second(let tap):
-                            guard let coord = proxy.convert(tap.location, from: .local) else { return }
-                            handleMapTap(at: Coordinate(coord))
-                        }
-                    }
-            )
-            .contextMenu {
-                if let featureID = selectedFeatureID, let feature = course.findFeature(id: featureID) {
-                    Button("Fit to Imagery") { startFit(feature) }
-                    Divider()
-                    Button("Delete Feature", role: .destructive) { featureToDelete = featureID }
-                }
-            }
-            .overlay(alignment: .topTrailing) {
-                mapStylePicker
-                    .padding(8)
-            }
+        }
+        .overlay(alignment: .topTrailing) {
+            imageryLayerPicker
+                .padding(8)
         }
     }
 
-    private var mapStylePicker: some View {
+    /// Everything drawn on the map, bottom to top.
+    private func mapShapes(_ featureSets: HoleFeatureSets) -> [MapShape] {
+        var shapes: [MapShape] = []
+
+        // Centerline groups during mapping mode
+        if isMappingMode {
+            for (groupIdx, group) in centerlineGroups.enumerated() {
+                let isGroupSelected = selectedMappingGroup == groupIdx
+                let color = groupColor(for: groupIdx)
+                for (clIdx, cl) in group.centerlines.enumerated() {
+                    let isCLSelected = isGroupSelected && selectedMappingCenterline == clIdx
+                    shapes.append(MapShape(
+                        kind: .polyline,
+                        coordinates: cl.coordinates,
+                        stroke: isCLSelected ? .white : color,
+                        lineWidth: isCLSelected ? 5 : (isGroupSelected ? 3 : 1.5)
+                    ))
+                }
+            }
+        }
+
+        // Feature polygons for current hole
+        for feature in featureSets.current {
+            let isSelected = selectedFeatureID == feature.id
+            let isFitting = fittingFeatureID == feature.id
+            let color = colorForFeatureType(feature.type)
+            shapes.append(MapShape(
+                kind: .polygon,
+                coordinates: Array(feature.polygon),
+                fill: color.opacity(isFitting ? 0 : (isSelected ? 0.5 : 0.3)),
+                stroke: color.opacity(isFitting ? 0.4 : 1),
+                lineWidth: isSelected ? 3 : 1.5
+            ))
+        }
+
+        // Ignored features, while their list is shown
+        if showsIgnored {
+            for feature in ignoredFeatures {
+                let isSelected = unassociatedMultiSelection.contains(feature.id)
+                shapes.append(MapShape(
+                    kind: .polygon,
+                    coordinates: Array(feature.polygon),
+                    fill: Color.gray.opacity(isSelected ? 0.4 : 0.15),
+                    stroke: Color.gray,
+                    lineWidth: isSelected ? 3 : 1,
+                    dash: [4, 3]
+                ))
+            }
+        }
+
+        // Unassociated features (other-hole features are not drawn, to keep large courses readable)
+        for feature in featureSets.unassociated {
+            let isSelected = selectedFeatureID == feature.id
+            let isFitting = fittingFeatureID == feature.id
+            let color = colorForFeatureType(feature.type)
+            shapes.append(MapShape(
+                kind: .polygon,
+                coordinates: Array(feature.polygon),
+                fill: color.opacity(isFitting ? 0 : (isSelected ? 0.5 : 0.15)),
+                stroke: color.opacity(0.5),
+                lineWidth: isSelected ? 3 : 1
+            ))
+        }
+
+        // Selected feature if it's not already visible (other-hole feature)
+        if let featureID = selectedFeatureID,
+           !featureSets.currentIDs.contains(featureID),
+           !featureSets.unassociatedIDs.contains(featureID),
+           let feature = course.findFeature(id: featureID) {
+            let isFitting = fittingFeatureID == feature.id
+            let color = colorForFeatureType(feature.type)
+            shapes.append(MapShape(
+                kind: .polygon,
+                coordinates: Array(feature.polygon),
+                fill: color.opacity(isFitting ? 0 : 0.5),
+                stroke: color.opacity(isFitting ? 0.4 : 1),
+                lineWidth: 3
+            ))
+        }
+
+        // Centerline for current hole
+        let centerline = currentCenterline
+        if centerline.count >= 2 {
+            shapes.append(MapShape(
+                kind: .polyline,
+                coordinates: Array(centerline),
+                stroke: isCenterlineSelected ? .yellow : .white,
+                lineWidth: isCenterlineSelected ? 3 : 2
+            ))
+        }
+
+        // In-progress drawing
+        if drawingVertices.count >= 2 {
+            if activeTool == .drawPolygon {
+                shapes.append(MapShape(
+                    kind: .polygon,
+                    coordinates: drawingVertices,
+                    fill: colorForFeatureType(pendingFeatureType).opacity(0.2),
+                    stroke: colorForFeatureType(pendingFeatureType),
+                    lineWidth: 2,
+                    dash: [5, 3]
+                ))
+            } else {
+                shapes.append(MapShape(kind: .polyline, coordinates: drawingVertices, stroke: .white, lineWidth: 2, dash: [5, 3]))
+            }
+        }
+
+        // Auto polygon / Fit to Imagery preview
+        if let mode = autoPolygon.mode, let result = autoPolygon.result {
+            shapes.append(MapShape(
+                kind: .polygon,
+                coordinates: result.polygon,
+                fill: colorForFeatureType(mode.type).opacity(0.2),
+                stroke: colorForFeatureType(mode.type),
+                lineWidth: 2,
+                dash: [5, 3]
+            ))
+        }
+
+        return shapes
+    }
+
+    /// Vertex handles and drawing points, drawn above the shapes.
+    private var mapMarkers: [MapMarker] {
+        var markers: [MapMarker] = []
+
+        // Vertex handles for selected centerline (in edit mode)
+        let centerline = currentCenterline
+        if isEditingCenterline, centerline.count >= 2 {
+            for (index, coord) in centerline.enumerated() {
+                let isSelected = selectedCenterlineVertexIndex == index
+                markers.append(MapMarker(
+                    id: "centerline-\(index)",
+                    coordinate: coord,
+                    diameter: 12,
+                    fill: isSelected ? .white : .yellow,
+                    stroke: .white,
+                    strokeWidth: 1.5,
+                    // The drag handle draws the point while it is dragged.
+                    isHidden: isSelected && isDraggingVertex,
+                    onTap: { selectedCenterlineVertexIndex = index }
+                ))
+            }
+        }
+
+        // Vertex handles for selected feature (only in edit mode)
+        if isEditingFeature,
+           let featureID = selectedFeatureID,
+           let feature = course.findFeature(id: featureID) {
+            for (index, coord) in feature.polygon.enumerated() {
+                let isSelected = selectedVertexIndex == index
+                markers.append(MapMarker(
+                    id: "vertex-\(index)",
+                    coordinate: coord,
+                    diameter: 12,
+                    fill: isSelected ? .white : .accentColor,
+                    stroke: .white,
+                    strokeWidth: 1.5,
+                    // The drag handle draws the point while it is dragged.
+                    isHidden: isSelected && isDraggingVertex,
+                    onTap: { selectedVertexIndex = index }
+                ))
+            }
+        }
+
+        // Drawing vertex dots — first vertex is larger to indicate click-to-close
+        for (index, coord) in drawingVertices.enumerated() {
+            let id = "drawing-\(index)"
+            if index == 0 && drawingVertices.count >= 3 && activeTool == .drawPolygon {
+                markers.append(MapMarker(id: id, coordinate: coord, diameter: 14, fill: .white, stroke: colorForFeatureType(pendingFeatureType), strokeWidth: 2))
+            } else if selectedDrawingVertexIndex == index {
+                markers.append(MapMarker(id: id, coordinate: coord, diameter: 12, fill: .white, stroke: .yellow, strokeWidth: 2))
+            } else {
+                markers.append(MapMarker(id: id, coordinate: coord, diameter: 8, fill: .yellow, stroke: .white, strokeWidth: 1))
+            }
+        }
+
+        return markers
+    }
+
+    private var imageryLayerPicker: some View {
         Menu {
-            ForEach(MapStyleMode.allCases, id: \.self) { mode in
-                Button(mode.rawValue) { mapStyleMode = mode }
+            ForEach(ImageryLayer.allCases) { layer in
+                Button(layer.name) { imageryLayer = layer }
             }
         } label: {
             HStack(spacing: 4) {
-                Image(systemName: "map")
-                Text("(\(mapStyleMode.rawValue.prefix(3).lowercased()))")
+                Image(systemName: "square.2.layers.3d")
+                Text("(\(imageryLayer.shortName))")
                     .font(.system(size: 9, design: .monospaced))
             }
             .padding(8)
@@ -822,6 +964,7 @@ struct MapEditorView: View {
         }
         .menuStyle(.borderlessButton)
         .fixedSize()
+        .help("Imagery (v)")
     }
 
     // MARK: - Inspector Panel
@@ -840,8 +983,6 @@ struct MapEditorView: View {
                 VStack(alignment: .leading, spacing: 0) {
                     FeatureEditorView(
                         feature: $course.features[featureIndex],
-                        hole: $course.subCourses[selectedSubCourseIndex].holes[selectedHoleIndex],
-                        teeNames: course.tees.map(\.name),
                         onDelete: {
                             featureToDelete = featureID
                         }
@@ -864,6 +1005,9 @@ struct MapEditorView: View {
                         }
                     }
                     .padding()
+
+                    revertControls(for: course.features[featureIndex])
+                    multipolygonControls(for: course.features[featureIndex])
                 }
                 .frame(maxHeight: .infinity, alignment: .top)
             } else {
@@ -961,6 +1105,11 @@ struct MapEditorView: View {
                     .foregroundStyle(.secondary)
             }
 
+            if let publishedChangeset {
+                Link("Published changeset \(publishedChangeset.id)", destination: publishedChangeset.url)
+                    .font(.caption)
+            }
+
             // Hole + feature count
             let subName = course.subCourses.indices.contains(selectedSubCourseIndex) ? course.subCourses[selectedSubCourseIndex].name : ""
             Text("\(subName) Hole \(currentHole?.number ?? 0)")
@@ -981,7 +1130,7 @@ struct MapEditorView: View {
     private var autoPolygonHint: String? {
         guard autoPolygon.isActive || activeTool == .autoPolygon else { return nil }
         if autoPolygon.isLoading {
-            return "Loading NAIP imagery…"
+            return "Loading \(autoPolygon.layer.name)…"
         }
         if let mode = autoPolygon.mode, let result = autoPolygon.result, let tolerance = autoPolygon.tolerance {
             let toleranceText = String(format: "%.2f", tolerance)
@@ -997,13 +1146,17 @@ struct MapEditorView: View {
             }
             if result.exceedsSafetyLimit { text += " — more than expected" }
             if result.areaDiffersFromOriginal { text += " — Result differs a lot from the original" }
-            if let year = autoPolygon.imageryYear { controls += " | Imagery: USDA NAIP \(year)" }
+            if autoPolygon.layer == .naip, let year = autoPolygon.imageryYear {
+                controls += " | Imagery: USDA NAIP \(year)"
+            } else {
+                controls += " | Imagery: \(autoPolygon.layer.name)"
+            }
             return "\(text) | \(controls)"
         }
         if let message = autoPolygon.message {
             return "\(message) | Esc to cancel"
         }
-        return activeTool == .autoPolygon ? "Click inside a \(pendingFeatureType.rawValue) to trace it from NAIP imagery" : nil
+        return activeTool == .autoPolygon ? "Click inside a \(pendingFeatureType.rawValue) to trace it from \(imageryLayer.name)" : nil
     }
 
     private var baseToolHint: String {
@@ -1080,6 +1233,7 @@ struct MapEditorView: View {
         case .bunker: 2
         case .water: 3
         case .fairway: 4
+        case .centerline: 5
         }
     }
 
@@ -1090,10 +1244,16 @@ struct MapEditorView: View {
         case .tee: .blue
         case .bunker: .yellow
         case .water: .cyan
+        case .centerline: .white
         }
     }
 
     // MARK: - Tool Switching
+
+    /// A hole has only one centerline, so the Centerline tool is off while the current hole has one.
+    private func isToolAvailable(_ mode: ToolMode) -> Bool {
+        mode != .drawCenterline || currentCenterline.isEmpty
+    }
 
     private func switchTool(to mode: ToolMode) {
         if mode != activeTool {
@@ -1126,7 +1286,7 @@ struct MapEditorView: View {
         case .select:
             selectFeatureAt(coordinate)
         case .autoPolygon:
-            autoPolygon.startCreate(type: pendingFeatureType, at: coordinate)
+            autoPolygon.startCreate(type: pendingFeatureType, at: coordinate, layer: imageryLayer)
         case .drawPolygon:
             // If we have 3+ vertices and the click is near the first vertex, close the polygon
             if drawingVertices.count >= 3, isClose(coordinate, to: drawingVertices[0], pixels: 10) {
@@ -1156,8 +1316,8 @@ struct MapEditorView: View {
         }
 
         // In centerline edit mode, check if tapping near a centerline vertex
-        if isEditingCenterline, let hole = currentHole {
-            for (index, vertex) in hole.centerline.enumerated() {
+        if isEditingCenterline {
+            for (index, vertex) in currentCenterline.enumerated() {
                 if isClose(point, to: vertex) {
                     selectedCenterlineVertexIndex = index
                     return
@@ -1182,6 +1342,7 @@ struct MapEditorView: View {
         // avoid expensive point-in-polygon tests on distant features.
         let candidates = course.features
             .filter { feature in
+                guard feature.type != .centerline else { return false }
                 let lats = feature.polygon.map(\.lat)
                 let lons = feature.polygon.map(\.lon)
                 guard let minLat = lats.min(), let maxLat = lats.max(),
@@ -1203,9 +1364,10 @@ struct MapEditorView: View {
         }
 
         // Check if tapping near the current hole's centerline
-        if let hole = currentHole, hole.centerline.count >= 2, let region = mapTracker.region {
-            let dist = distanceToPolyline(from: point, polyline: hole.centerline)
-            let tapThreshold = region.span.latitudeDelta / (mapTracker.size.height / 15.0)
+        let centerline = currentCenterline
+        if centerline.count >= 2 {
+            let dist = distanceToPolyline(from: point, polyline: centerline)
+            let tapThreshold = camera.projection.latitudeDegrees(forPoints: 15)
             if dist < tapThreshold {
                 if isCenterlineSelected && !isEditingCenterline {
                     // Second click enters edit mode
@@ -1248,12 +1410,81 @@ struct MapEditorView: View {
               !feature.polygon.isEmpty else { return false }
 
         isEditingFeature = true
-        if let hoveredCoordinate = mapTracker.hoveredCoordinate {
+        if let hoveredCoordinate = camera.hoveredCoordinate {
             selectedVertexIndex = PolygonEditorOperations.nearestVertexIndex(to: hoveredCoordinate, in: Array(feature.polygon))
         } else {
             selectedVertexIndex = nil
         }
         return true
+    }
+
+    /// The current hole's features in the order the Features list shows them.
+    private func sortedHoleFeatures(_ featureSets: HoleFeatureSets) -> [Feature] {
+        currentHole.map {
+            FeatureSorter.sortedByDistanceFromGreen(featureSets.current, hole: $0, centerline: course.centerlinePath(for: $0))
+        } ?? []
+    }
+
+    /// Up and down arrows move the selection through the Features or Unassociated list,
+    /// whichever holds the selected feature, while it is not being edited.
+    private func selectAdjacentFeature(offset: Int) -> KeyPress.Result {
+        guard let featureID = selectedFeatureID, !isEditingFeature, !isEditingCenterline,
+              drawingVertices.isEmpty, !autoPolygon.isActive, !isMappingMode else { return .ignored }
+        let featureSets = HoleFeatureSets(course: course, hole: currentHole)
+        let list = featureSets.currentIDs.contains(featureID)
+            ? sortedHoleFeatures(featureSets).map(\.id)
+            : featureSets.unassociated.map(\.id)
+        guard let next = PolygonEditorOperations.adjacentFeatureID(current: featureID, in: list, offset: offset) else {
+            return .ignored
+        }
+        selectedFeatureID = next
+        selectedVertexIndex = nil
+        return .handled
+    }
+
+    /// The rows selected in the Unassociated or Ignored list.
+    private var unassociatedRows: Set<Int> {
+        UnassociatedSelection.rows(
+            selectedFeatureID: selectedFeatureID,
+            multiSelection: unassociatedMultiSelection,
+            unassociatedIDs: HoleFeatureSets(course: course, hole: currentHole).unassociatedIDs,
+            showsIgnored: showsIgnored
+        )
+    }
+
+    /// The Unassociated list's selection, worked out from the selected feature so the two never
+    /// disagree. Picking one row selects that feature.
+    private func unassociatedSelectionBinding(_ featureSets: HoleFeatureSets) -> Binding<Set<Int>> {
+        Binding(
+            get: {
+                UnassociatedSelection.rows(
+                    selectedFeatureID: selectedFeatureID,
+                    multiSelection: unassociatedMultiSelection,
+                    unassociatedIDs: featureSets.unassociatedIDs,
+                    showsIgnored: showsIgnored
+                )
+            },
+            set: { rows in
+                switch UnassociatedSelection.outcome(of: rows, showsIgnored: showsIgnored) {
+                case .selectFeature(let featureID):
+                    unassociatedMultiSelection = []
+                    // Clicking a row gives the list keyboard focus, and the list would take the
+                    // arrow keys. Focus goes back to the editor so they move through features
+                    // the same way as in the Features list.
+                    isMapFocused = true
+                    guard selectedFeatureID != featureID else { return }
+                    selectedFeatureID = featureID
+                    selectedVertexIndex = nil
+                    isEditingFeature = false
+                    activeTool = .select
+                case .rows(let rows):
+                    unassociatedMultiSelection = rows
+                    if !rows.isEmpty || selectedFeatureID.map(featureSets.unassociatedIDs.contains) == true {
+                        deselectAll()
+                    }
+                }
+            }
+        )
     }
 
     private func deselectAll() {
@@ -1297,8 +1528,7 @@ struct MapEditorView: View {
     }
 
     private func isClose(_ a: Coordinate, to b: Coordinate, pixels: CGFloat = 20) -> Bool {
-        guard let region = mapTracker.region else { return false }
-        let threshold = region.span.latitudeDelta / (mapTracker.size.height / pixels)
+        let threshold = camera.projection.latitudeDegrees(forPoints: pixels)
         return abs(a.lat - b.lat) < threshold && abs(a.lon - b.lon) < threshold
     }
 
@@ -1349,9 +1579,9 @@ struct MapEditorView: View {
             let subCourseIndex = selectedSubCourseIndex
             let holeIndex = selectedHoleIndex
             drawingVertices = []
-            guard subCourseIndex < course.subCourses.count,
-                  holeIndex < course.subCourses[subCourseIndex].holes.count else { return }
-            course.subCourses[subCourseIndex].holes[holeIndex].centerline = CoordinatePath(vertices)
+            course.setCenterline(CoordinatePath(vertices), subCourseIndex: subCourseIndex, holeIndex: holeIndex)
+            // A hole has only one centerline, so the tool is no longer available.
+            activeTool = .select
 
         case .select, .autoPolygon:
             break
@@ -1389,35 +1619,27 @@ struct MapEditorView: View {
     // MARK: - Vertex Dragging
 
     private func updateVertexAfterDrag(featureID: Int, vertexIndex: Int, translation: CGSize) {
-        let mapViewSize = mapTracker.size
-        guard let region = mapTracker.region, mapViewSize.width > 0, mapViewSize.height > 0,
-              let featureIndex = course.features.firstIndex(where: { $0.id == featureID }),
+        guard let featureIndex = course.features.firstIndex(where: { $0.id == featureID }),
               vertexIndex < course.features[featureIndex].polygon.count else { return }
-        let degreesPerPixelLat = region.span.latitudeDelta / mapViewSize.height
-        let degreesPerPixelLng = region.span.longitudeDelta / mapViewSize.width
-        var movedCoordinate = course.features[featureIndex].polygon[vertexIndex]
-        movedCoordinate.lat -= translation.height * degreesPerPixelLat
-        movedCoordinate.lon += translation.width * degreesPerPixelLng
-        movedCoordinate.ele = nil
+        let movedCoordinate = moved(course.features[featureIndex].polygon[vertexIndex], by: translation)
         course.features[featureIndex].polygon.replace(at: vertexIndex, with: movedCoordinate)
     }
 
     private func applyCenterlineVertexDrag(vertexIndex: Int, translation: CGSize) {
-        let mapViewSize = mapTracker.size
-        guard let region = mapTracker.region, mapViewSize.width > 0, mapViewSize.height > 0,
-              selectedSubCourseIndex < course.subCourses.count,
-              selectedHoleIndex < course.subCourses[selectedSubCourseIndex].holes.count,
-              vertexIndex < course.subCourses[selectedSubCourseIndex].holes[selectedHoleIndex].centerline.count else { return }
-        let degreesPerPixelLat = region.span.latitudeDelta / mapViewSize.height
-        let degreesPerPixelLng = region.span.longitudeDelta / mapViewSize.width
-        let subCourseIndex = selectedSubCourseIndex
-        let holeIndex = selectedHoleIndex
-        var movedCoordinate = course.subCourses[subCourseIndex].holes[holeIndex].centerline[vertexIndex]
-        movedCoordinate.lat -= translation.height * degreesPerPixelLat
-        movedCoordinate.lon += translation.width * degreesPerPixelLng
-        // The old elevation belongs to the old position.
-        movedCoordinate.ele = nil
-        course.subCourses[subCourseIndex].holes[holeIndex].centerline.replace(at: vertexIndex, with: movedCoordinate)
+        let centerline = currentCenterline
+        guard vertexIndex < centerline.count else { return }
+        let movedCoordinate = moved(centerline[vertexIndex], by: translation)
+        course.updateCenterline(subCourseIndex: selectedSubCourseIndex, holeIndex: selectedHoleIndex) {
+            $0.replace(at: vertexIndex, with: movedCoordinate)
+        }
+    }
+
+    /// The coordinate `translation` points away on the map. The old elevation belongs to the
+    /// old position, so it is dropped.
+    private func moved(_ coordinate: Coordinate, by translation: CGSize) -> Coordinate {
+        let projection = camera.projection
+        let point = projection.point(for: coordinate)
+        return projection.coordinate(at: CGPoint(x: point.x + translation.width, y: point.y + translation.height))
     }
 
     // MARK: - Delete Handling
@@ -1473,17 +1695,17 @@ struct MapEditorView: View {
     // MARK: - Centerline Management
 
     private func deleteCenterlineVertex(at index: Int) {
-        guard selectedSubCourseIndex < course.subCourses.count,
-              selectedHoleIndex < course.subCourses[selectedSubCourseIndex].holes.count else { return }
-        let count = course.subCourses[selectedSubCourseIndex].holes[selectedHoleIndex].centerline.count
+        let count = currentCenterline.count
         guard index < count else { return }
         if count <= 2 {
             statusMessage = "Cannot delete vertex — centerline needs at least 2 points"
             clearStatusAfterDelay()
             return
         }
-        course.subCourses[selectedSubCourseIndex].holes[selectedHoleIndex].centerline.remove(at: index)
-        let newCount = course.subCourses[selectedSubCourseIndex].holes[selectedHoleIndex].centerline.count
+        course.updateCenterline(subCourseIndex: selectedSubCourseIndex, holeIndex: selectedHoleIndex) {
+            $0.remove(at: index)
+        }
+        let newCount = count - 1
         if index >= newCount {
             selectedCenterlineVertexIndex = newCount - 1
         }
@@ -1492,7 +1714,7 @@ struct MapEditorView: View {
     private func deleteCenterline() {
         guard selectedSubCourseIndex < course.subCourses.count,
               selectedHoleIndex < course.subCourses[selectedSubCourseIndex].holes.count else { return }
-        course.subCourses[selectedSubCourseIndex].holes[selectedHoleIndex].centerline = []
+        course.setCenterline([], subCourseIndex: selectedSubCourseIndex, holeIndex: selectedHoleIndex)
         deselectAll()
         statusMessage = "Centerline deleted"
         clearStatusAfterDelay()
@@ -1505,27 +1727,6 @@ struct MapEditorView: View {
               selectedHoleIndex < course.subCourses[selectedSubCourseIndex].holes.count
         else { return }
         course.subCourses[selectedSubCourseIndex].holes[selectedHoleIndex].features.removeAll { $0 == id }
-    }
-
-    private func guessTeesForCurrentHole() {
-        guard selectedSubCourseIndex < course.subCourses.count,
-              selectedHoleIndex < course.subCourses[selectedSubCourseIndex].holes.count
-        else { return }
-        let hole = course.subCourses[selectedSubCourseIndex].holes[selectedHoleIndex]
-        if hole.yardages.isEmpty {
-            statusMessage = "Hole \(hole.number) has no yardages"
-        } else if hole.centerline.count < 2 {
-            statusMessage = "Hole \(hole.number) needs a centerline"
-        } else {
-            let tees = TeeGuesser.guessTees(for: hole, features: course.features)
-            if tees.isEmpty {
-                statusMessage = "Hole \(hole.number) has no tee boxes"
-            } else {
-                course.subCourses[selectedSubCourseIndex].holes[selectedHoleIndex].tees = tees
-                statusMessage = "Guessed \(tees.count) tees for hole \(hole.number)"
-            }
-        }
-        clearStatusAfterDelay()
     }
 
     private func associateFeature(id: Int) {
@@ -1562,6 +1763,10 @@ struct MapEditorView: View {
             selectedFeatureID = featureID
             selectedVertexIndex = nil
             statusMessage = "Restored outline of feature #\(featureID)"
+        case .reverted(let feature):
+            selectedFeatureID = feature.id
+            selectedVertexIndex = nil
+            statusMessage = "Restored edits to feature #\(feature.id)"
         case .added(let featureID):
             if selectedFeatureID == featureID {
                 selectedFeatureID = nil
@@ -1585,7 +1790,7 @@ struct MapEditorView: View {
     private func startFit(_ feature: Feature) {
         isEditingFeature = false
         selectedVertexIndex = nil
-        autoPolygon.startFit(feature: feature)
+        autoPolygon.startFit(feature: feature, layer: imageryLayer)
     }
 
     private func fitSelectedFeature() -> Bool {
@@ -1776,7 +1981,9 @@ struct MapEditorView: View {
                 let globalNumber = globalOffset + holeIdx + 1
                 renumbered.append(OverpassAPIClient.ParsedCenterline(
                     holeNumber: globalNumber,
-                    coordinates: centerline.coordinates
+                    coordinates: centerline.coordinates,
+                    osmID: centerline.osmID,
+                    version: centerline.version
                 ))
             }
         }
@@ -1793,6 +2000,7 @@ struct MapEditorView: View {
         let importedFeatureCount = importedCourse.features.count - featureCountBefore
 
         course = importedCourse
+        saveOSMBaseline(OSMBaseline(course: importedCourse, versions: Self.osmVersions(in: result)))
         logger.info("Imported \(importedFeatureCount, privacy: .public) features")
         osmImportStatus = "Imported \(importedFeatureCount) features"
         pendingOSMResult = nil
@@ -1807,11 +2015,8 @@ struct MapEditorView: View {
     private func centerMapOnCourse() {
         let coord = course.location.coordinate
         if coord.lat != 0 || coord.lon != 0 {
-            let region = MKCoordinateRegion(
-                center: coord.clCoordinate,
-                span: MKCoordinateSpan(latitudeDelta: 0.004, longitudeDelta: 0.004)
-            )
-            mapPosition = .region(region)
+            camera.center = Coordinate(lat: coord.lat, lon: coord.lon)
+            camera.zoom = 17.5
         }
     }
 
@@ -1822,6 +2027,205 @@ struct MapEditorView: View {
             guard !Task.isCancelled else { return }
             statusMessage = ""
         }
+    }
+
+    // MARK: - OSM Publish
+
+    /// Revert to OSM for a feature whose type or points differ from what OSM has.
+    @ViewBuilder
+    private func revertControls(for feature: Feature) -> some View {
+        if let osmID = feature.osmID, let entry = osmBaseline?.entries[osmID], entry.differs(from: feature) {
+            VStack(alignment: .leading, spacing: 8) {
+                Divider()
+                Button("Revert to OSM") {
+                    revertToOSM(feature, entry: entry)
+                }
+                .help("Put back the type and points this feature has in OpenStreetMap")
+            }
+            .padding()
+        }
+    }
+
+    private func revertToOSM(_ feature: Feature, entry: OSMBaseline.Entry) {
+        guard let index = course.features.firstIndex(where: { $0.id == feature.id }) else { return }
+        course.features[index] = entry.reverted(feature)
+        undoRecords.append(.reverted(feature))
+        selectedVertexIndex = nil
+        isEditingFeature = false
+        statusMessage = "Reverted feature #\(feature.id) to OSM"
+        clearStatusAfterDelay()
+    }
+
+    /// Convert to Multipolygon for a fairway way with greens inside it, or the pending
+    /// conversion with a way to cancel it.
+    @ViewBuilder
+    private func multipolygonControls(for feature: Feature) -> some View {
+        if let baseline = osmBaseline {
+            if let pending = OSMMultipolygon.pending(for: feature, in: baseline) {
+                VStack(alignment: .leading, spacing: 8) {
+                    Divider()
+                    Text(pending.innerOSMIDs.count == 1
+                         ? "Becomes a multipolygon with the green inside it on the next publish."
+                         : "Becomes a multipolygon with the \(pending.innerOSMIDs.count) greens inside it on the next publish.")
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                        .fixedSize(horizontal: false, vertical: true)
+                    Button("Cancel Multipolygon") {
+                        setPendingMultipolygon(nil, for: feature)
+                    }
+                }
+                .padding()
+            } else {
+                let greens = OSMMultipolygon.containedGreens(in: feature, course: course)
+                if !greens.isEmpty {
+                    VStack(alignment: .leading, spacing: 8) {
+                        Divider()
+                        Button("Convert to Multipolygon") {
+                            setPendingMultipolygon(
+                                PendingMultipolygon(fairwayOSMID: feature.osmID ?? "", innerOSMIDs: greens.compactMap(\.osmID)),
+                                for: feature
+                            )
+                        }
+                        .help("On the next publish, make this fairway a multipolygon with the greens inside it as inner rings")
+                    }
+                    .padding()
+                }
+            }
+        }
+    }
+
+    /// Records or removes the fairway's pending multipolygon.
+    private func setPendingMultipolygon(_ pending: PendingMultipolygon?, for fairway: Feature) {
+        guard var baseline = osmBaseline, let osmID = fairway.osmID else { return }
+        baseline.pendingMultipolygons.removeAll { $0.fairwayOSMID == osmID }
+        if let pending {
+            baseline.pendingMultipolygons.append(pending)
+        }
+        saveOSMBaseline(baseline)
+    }
+
+    /// The OSM version of each imported element, by OSM ID.
+    private static func osmVersions(in result: OverpassAPIClient.ParsedResult) -> [String: Int] {
+        var versions: [String: Int] = [:]
+        for feature in result.features {
+            if let osmID = feature.osmID, let version = feature.version { versions[osmID] = version }
+        }
+        for centerline in result.centerlines {
+            if let osmID = centerline.osmID, let version = centerline.version { versions[osmID] = version }
+        }
+        return versions
+    }
+
+    private func loadOSMBaseline() {
+        do {
+            osmBaseline = try baselineStore.loadOrCreate(for: course)
+        } catch {
+            logger.error("Could not load OSM baseline: \(error, privacy: .public)")
+            osmImportStatus = "Could not load OSM changes: \(error.localizedDescription)"
+        }
+        updateOSMChanges()
+    }
+
+    private func saveOSMBaseline(_ baseline: OSMBaseline) {
+        osmBaseline = baseline
+        do {
+            try baselineStore.save(baseline, courseID: course.id)
+        } catch {
+            logger.error("Could not save OSM baseline: \(error, privacy: .public)")
+            osmImportStatus = "Could not save OSM changes: \(error.localizedDescription)"
+        }
+        updateOSMChanges()
+    }
+
+    private func updateOSMChanges() {
+        let ignoredOSMIDs = Set(ignoredFeatures.compactMap(\.osmID))
+        osmChanges = osmBaseline.map { OSMChangeDetector.changes(in: course, from: $0, ignoredOSMIDs: ignoredOSMIDs) } ?? []
+    }
+
+    // MARK: - Ignored Features
+
+    private func loadIgnoredFeatures() {
+        do {
+            ignoredFeatures = try ignoredStore.load(courseID: course.id)
+        } catch {
+            logger.error("Could not load ignored features: \(error, privacy: .public)")
+        }
+    }
+
+    private func saveIgnoredFeatures() {
+        do {
+            try ignoredStore.save(ignoredFeatures, courseID: course.id)
+        } catch {
+            logger.error("Could not save ignored features: \(error, privacy: .public)")
+            statusMessage = "Could not save ignored features: \(error.localizedDescription)"
+            clearStatusAfterDelay()
+        }
+    }
+
+    private func ignoreSelectedFeatures() {
+        let ids = unassociatedRows
+        let before = ignoredFeatures.count
+        let order = HoleFeatureSets(course: course, hole: currentHole).unassociated.map(\.id)
+        IgnoredFeatures.ignore(ids, in: &course, ignored: &ignoredFeatures)
+        unassociatedMultiSelection = []
+        // The next unassociated feature is selected, so features can be ignored one after another.
+        if let next = IgnoredFeatures.nextSelection(afterRemoving: ids, from: order) {
+            deselectAll()
+            selectedFeatureID = next
+            activeTool = .select
+            isMapFocused = true
+        } else if let selectedFeatureID, ids.contains(selectedFeatureID) {
+            deselectAll()
+        }
+        saveIgnoredFeatures()
+        updateOSMChanges()
+        statusMessage = "Ignored \(ignoredFeatures.count - before) feature(s)"
+        clearStatusAfterDelay()
+    }
+
+    private func restoreIgnoredFeatures() {
+        let ids = unassociatedRows
+        let before = ignoredFeatures.count
+        IgnoredFeatures.restore(ids, to: &course, ignored: &ignoredFeatures)
+        unassociatedMultiSelection = []
+        saveIgnoredFeatures()
+        updateOSMChanges()
+        statusMessage = "Restored \(before - ignoredFeatures.count) feature(s)"
+        clearStatusAfterDelay()
+    }
+
+    /// Signs in if needed, then opens the publish dialog.
+    private func startOSMPublish() async {
+        isSigningInToOSM = true
+        defer { isSigningInToOSM = false }
+        do {
+            let user = try await OSMAuth().signedInUser(authenticate: authenticateWithOSM)
+            publishRequest = PublishRequest(token: user.token, userName: user.displayName, changes: osmChanges)
+        } catch {
+            logger.error("OSM sign in failed: \(error, privacy: .public)")
+            osmImportStatus = "OSM sign in failed: \(error.localizedDescription)"
+            clearOSMStatusAfterDelay()
+        }
+    }
+
+    private func publishToOSM(_ request: PublishRequest, comment: String) async throws {
+        guard let baseline = osmBaseline else { return }
+        // A token revoked while the dialog is open gets a new sign in here, so the comment is kept.
+        let result = try await OSMAuth().retryingAfterSignIn(token: request.token, authenticate: authenticateWithOSM) { token in
+            try await OSMAPIClient(token: token).publish(request.changes, course: course, baseline: baseline, comment: comment)
+        }
+        course = result.course
+        saveOSMBaseline(result.baseline)
+        publishedChangeset = (result.changesetID, OSMServer.changesetURL(id: result.changesetID))
+    }
+
+    /// Shows the OSM sign-in page and returns its callback URL.
+    private func authenticateWithOSM(_ url: URL) async throws -> URL {
+        try await webAuthenticationSession.authenticate(
+            using: url,
+            callback: .customScheme(OSMAuth.callbackScheme),
+            additionalHeaderFields: [:]
+        )
     }
 
     private func clearOSMStatusAfterDelay() {
@@ -1842,16 +2246,45 @@ struct CenterlineGroup: Identifiable {
     var assignedSubCourseIndex: Int?
 }
 
-// MARK: - Map View Tracking
+extension [CenterlineGroup] {
+    /// Removes a group and renumbers the groups after it.
+    mutating func removeGroup(at index: Int) {
+        remove(at: index)
+        relabel()
+    }
 
-/// Map state that changes on every frame or mouse move.
-///
-/// The editor reads it only in event handlers, so changing it must not redraw the editor.
-/// Only ``VertexDragHandle`` observes it, to follow the camera.
-final class MapViewTracker: ObservableObject {
-    @Published var region: MKCoordinateRegion?
-    var size: CGSize = .zero
-    var hoveredCoordinate: Coordinate?
+    /// Sets each group's label from its hole count and its place in the list.
+    mutating func relabel() {
+        for index in indices {
+            self[index].label = "\(self[index].centerlines.count) holes (group \(index + 1))"
+        }
+    }
+}
+
+/// The rows selected in the Unassociated pane. Only one feature is selected at a time: one
+/// selected row is the selected feature. Several rows, or rows in the Ignored list, are only for
+/// Ignore or Restore and leave no feature selected.
+enum UnassociatedSelection {
+    enum Outcome: Equatable {
+        /// Select this feature.
+        case selectFeature(Int)
+        /// Select no feature, and these rows.
+        case rows(Set<Int>)
+    }
+
+    /// The rows to show selected. A selected feature decides them: its row if it is
+    /// unassociated, otherwise none.
+    static func rows(selectedFeatureID: Int?, multiSelection: Set<Int>, unassociatedIDs: Set<Int>, showsIgnored: Bool) -> Set<Int> {
+        if showsIgnored { return multiSelection }
+        if let selectedFeatureID { return unassociatedIDs.contains(selectedFeatureID) ? [selectedFeatureID] : [] }
+        return multiSelection
+    }
+
+    /// What picking these rows in the list does.
+    static func outcome(of rows: Set<Int>, showsIgnored: Bool) -> Outcome {
+        if !showsIgnored, rows.count == 1, let featureID = rows.first { return .selectFeature(featureID) }
+        return .rows(rows)
+    }
 }
 
 /// The features the editor shows for the selected hole, worked out once per redraw.
@@ -1864,13 +2297,15 @@ struct HoleFeatureSets {
     init(course: Course, hole: Hole?) {
         currentIDs = Set(hole?.features ?? [])
         let assigned = Set(course.subCourses.flatMap(\.holes).flatMap(\.features))
+            .union(course.centerlineFeatureIDs)
         var current: [Feature] = []
         var unassociated: [Feature] = []
         for feature in course.features {
             if currentIDs.contains(feature.id) {
                 current.append(feature)
             }
-            if !assigned.contains(feature.id) {
+            // Centerlines are drawn as lines with their hole, not as unassociated polygons.
+            if !assigned.contains(feature.id), feature.type != .centerline {
                 unassociated.append(feature)
             }
         }
@@ -1885,8 +2320,7 @@ struct HoleFeatureSets {
 /// It follows the camera and draws the point while it is dragged. Both change on every frame,
 /// so they are kept here instead of in the editor, which would redraw the whole window.
 private struct VertexDragHandle: View {
-    @ObservedObject var tracker: MapViewTracker
-    let proxy: MapProxy
+    let camera: MapCamera
     let coordinate: Coordinate
     let onDragStarted: () -> Void
     let onDragEnded: (CGSize) -> Void
@@ -1895,36 +2329,35 @@ private struct VertexDragHandle: View {
     @State private var isDragging = false
 
     var body: some View {
-        if let screenPoint = proxy.convert(coordinate.clCoordinate, to: .local) {
-            ZStack {
-                if isDragging {
-                    Circle()
-                        .fill(Color.white)
-                        .stroke(Color.white, lineWidth: 1.5)
-                        .frame(width: 12, height: 12)
-                        .offset(translation)
-                        .allowsHitTesting(false)
-                }
-                Color.clear
-                    .frame(width: 44, height: 44)
-                    .contentShape(Circle())
-                    .gesture(
-                        DragGesture(minimumDistance: 2)
-                            .onChanged { value in
-                                if !isDragging {
-                                    isDragging = true
-                                    onDragStarted()
-                                }
-                                translation = value.translation
-                            }
-                            .onEnded { value in
-                                onDragEnded(value.translation)
-                                translation = .zero
-                                isDragging = false
-                            }
-                    )
+        let screenPoint = camera.projection.point(for: coordinate)
+        ZStack {
+            if isDragging {
+                Circle()
+                    .fill(Color.white)
+                    .stroke(Color.white, lineWidth: 1.5)
+                    .frame(width: 12, height: 12)
+                    .offset(translation)
+                    .allowsHitTesting(false)
             }
-            .position(screenPoint)
+            Color.clear
+                .frame(width: 44, height: 44)
+                .contentShape(Circle())
+                .gesture(
+                    DragGesture(minimumDistance: 2)
+                        .onChanged { value in
+                            if !isDragging {
+                                isDragging = true
+                                onDragStarted()
+                            }
+                            translation = value.translation
+                        }
+                        .onEnded { value in
+                            onDragEnded(value.translation)
+                            translation = .zero
+                            isDragging = false
+                        }
+                )
         }
+        .position(screenPoint)
     }
 }

@@ -66,6 +66,50 @@ struct FeatureSegmenterTests {
 
     // MARK: - Helpers
 
+    // MARK: - Imagery without near-infrared (Esri)
+
+    /// The patch as Esri imagery: red, green, and blue only.
+    private func withoutNearInfrared(_ patch: ImagePatch) -> ImagePatch {
+        var copy = patch
+        copy.hasNearInfrared = false
+        copy.nir = Array(repeating: 0, count: copy.nir.count)
+        return copy
+    }
+
+    @Test func greenRedIndexWithoutNearInfrared() {
+        let patch = withoutNearInfrared(S.patch(size: 4) { _, _ in S.grass })
+        let values = PixelValues(patch: patch, window: PixelWindow(covering: CGRect(x: 0, y: 0, width: 4, height: 4), in: patch))
+        #expect(!values.hasNearInfrared)
+        #expect(abs(values.vegetation[0] - Float(110 - 60) / Float(110 + 60)) < 0.0001)
+    }
+
+    @Test func sandDiskInGrassWithoutNearInfrared() throws {
+        let patch = withoutNearInfrared(S.patch { east, north in hypot(east, north) <= 5 ? S.sand : S.grass })
+        let result = try #require(detect(.bunker, in: patch, at: S.center))
+        expectArea(result.polygon, near: .pi * 25)
+    }
+
+    @Test func waterInGrassWithoutNearInfrared() throws {
+        let patch = withoutNearInfrared(S.patch { east, north in hypot(east - 3, north) <= 15 ? S.water : S.grass })
+        let result = try #require(detect(.water, in: patch, at: S.coordinate(east: 3, north: 0)))
+        expectArea(result.polygon, near: .pi * 225)
+    }
+
+    @Test func typeRuleRejectsGrassForBunkerWithoutNearInfrared() {
+        let patch = withoutNearInfrared(S.patch { _, _ in S.grass })
+        #expect(detect(.bunker, in: patch, at: S.center) == nil)
+    }
+
+    @Test func fitMovesShiftedPolygonOntoBunkerWithoutNearInfrared() throws {
+        let patch = withoutNearInfrared(S.patch { east, north in hypot(east, north) <= 5 ? S.sand : S.grass })
+        var session = AutoPolygonSession(mode: .fit(featureID: 1, type: .bunker, oldPolygon: S.circle(east: 2, north: 0, radius: 5)), patch: patch)
+        session.recompute()
+        let result = try #require(session.result)
+        let offset = S.centroidOffset(result.polygon)
+        #expect(hypot(offset.east, offset.north) < 0.5)
+        expectArea(result.polygon, near: .pi * 25)
+    }
+
     private func detect(_ type: FeatureType, in patch: ImagePatch, at coordinate: Coordinate) -> AutoPolygonSession.Result? {
         var session = AutoPolygonSession(mode: .create(type), patch: patch, operations: [.add(coordinate)])
         session.recompute()

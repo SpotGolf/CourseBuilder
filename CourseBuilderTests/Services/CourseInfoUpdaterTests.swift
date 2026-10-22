@@ -33,7 +33,6 @@ struct CourseInfoUpdaterTests {
     }
 
     @Test func mapWorkIsKept() {
-        let centerline: CoordinatePath = [Coordinate(lat: 1, lon: 2, ele: 3), Coordinate(lat: 4, lon: 5, ele: 6)]
         var existing = makeCourse(
             name: "Course",
             tees: [TeeDefinition(name: "Blue", color: "#0000FF")],
@@ -42,11 +41,14 @@ struct CourseInfoUpdaterTests {
                 par: 4,
                 yardages: ["Blue": 400],
                 features: [1, 2],
-                tees: ["Blue": 1],
-                centerline: centerline
+                centerline: 3
             )])]
         )
-        existing.features = [Feature(id: 1, type: .tee, polygon: []), Feature(id: 2, type: .green, polygon: [])]
+        existing.features = [
+            Feature(id: 1, type: .tee, polygon: []),
+            Feature(id: 2, type: .green, polygon: []),
+            Feature(id: 3, type: .centerline, polygon: [Coordinate(lat: 1, lon: 2, ele: 3), Coordinate(lat: 4, lon: 5, ele: 6)]),
+        ]
         existing.location.coordinate = Coordinate(lat: 40, lon: -105)
         existing.golfCourseAPIIds = ["42"]
         let fetched = makeCourse(
@@ -65,8 +67,7 @@ struct CourseInfoUpdaterTests {
         #expect(merged.subCourses[0].name == "Out")
         let hole = merged.subCourses[0].holes[0]
         #expect(hole.features == [1, 2])
-        #expect(hole.tees == ["Blue": 1])
-        #expect(hole.centerline == centerline)
+        #expect(hole.centerline == 3)
         #expect(hole.yardages == ["Blue": 410])
     }
 
@@ -93,11 +94,11 @@ struct CourseInfoUpdaterTests {
         #expect(merged.subCourses[0].holes[0].yardages == ["Blue": 401, "Green": 300])
     }
 
-    @Test func newTeesGetYardagesButNoTeeBox() {
+    @Test func newTeesGetYardages() {
         let existing = makeCourse(
             name: "Course",
             tees: [TeeDefinition(name: "Blue", color: "#0000FF")],
-            subCourses: [SubCourse(name: "Front", holes: [Hole(number: 1, par: 4, yardages: ["Blue": 390], tees: ["Blue": 2])])]
+            subCourses: [SubCourse(name: "Front", holes: [Hole(number: 1, par: 4, yardages: ["Blue": 390])])]
         )
         let fetched = makeCourse(
             name: "Course",
@@ -108,7 +109,6 @@ struct CourseInfoUpdaterTests {
         let merged = CourseInfoUpdater.merge(existing, with: fetched)
 
         #expect(merged.subCourses[0].holes[0].yardages == ["Blue": 390, "Red": 300])
-        #expect(merged.subCourses[0].holes[0].tees == ["Blue": 2])
     }
 
     @Test func comboTeesStayComboTees() {

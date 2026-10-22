@@ -43,7 +43,7 @@ struct ComboTeeBuilderTests {
             SubCourse(
                 name: "Front",
                 holes: [
-                    Hole(number: 1, par: 4, yardages: ["Blue": 410, "White": 385, "Blue/White": 410], tees: ["Blue": 1, "White": 2, "Blue/White": 1]),
+                    Hole(number: 1, par: 4, yardages: ["Blue": 410, "White": 385, "Blue/White": 410]),
                     Hole(number: 2, par: 3, yardages: ["Blue": 180, "White": 165, "Blue/White": 165]),
                 ],
                 tees: [
@@ -66,7 +66,6 @@ struct ComboTeeBuilderTests {
         #expect(subCourse.tees.keys.sorted() == ["Blue"])
         #expect(subCourse.comboTees["Blue/White"]?.male?.slope == 125)
         #expect(subCourse.holes[0].yardages == ["Blue": 410, "White": 385])
-        #expect(subCourse.holes[0].tees == ["Blue": 1, "White": 2])
         #expect(subCourse.holes[0].comboTees == ["Blue/White": "Blue"])
         #expect(subCourse.holes[1].comboTees == ["Blue/White": "White"])
     }

@@ -30,7 +30,7 @@ final class FeatureSorterTests: XCTestCase {
         let tee = square(id: 2, type: .tee, north: 0)
         let fairway = square(id: 3, type: .fairway, north: 200)
         let bunker = square(id: 4, type: .bunker, north: 370, east: 20)
-        let hole = Hole(number: 1, par: 4, yardages: [:], features: [1, 2, 3, 4], centerline: [])
+        let hole = Hole(number: 1, par: 4, yardages: [:], features: [1, 2, 3, 4])
 
         let sorted = FeatureSorter.sortedByDistanceFromGreen([green, bunker, fairway, tee], hole: hole)
 
@@ -41,7 +41,7 @@ final class FeatureSorterTests: XCTestCase {
         let green = square(id: 1, type: .green, north: 100)
         let left = square(id: 7, type: .bunker, north: 100, east: -30)
         let right = square(id: 3, type: .bunker, north: 100, east: 30)
-        let hole = Hole(number: 1, par: 3, yardages: [:], features: [1, 3, 7], centerline: [])
+        let hole = Hole(number: 1, par: 3, yardages: [:], features: [1, 3, 7])
 
         let sorted = FeatureSorter.sortedByDistanceFromGreen([left, green, right], hole: hole)
 
@@ -51,12 +51,11 @@ final class FeatureSorterTests: XCTestCase {
     func testUsesCenterlineEndWhenHoleHasNoGreen() {
         let tee = square(id: 2, type: .tee, north: 0)
         let fairway = square(id: 3, type: .fairway, north: 200)
-        let hole = Hole(
-            number: 1, par: 4, yardages: [:], features: [2, 3],
-            centerline: [point(north: 0), point(north: 400)]
-        )
+        let hole = Hole(number: 1, par: 4, yardages: [:], features: [2, 3])
 
-        let sorted = FeatureSorter.sortedByDistanceFromGreen([fairway, tee], hole: hole)
+        let sorted = FeatureSorter.sortedByDistanceFromGreen(
+            [fairway, tee], hole: hole, centerline: [point(north: 0), point(north: 400)]
+        )
 
         XCTAssertEqual(sorted.map(\.id), [2, 3])
     }
@@ -64,7 +63,7 @@ final class FeatureSorterTests: XCTestCase {
     func testUnchangedWithoutGreenOrCenterline() {
         let tee = square(id: 2, type: .tee, north: 0)
         let fairway = square(id: 3, type: .fairway, north: 200)
-        let hole = Hole(number: 1, par: 4, yardages: [:], features: [2, 3], centerline: [])
+        let hole = Hole(number: 1, par: 4, yardages: [:], features: [2, 3])
 
         let sorted = FeatureSorter.sortedByDistanceFromGreen([fairway, tee], hole: hole)
 

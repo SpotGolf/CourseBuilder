@@ -16,6 +16,8 @@ struct ScorecardView: View {
     @State private var comboTeeName: String?
     @State private var teeToDelete: String?
     @AppStorage("golfCourseAPIKey") private var apiKey: String = ""
+    /// The CourseData repository chosen for the last export.
+    @AppStorage("courseDataDirectory") private var courseDataDirectory: String = ""
     @Environment(\.openWindow) private var openWindow
 
     var body: some View {
@@ -218,7 +220,7 @@ struct ScorecardView: View {
             Button("Update") { updateCourseInfo() }
             Button("Cancel", role: .cancel) {}
         } message: {
-            Text("Names, address, tees, ratings, slopes, par, handicaps, and yardages are replaced. Map features, centerlines, and tee box assignments are kept.")
+            Text("Names, address, tees, ratings, slopes, par, handicaps, and yardages are replaced. Map features and centerlines are kept.")
         }
         .sheet(
             isPresented: Binding(
@@ -319,9 +321,6 @@ struct ScorecardView: View {
     private func teeInUseMessage(for teeName: String) -> String {
         let usage = CourseIntegrity.usage(ofTeeNamed: teeName, in: course)
         var lines = ["This tee is in use. Deleting it also deletes:"]
-        if usage.holesWithTeeBox > 0 {
-            lines.append("• Its tee box on \(usage.holesWithTeeBox) \(usage.holesWithTeeBox == 1 ? "hole" : "holes")")
-        }
         if !usage.comboTees.isEmpty {
             lines.append("• Combo \(usage.comboTees.count == 1 ? "tee" : "tees") \(usage.comboTees.map { "\"\($0)\"" }.joined(separator: ", "))")
         }
@@ -402,27 +401,31 @@ struct ScorecardView: View {
         }
     }
 
+    /// Asks for the CourseData repository and saves the course into it, in the folder and with
+    /// the file name CourseData's naming rules give.
     private func showSavePanelAndExport() {
-        let panel = NSSavePanel()
-        panel.allowedContentTypes = [.gzip]
-        let fileName = course.name
-            .components(separatedBy: .alphanumerics.inverted)
-            .filter { !$0.isEmpty }
-            .map { $0.capitalized }
-            .joined(separator: "-")
-        panel.nameFieldStringValue = "\(fileName).json.gz"
+        let panel = NSOpenPanel()
+        panel.canChooseDirectories = true
+        panel.canChooseFiles = false
+        panel.allowsMultipleSelection = false
+        panel.canCreateDirectories = true
+        panel.prompt = "Export"
+        panel.message = "Choose your CourseData folder. The course is saved under Data/ in its country, state, and city folders."
+        if !courseDataDirectory.isEmpty {
+            panel.directoryURL = URL(fileURLWithPath: courseDataDirectory)
+        }
 
         guard panel.runModal() == .OK, let url = panel.url else { return }
-        writeExport(to: url)
+        courseDataDirectory = url.path
+        writeExport(toCourseData: url)
     }
 
-    private func writeExport(to url: URL) {
+    private func writeExport(toCourseData directory: URL) {
         do {
-            let (jsonData, gzipData) = try CourseExporter.export(course)
-
-            try gzipData.write(to: url)
-            let ratio = Int((1.0 - Double(gzipData.count) / Double(jsonData.count)) * 100)
-            statusMessage = "Exported to \(url.lastPathComponent) (\(ratio)% smaller)"
+            let saved = try CourseExporter.write(course, toCourseData: directory)
+            let ratio = Int((1.0 - Double(saved.gzipSize) / Double(saved.jsonSize)) * 100)
+            let path = saved.url.path.replacingOccurrences(of: directory.path + "/", with: "")
+            statusMessage = "Exported to \(path) (\(ratio)% smaller)"
         } catch {
             statusMessage = "Export failed: \(error.localizedDescription)"
         }

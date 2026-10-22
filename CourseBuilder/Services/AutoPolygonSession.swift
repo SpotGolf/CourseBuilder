@@ -131,14 +131,14 @@ struct AutoPolygonSession {
             // from pixels that pass the type rule, so they set the colors.
             let insidePixels = indices(of: seedMask)
             let typedPixels = insidePixels.filter {
-                values.valid[$0] && profile.accepts(values.ndvi[$0], values.lightness[$0])
+                values.valid[$0] && profile.accepts(values, at: $0)
             }
             var seedPixels = typedPixels
             if seedPixels.isEmpty {
                 // The outline missed the feature (OSM outlines can be several meters off).
                 // Seed from matching pixels anywhere in the search area.
                 seedPixels = indices(of: allowed).filter {
-                    values.valid[$0] && profile.accepts(values.ndvi[$0], values.lightness[$0])
+                    values.valid[$0] && profile.accepts(values, at: $0)
                 }
             }
             if profile.refinesFit {
@@ -178,7 +178,8 @@ struct AutoPolygonSession {
                     tolerance: profile.tolerance, maxRadiusMeters: profile.maxRadiusMeters,
                     fitMarginMeters: profile.fitMarginMeters, errorLimitMeters: profile.errorLimitMeters,
                     minSpacingMeters: profile.minSpacingMeters, safetyLimit: profile.safetyLimit,
-                    refinesFit: false, splitsGrownRegion: false, accepts: { _, _ in true }
+                    refinesFit: false, splitsGrownRegion: false, accepts: { _, _ in true },
+                    acceptsWithoutNearInfrared: { _, _ in true }
                 )
                 let grown = FeatureSegmenter.grow(values: values, seeds: seedPixels, statistics: statistics,
                                                   tolerance: tolerance, allowed: mask, profile: removeProfile)
@@ -211,8 +212,8 @@ struct AutoPolygonSession {
     }
 }
 
-/// Runs auto polygon and Fit to Imagery previews for the map editor: fetches imagery when
-/// needed and runs detection off the main thread.
+/// Runs auto polygon and Fit to Imagery previews for the map editor: fetches imagery from the
+/// layer shown on the map when needed and runs detection off the main thread.
 @MainActor
 @Observable
 final class AutoPolygonController {
@@ -220,16 +221,21 @@ final class AutoPolygonController {
     private(set) var isLoading = false
     /// Error or "nothing found" message for the status bar.
     private(set) var message: String?
+    /// NAIP only: the year of the imagery used.
     private(set) var imageryYear: Int?
+    /// The imagery the current preview is traced from.
+    private(set) var layer: ImageryLayer = .naip
 
     @ObservationIgnored private let client: NAIPImageryClient
+    @ObservationIgnored private let esriClient: EsriImageryClient
     @ObservationIgnored private var task: Task<Void, Never>?
     @ObservationIgnored private var generation = 0
     /// What the user asked for most recently; applied when the current work finishes.
     @ObservationIgnored private var pendingMode: AutoPolygonSession.Mode?
 
-    init(client: NAIPImageryClient = NAIPImageryClient()) {
+    init(client: NAIPImageryClient = NAIPImageryClient(), esriClient: EsriImageryClient = EsriImageryClient()) {
         self.client = client
+        self.esriClient = esriClient
     }
 
     var isActive: Bool { session != nil || isLoading }
@@ -237,14 +243,24 @@ final class AutoPolygonController {
     var result: AutoPolygonSession.Result? { session?.result }
     var tolerance: Double? { session?.tolerance }
 
-    /// Starts a new auto polygon preview from a click.
-    func startCreate(type: FeatureType, at coordinate: Coordinate) {
+    /// Starts a new auto polygon preview from a click, traced from the given imagery.
+    func startCreate(type: FeatureType, at coordinate: Coordinate, layer: ImageryLayer) {
+        useLayer(layer)
         run(mode: .create(type), operations: [.add(coordinate)], tolerance: nil)
     }
 
-    /// Starts a Fit to Imagery preview for a feature.
-    func startFit(feature: Feature) {
+    /// Starts a Fit to Imagery preview for a feature, traced from the given imagery.
+    func startFit(feature: Feature, layer: ImageryLayer) {
+        useLayer(layer)
         run(mode: .fit(featureID: feature.id, type: feature.type, oldPolygon: Array(feature.polygon)), operations: [], tolerance: nil)
+    }
+
+    /// Switches imagery. A preview from other imagery can't be reused, since its pixels differ.
+    private func useLayer(_ layer: ImageryLayer) {
+        guard layer != self.layer else { return }
+        self.layer = layer
+        session = nil
+        imageryYear = nil
     }
 
     func add(at coordinate: Coordinate) {
@@ -285,13 +301,18 @@ final class AutoPolygonController {
         isLoading = true
         message = nil
 
-        task = Task { [client] in
+        task = Task { [client, esriClient, layer] in
             do {
                 var start = previous
                 if start.map({ !$0.patch.contains(box) }) ?? true {
-                    let fetched = try await client.patch(covering: box)
-                    start = AutoPolygonSession(mode: mode, patch: fetched.patch)
-                    if current == self.generation { self.imageryYear = fetched.imagery.year }
+                    switch layer {
+                    case .naip:
+                        let fetched = try await client.patch(covering: box)
+                        start = AutoPolygonSession(mode: mode, patch: fetched.patch)
+                        if current == self.generation { self.imageryYear = fetched.imagery.year }
+                    case .esri:
+                        start = AutoPolygonSession(mode: mode, patch: try await esriClient.patch(covering: box))
+                    }
                 }
                 guard var session = start, !Task.isCancelled else { return }
                 session.operations = operations

@@ -7,9 +7,9 @@ enum FeatureSorter {
     /// The green itself is at distance zero and sorts last. Ties keep ascending ID order.
     ///
     /// The reference point is the center of the hole's green. When the hole has no green,
-    /// the end of its centerline is used. With neither, the features are returned unchanged.
-    static func sortedByDistanceFromGreen(_ features: [Feature], hole: Hole) -> [Feature] {
-        guard let target = greenReference(for: hole, features: features) else { return features }
+    /// the end of `centerline` is used. With neither, the features are returned unchanged.
+    static func sortedByDistanceFromGreen(_ features: [Feature], hole: Hole, centerline: CoordinatePath = []) -> [Feature] {
+        guard let target = greenReference(for: hole, features: features, centerline: centerline) else { return features }
         let targetLocation = target.clLocation
 
         let withDistance = features.map { feature in
@@ -23,10 +23,10 @@ enum FeatureSorter {
             .map(\.feature)
     }
 
-    private static func greenReference(for hole: Hole, features: [Feature]) -> Coordinate? {
+    private static func greenReference(for hole: Hole, features: [Feature], centerline: CoordinatePath) -> Coordinate? {
         if let green = hole.green(from: features), !green.polygon.isEmpty {
             return green.center
         }
-        return hole.centerline.last
+        return centerline.last
     }
 }

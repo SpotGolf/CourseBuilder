@@ -13,9 +13,18 @@ enum FeatureUndoRecord {
     case deleted(DeletedFeatureRecord)
     case replacedPolygon(featureID: Int, oldPolygon: [Coordinate])
     case added(featureID: Int)
+    /// A feature put back to its OSM type and points. Holds the feature as it was before.
+    case reverted(Feature)
 }
 
 enum PolygonEditorOperations {
+    /// The ID `offset` places after `current` in the list, stopping at either end. Nil when
+    /// `current` is not in the list.
+    static func adjacentFeatureID(current: Int, in ids: [Int], offset: Int) -> Int? {
+        guard let index = ids.firstIndex(of: current), !ids.isEmpty else { return nil }
+        return ids[min(ids.count - 1, max(0, index + offset))]
+    }
+
     static func adjacentVertexIndex(current: Int?, count: Int, offset: Int) -> Int? {
         guard count > 0 else { return nil }
         guard let current, (0..<count).contains(current) else {
@@ -108,6 +117,10 @@ enum PolygonEditorOperations {
             return true
         case .added(let featureID):
             return deleteFeature(id: featureID, from: &course) != nil
+        case .reverted(let feature):
+            guard let index = course.features.firstIndex(where: { $0.id == feature.id }) else { return false }
+            course.features[index] = feature
+            return true
         }
     }
 }

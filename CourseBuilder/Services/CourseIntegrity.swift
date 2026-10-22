@@ -7,20 +7,19 @@ struct CourseIntegrity {
         let featureIndex: Int
     }
 
-    struct TeeAssignment {
+    struct HoleLocation {
         let subCourseIndex: Int
         let holeIndex: Int
-        let teeName: String
     }
 
     struct FeatureReferences {
         let featureAssociations: [FeatureAssociation]
-        let teeAssignments: [TeeAssignment]
+        /// The holes whose centerline was the feature.
+        var centerlineHoles: [HoleLocation] = []
     }
 
     struct RepairReport: Equatable {
         let removedFeatureReferences: Int
-        let removedTeeAssignments: Int
         let removedYardages: Int
         let removedSubCourseTees: Int
         let removedComboTees: Int
@@ -28,14 +27,12 @@ struct CourseIntegrity {
 
         init(
             removedFeatureReferences: Int,
-            removedTeeAssignments: Int,
             removedYardages: Int = 0,
             removedSubCourseTees: Int = 0,
             removedComboTees: Int = 0,
             actions: [String] = []
         ) {
             self.removedFeatureReferences = removedFeatureReferences
-            self.removedTeeAssignments = removedTeeAssignments
             self.removedYardages = removedYardages
             self.removedSubCourseTees = removedSubCourseTees
             self.removedComboTees = removedComboTees
@@ -68,16 +65,10 @@ struct CourseIntegrity {
                     warnings.append("\(holeLabel): missing tee polygon")
                 }
 
-                if hole.centerline.isEmpty {
+                if let centerlineID = hole.centerline, course.findFeature(id: centerlineID) == nil {
+                    warnings.append("\(holeLabel): references missing centerline #\(centerlineID)")
+                } else if course.centerlinePath(for: hole).isEmpty {
                     warnings.append("\(holeLabel): missing centerline")
-                }
-
-                for teeName in hole.yardages.keys where hole.tees[teeName] == nil {
-                    warnings.append("\(holeLabel): tee \"\(teeName)\" has yardage but no polygon assigned")
-                }
-
-                for (teeName, featureID) in hole.tees where course.findFeature(id: featureID) == nil {
-                    warnings.append("\(holeLabel): tee \"\(teeName)\" references missing feature #\(featureID)")
                 }
 
                 for featureID in hole.features where course.findFeature(id: featureID) == nil {
@@ -91,8 +82,6 @@ struct CourseIntegrity {
                     }
                     if !combo.tees.contains(teeName) {
                         warnings.append("\(holeLabel): combo tee \"\(combo.name)\" plays from \"\(teeName)\", which is not part of the combo")
-                    } else if hole.tees[teeName] == nil {
-                        warnings.append("\(holeLabel): combo tee \"\(combo.name)\" plays from \"\(teeName)\", which has no polygon assigned")
                     }
                 }
 
@@ -111,6 +100,7 @@ struct CourseIntegrity {
         }
 
         let assignedFeatureIDs = Set(course.subCourses.flatMap(\.holes).flatMap(\.features))
+            .union(course.centerlineFeatureIDs)
         let unassignedFeatures = course.features.filter { !assignedFeatureIDs.contains($0.id) }
         if !unassignedFeatures.isEmpty {
             let ids = unassignedFeatures.map { "#\($0.id)" }.joined(separator: ", ")
@@ -127,14 +117,18 @@ struct CourseIntegrity {
 
     @discardableResult
     static func cleanup(_ course: inout Course) -> RepairReport {
+        // A centerline feature no hole uses cannot be seen or edited in the map editor.
+        let usedCenterlineIDs = course.centerlineFeatureIDs
+        let unusedCenterlines = course.features.filter { $0.type == .centerline && !usedCenterlineIDs.contains($0.id) }
+        course.features.removeAll { $0.type == .centerline && !usedCenterlineIDs.contains($0.id) }
+
         let validFeatureIDs = Set(course.features.map(\.id))
         let validTeeNames = Set(course.tees.map(\.name))
         var removedFeatureReferences = 0
         var removedComboTees = 0
-        var removedTeeAssignments = 0
         var removedYardages = 0
         var removedSubCourseTees = 0
-        var actions: [String] = []
+        var actions: [String] = unusedCenterlines.map { "Removed centerline #\($0.id) because no hole uses it" }
 
         for combo in course.comboTees where combo.tees.contains(where: { !validTeeNames.contains($0) }) {
             course.comboTees.removeAll { $0.name == combo.name }
@@ -167,27 +161,18 @@ struct CourseIntegrity {
                 course.subCourses[subCourseIndex].holes[holeIndex].features.removeAll {
                     !validFeatureIDs.contains($0)
                 }
+                if let centerlineID = course.subCourses[subCourseIndex].holes[holeIndex].centerline,
+                   !validFeatureIDs.contains(centerlineID) {
+                    course.subCourses[subCourseIndex].holes[holeIndex].centerline = nil
+                    removedFeatureReferences += 1
+                    actions.append("Hole \(holeNumber): removed missing centerline reference #\(centerlineID)")
+                }
 
                 let yardageTeeNames = course.subCourses[subCourseIndex].holes[holeIndex].yardages.keys.sorted()
                 for teeName in yardageTeeNames where !validTeeNames.contains(teeName) {
                     course.subCourses[subCourseIndex].holes[holeIndex].yardages.removeValue(forKey: teeName)
                     removedYardages += 1
                     actions.append("Hole \(holeNumber): removed yardage for undefined tee \"\(teeName)\"")
-                }
-
-                let teeAssignments = course.subCourses[subCourseIndex].holes[holeIndex].tees
-                for teeName in teeAssignments.keys.sorted() {
-                    guard let featureID = teeAssignments[teeName] else { continue }
-                    if !validTeeNames.contains(teeName) {
-                        actions.append("Hole \(holeNumber): removed assignment for undefined tee \"\(teeName)\"")
-                        removedTeeAssignments += 1
-                    } else if !validFeatureIDs.contains(featureID) {
-                        actions.append("Hole \(holeNumber): removed tee \"\(teeName)\" assignment to missing feature #\(featureID)")
-                        removedTeeAssignments += 1
-                    }
-                }
-                course.subCourses[subCourseIndex].holes[holeIndex].tees = teeAssignments.filter {
-                    validTeeNames.contains($0.key) && validFeatureIDs.contains($0.value)
                 }
 
                 let comboAssignments = course.subCourses[subCourseIndex].holes[holeIndex].comboTees
@@ -207,7 +192,6 @@ struct CourseIntegrity {
 
         return RepairReport(
             removedFeatureReferences: removedFeatureReferences,
-            removedTeeAssignments: removedTeeAssignments,
             removedYardages: removedYardages,
             removedSubCourseTees: removedSubCourseTees,
             removedComboTees: removedComboTees,
@@ -243,11 +227,6 @@ struct CourseIntegrity {
                     to: newName,
                     in: &course.subCourses[subCourseIndex].holes[holeIndex].yardages
                 )
-                moveValue(
-                    from: oldName,
-                    to: newName,
-                    in: &course.subCourses[subCourseIndex].holes[holeIndex].tees
-                )
                 course.subCourses[subCourseIndex].holes[holeIndex].comboTees =
                     course.subCourses[subCourseIndex].holes[holeIndex].comboTees.mapValues { $0 == oldName ? newName : $0 }
             }
@@ -255,21 +234,17 @@ struct CourseIntegrity {
         return true
     }
 
-    /// What uses a tee: the number of holes with a tee box assigned to it and the combo tees made from it.
+    /// What uses a tee: the combo tees made from it.
     struct TeeUsage: Equatable {
-        let holesWithTeeBox: Int
         let comboTees: [String]
 
         var isInUse: Bool {
-            holesWithTeeBox > 0 || !comboTees.isEmpty
+            !comboTees.isEmpty
         }
     }
 
     static func usage(ofTeeNamed teeName: String, in course: Course) -> TeeUsage {
-        TeeUsage(
-            holesWithTeeBox: course.subCourses.flatMap(\.holes).filter { $0.tees[teeName] != nil }.count,
-            comboTees: course.comboTees.filter { $0.tees.contains(teeName) }.map(\.name)
-        )
+        TeeUsage(comboTees: course.comboTees.filter { $0.tees.contains(teeName) }.map(\.name))
     }
 
     static func removeTee(at index: Int, from course: inout Course) {
@@ -283,7 +258,6 @@ struct CourseIntegrity {
             course.subCourses[subCourseIndex].tees.removeValue(forKey: teeName)
             for holeIndex in course.subCourses[subCourseIndex].holes.indices {
                 course.subCourses[subCourseIndex].holes[holeIndex].yardages.removeValue(forKey: teeName)
-                course.subCourses[subCourseIndex].holes[holeIndex].tees.removeValue(forKey: teeName)
             }
         }
     }
@@ -295,7 +269,7 @@ struct CourseIntegrity {
 
     static func removeReferences(to featureID: Int, from course: inout Course) -> FeatureReferences {
         var featureAssociations: [FeatureAssociation] = []
-        var teeAssignments: [TeeAssignment] = []
+        var centerlineHoles: [HoleLocation] = []
 
         for subCourseIndex in course.subCourses.indices {
             for holeIndex in course.subCourses[subCourseIndex].holes.indices {
@@ -309,25 +283,17 @@ struct CourseIntegrity {
                         )
                         : nil
                 })
-                teeAssignments.append(contentsOf: hole.tees.compactMap { teeName, id in
-                    id == featureID
-                        ? TeeAssignment(
-                            subCourseIndex: subCourseIndex,
-                            holeIndex: holeIndex,
-                            teeName: teeName
-                        )
-                        : nil
-                })
 
                 course.subCourses[subCourseIndex].holes[holeIndex].features.removeAll { $0 == featureID }
-                course.subCourses[subCourseIndex].holes[holeIndex].tees = hole.tees.filter { $0.value != featureID }
+
+                if hole.centerline == featureID {
+                    centerlineHoles.append(HoleLocation(subCourseIndex: subCourseIndex, holeIndex: holeIndex))
+                    course.subCourses[subCourseIndex].holes[holeIndex].centerline = nil
+                }
             }
         }
 
-        return FeatureReferences(
-            featureAssociations: featureAssociations,
-            teeAssignments: teeAssignments
-        )
+        return FeatureReferences(featureAssociations: featureAssociations, centerlineHoles: centerlineHoles)
     }
 
     static func restoreReferences(_ references: FeatureReferences, to featureID: Int, in course: inout Course) {
@@ -342,13 +308,12 @@ struct CourseIntegrity {
                 at: min(association.featureIndex, featureCount)
             )
         }
-
-        for assignment in references.teeAssignments {
-            guard course.subCourses.indices.contains(assignment.subCourseIndex),
-                  course.subCourses[assignment.subCourseIndex].holes.indices.contains(assignment.holeIndex) else {
+        for location in references.centerlineHoles {
+            guard course.subCourses.indices.contains(location.subCourseIndex),
+                  course.subCourses[location.subCourseIndex].holes.indices.contains(location.holeIndex) else {
                 continue
             }
-            course.subCourses[assignment.subCourseIndex].holes[assignment.holeIndex].tees[assignment.teeName] = featureID
+            course.subCourses[location.subCourseIndex].holes[location.holeIndex].centerline = featureID
         }
     }
 }

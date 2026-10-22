@@ -7,7 +7,6 @@ struct CourseIntegrityTests {
         let validFeature = Feature(id: 1, type: .tee, polygon: [])
         var course = makeCourse(features: [validFeature])
         course.subCourses[0].holes[0].features = [1, 99]
-        course.subCourses[0].holes[0].tees = ["Blue": 98]
         course.subCourses[0].holes[0].yardages = ["Blue": 400, "White": 375]
 
         let warnings = CourseIntegrity.validateCourse(course)
@@ -15,9 +14,9 @@ struct CourseIntegrityTests {
         #expect(warnings.contains("Hole 1: missing green polygon"))
         #expect(warnings.contains("Hole 1: missing fairway polygon"))
         #expect(warnings.contains("Hole 1: missing centerline"))
-        #expect(warnings.contains("Hole 1: tee \"White\" has yardage but no polygon assigned"))
-        #expect(warnings.contains("Hole 1: tee \"Blue\" references missing feature #98"))
         #expect(warnings.contains("Hole 1: references missing feature #99"))
+        // Tee boxes are not tied to tee names, so yardages need no tee box.
+        #expect(!warnings.contains { $0.contains("\"Blue\"") || $0.contains("\"White\"") })
     }
 
     @Test func repairRemovesOnlyDanglingReferences() {
@@ -28,21 +27,17 @@ struct CourseIntegrityTests {
             TeeDefinition(name: "White", color: "#FFFFFF"),
         ]
         course.subCourses[0].holes[0].features = [1, 98, 99]
-        course.subCourses[0].holes[0].tees = ["Blue": 1, "White": 98]
         course.subCourses[0].holes[0].yardages = ["Blue": 400, "White": 375]
 
         let report = CourseIntegrity.repairDanglingReferences(in: &course)
 
         #expect(report.removedFeatureReferences == 2)
-        #expect(report.removedTeeAssignments == 1)
         #expect(report.madeChanges)
         #expect(report.actions == [
             "Hole 1: removed missing feature reference #98",
             "Hole 1: removed missing feature reference #99",
-            "Hole 1: removed tee \"White\" assignment to missing feature #98",
         ])
         #expect(course.subCourses[0].holes[0].features == [1])
-        #expect(course.subCourses[0].holes[0].tees == ["Blue": 1])
         #expect(course.subCourses[0].holes[0].yardages == ["Blue": 400, "White": 375])
     }
 
@@ -51,13 +46,11 @@ struct CourseIntegrityTests {
         var course = makeCourse(features: [tee])
         course.tees = [TeeDefinition(name: "Blue", color: "#0000FF")]
         course.subCourses[0].holes[0].features = [1]
-        course.subCourses[0].holes[0].tees = ["Blue": 1]
 
         let report = CourseIntegrity.repairDanglingReferences(in: &course)
 
         #expect(!report.madeChanges)
         #expect(report.removedFeatureReferences == 0)
-        #expect(report.removedTeeAssignments == 0)
         #expect(report.actions.isEmpty)
     }
 
@@ -69,16 +62,13 @@ struct CourseIntegrityTests {
             "Blue (Member)": SubCourseTee(),
         ]
         course.subCourses[0].holes[0].yardages = ["Blue": 400, "Blue (Member)": 390]
-        course.subCourses[0].holes[0].tees = ["Blue": 1, "Blue (Member)": 1]
 
         let report = CourseIntegrity.cleanup(&course)
 
         #expect(report.removedYardages == 1)
-        #expect(report.removedTeeAssignments == 1)
         #expect(report.removedSubCourseTees == 1)
         #expect(course.subCourses[0].tees.keys.sorted() == ["Blue"])
         #expect(course.subCourses[0].holes[0].yardages == ["Blue": 400])
-        #expect(course.subCourses[0].holes[0].tees == ["Blue": 1])
     }
 
     @Test func renameTeeMigratesEveryTeeKey() {
@@ -86,7 +76,6 @@ struct CourseIntegrityTests {
         course.tees = [TeeDefinition(name: "Blue (Member)", color: "#0000FF")]
         course.subCourses[0].tees = ["Blue (Member)": SubCourseTee()]
         course.subCourses[0].holes[0].yardages = ["Blue (Member)": 390]
-        course.subCourses[0].holes[0].tees = ["Blue (Member)": 1]
 
         let renamed = CourseIntegrity.renameTee(at: 0, to: "Blue", in: &course)
 
@@ -94,7 +83,6 @@ struct CourseIntegrityTests {
         #expect(course.tees[0].name == "Blue")
         #expect(course.subCourses[0].tees.keys.sorted() == ["Blue"])
         #expect(course.subCourses[0].holes[0].yardages == ["Blue": 390])
-        #expect(course.subCourses[0].holes[0].tees == ["Blue": 1])
     }
 
     @Test func renameTeeRejectsDuplicateNameWithoutChangingData() {
@@ -117,25 +105,22 @@ struct CourseIntegrityTests {
         course.tees = [TeeDefinition(name: "Blue", color: "#0000FF")]
         course.subCourses[0].tees = ["Blue": SubCourseTee()]
         course.subCourses[0].holes[0].yardages = ["Blue": 400]
-        course.subCourses[0].holes[0].tees = ["Blue": 1]
 
         CourseIntegrity.removeTee(at: 0, from: &course)
 
         #expect(course.tees.isEmpty)
         #expect(course.subCourses[0].tees.isEmpty)
         #expect(course.subCourses[0].holes[0].yardages.isEmpty)
-        #expect(course.subCourses[0].holes[0].tees.isEmpty)
     }
 
     @Test func validationReportsComboTeeProblems() {
         var course = comboCourse()
         course.comboTees.append(ComboTeeDefinition(name: "Gold/Blue", tees: ["Gold", "Blue"]))
         course.subCourses[0].holes[0].comboTees = ["Blue/White": "White", "Gold/Blue": "Red", "Old": "Blue"]
-        course.subCourses[0].holes[0].tees = ["Blue": 1]
 
         let warnings = CourseIntegrity.validateCourse(course)
 
-        #expect(warnings.contains("Hole 1: combo tee \"Blue/White\" plays from \"White\", which has no polygon assigned"))
+        #expect(!warnings.contains { $0.contains("\"Blue/White\" plays from") })
         #expect(warnings.contains("Hole 1: combo tee \"Gold/Blue\" plays from \"Red\", which is not part of the combo"))
         #expect(warnings.contains("Hole 1: references undefined combo tee \"Old\""))
         #expect(warnings.contains("Combo tee \"Gold/Blue\" uses undefined tee \"Gold\""))
@@ -146,7 +131,6 @@ struct CourseIntegrityTests {
 
     @Test func validationAcceptsValidComboTee() {
         var course = comboCourse()
-        course.subCourses[0].holes[0].tees = ["Blue": 1, "White": 1]
 
         let warnings = CourseIntegrity.validateCourse(course)
 
@@ -207,17 +191,14 @@ struct CourseIntegrityTests {
         #expect(course.subCourses[0].holes[0].comboTees.isEmpty)
     }
 
-    @Test func usageCountsTeeBoxesAndComboTees() {
+    @Test func usageListsComboTees() {
         var course = comboCourse()
-        course.subCourses[0].holes.append(Hole(number: 2, par: 3))
-        course.subCourses[0].holes[0].tees = ["White": 1]
 
-        #expect(CourseIntegrity.usage(ofTeeNamed: "White", in: course) == .init(holesWithTeeBox: 1, comboTees: ["Blue/White"]))
-        #expect(CourseIntegrity.usage(ofTeeNamed: "Blue", in: course) == .init(holesWithTeeBox: 0, comboTees: ["Blue/White"]))
+        #expect(CourseIntegrity.usage(ofTeeNamed: "White", in: course) == .init(comboTees: ["Blue/White"]))
+        #expect(CourseIntegrity.usage(ofTeeNamed: "Blue", in: course) == .init(comboTees: ["Blue/White"]))
         #expect(CourseIntegrity.usage(ofTeeNamed: "White", in: course).isInUse)
 
         course.comboTees = []
-        course.subCourses[0].holes[0].tees = [:]
         #expect(!CourseIntegrity.usage(ofTeeNamed: "White", in: course).isInUse)
     }
 
@@ -234,6 +215,50 @@ struct CourseIntegrityTests {
         course.features[0].polygon = [Coordinate(lat: 1, lon: 1, ele: 5), Coordinate(lat: 2, lon: 2, ele: 10)]
 
         #expect(!CourseIntegrity.validateCourse(course).contains { $0.contains("elevation") })
+    }
+
+    @Test func validationReportsMissingCenterlineFeature() {
+        var course = makeCourse(features: [])
+        course.subCourses[0].holes[0].centerline = 7
+
+        let warnings = CourseIntegrity.validateCourse(course)
+
+        #expect(warnings.contains("Hole 1: references missing centerline #7"))
+        #expect(!warnings.contains("Hole 1: missing centerline"))
+    }
+
+    @Test func validationDoesNotReportCenterlineAsUnassigned() {
+        var course = makeCourse(features: [])
+        course.setCenterline([Coordinate(lat: 0, lon: 0), Coordinate(lat: 1, lon: 1)], subCourseIndex: 0, holeIndex: 0)
+
+        let warnings = CourseIntegrity.validateCourse(course)
+
+        #expect(!warnings.contains { $0.contains("unassigned") })
+        #expect(!warnings.contains("Hole 1: missing centerline"))
+    }
+
+    @Test func cleanupRemovesMissingCenterlineReferenceAndUnusedCenterlines() {
+        var course = makeCourse(features: [Feature(id: 5, type: .centerline, polygon: [Coordinate(lat: 0, lon: 0)])])
+        course.subCourses[0].holes[0].centerline = 7
+
+        let report = CourseIntegrity.cleanup(&course)
+
+        #expect(course.subCourses[0].holes[0].centerline == nil)
+        #expect(course.features.isEmpty)
+        #expect(report.actions.contains("Hole 1: removed missing centerline reference #7"))
+        #expect(report.actions.contains("Removed centerline #5 because no hole uses it"))
+    }
+
+    @Test func deletingCenterlineFeatureClearsAndRestoresHoleReference() throws {
+        var course = makeCourse(features: [])
+        course.setCenterline([Coordinate(lat: 0, lon: 0), Coordinate(lat: 1, lon: 1)], subCourseIndex: 0, holeIndex: 0)
+        let id = try #require(course.subCourses[0].holes[0].centerline)
+
+        let record = try #require(PolygonEditorOperations.deleteFeature(id: id, from: &course))
+        #expect(course.subCourses[0].holes[0].centerline == nil)
+
+        PolygonEditorOperations.restoreFeature(record, to: &course)
+        #expect(course.subCourses[0].holes[0].centerline == id)
     }
 
     private func comboCourse() -> Course {

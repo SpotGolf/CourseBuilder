@@ -2,16 +2,15 @@ import Foundation
 import CourseDataSwift
 
 extension Course {
-    /// Whether any feature polygon point or hole centerline point has no elevation.
+    /// Whether any feature point, including centerline points, has no elevation.
     var isMissingElevations: Bool {
         features.contains { $0.polygon.contains { $0.ele == nil } }
-            || subCourses.contains { $0.holes.contains { $0.centerline.contains { $0.ele == nil } } }
     }
 }
 
 enum ElevationUpdater {
     /// Returns a copy of the course with an elevation on every coordinate that lacked one:
-    /// the course location, feature polygons, and hole centerlines.
+    /// the course location and feature points, including centerlines.
     ///
     /// Throws ``USGSElevationClient/ElevationError/noData(missing:total:)`` if any point
     /// could not be resolved, so a course is never saved partially updated.
@@ -134,11 +133,6 @@ enum ElevationUpdater {
         for feature in course.features {
             feature.polygon.forEach(body)
         }
-        for subCourse in course.subCourses {
-            for hole in subCourse.holes {
-                hole.centerline.forEach(body)
-            }
-        }
     }
 
     /// Visits every coordinate in the course file, always in the same order.
@@ -146,11 +140,6 @@ enum ElevationUpdater {
         body(&course.location.coordinate)
         for f in course.features.indices {
             course.features[f].polygon = updating(course.features[f].polygon, body)
-        }
-        for s in course.subCourses.indices {
-            for h in course.subCourses[s].holes.indices {
-                course.subCourses[s].holes[h].centerline = updating(course.subCourses[s].holes[h].centerline, body)
-            }
         }
     }
 

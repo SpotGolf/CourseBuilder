@@ -36,4 +36,20 @@ struct HoleFeatureSetsTests {
         #expect(sets.current.isEmpty)
         #expect(sets.unassociated.map(\.id) == [1])
     }
+
+    @Test func centerlinesAreNotUnassociated() {
+        let course = Course(
+            name: "Test",
+            location: CourseLocation(address: "", city: "", state: "", country: "US", coordinate: Coordinate(lat: 0, lon: 0)),
+            features: [
+                Feature(id: 1, type: .centerline, polygon: []),
+                Feature(id: 2, type: .centerline, polygon: []),
+            ],
+            subCourses: [SubCourse(name: "Front", holes: [Hole(number: 1, par: 4, centerline: 1)])]
+        )
+
+        let sets = HoleFeatureSets(course: course, hole: nil)
+
+        #expect(sets.unassociated.isEmpty)
+    }
 }

@@ -51,6 +51,10 @@ actor NAIPImageryClient {
     private let session: URLSession
     private let cacheDirectory: URL?
     private var registered: [Imagery] = []
+    /// Registrations in progress, so map tiles that load together share one.
+    private var registering: [(box: BoundingBox, task: Task<Imagery, Error>)] = []
+    /// Padded areas found to have no NAIP imagery.
+    private var uncovered: [BoundingBox] = []
 
     init(session: URLSession = .shared, cacheDirectory: URL? = NAIPImageryClient.defaultCacheDirectory) {
         self.session = session
@@ -102,11 +106,33 @@ actor NAIPImageryClient {
         return (patch, imagery)
     }
 
+    /// One RGB map tile of the newest NAIP imagery around it, or nil where there is none.
+    /// Tiles are placed by NAD83 coordinates; see `NAD83`.
+    func mapTile(zoom: Int, x: Int, y: Int) async throws -> CGImage? {
+        let size = CGFloat(WebMercator.tileSize)
+        let northWest = WebMercator.coordinate(forPixel: CGPoint(x: CGFloat(x) * size, y: CGFloat(y) * size), zoom: zoom)
+        let southEast = WebMercator.coordinate(forPixel: CGPoint(x: CGFloat(x + 1) * size, y: CGFloat(y + 1) * size), zoom: zoom)
+        let box = BoundingBox(south: southEast.lat, west: northWest.lon, north: northWest.lat, east: southEast.lon)
+        let imagery: Imagery
+        do {
+            imagery = try await self.imagery(for: box)
+        } catch NAIPError.noCoverage {
+            return nil
+        }
+        return try await tileImage(TileKey(x: x, y: y), zoom: zoom, imagery: imagery, bands: .rgb)
+    }
+
     // MARK: - Imagery Lookup
 
     private func imagery(for box: BoundingBox) async throws -> Imagery {
         if let existing = registered.first(where: { $0.box.contains(box) }) {
             return existing
+        }
+        if uncovered.contains(where: { $0.contains(box) }) {
+            throw NAIPError.noCoverage
+        }
+        if let pending = registering.first(where: { $0.box.contains(box) }) {
+            return try await pending.task.value
         }
         let padded = BoundingBox(
             south: box.south - Self.registrationPadding,
@@ -114,14 +140,26 @@ actor NAIPImageryClient {
             north: box.north + Self.registrationPadding,
             east: box.east + Self.registrationPadding
         )
+        let task = Task { try await self.register(padded) }
+        registering.append((padded, task))
+        defer { registering.removeAll { $0.box == padded } }
+        do {
+            let imagery = try await task.value
+            registered.append(imagery)
+            return imagery
+        } catch NAIPError.noCoverage {
+            uncovered.append(padded)
+            throw NAIPError.noCoverage
+        }
+    }
+
+    private func register(_ padded: BoundingBox) async throws -> Imagery {
         let searchData = try await send(Self.buildSearchRequest(for: padded))
         guard let newest = try Self.parseNewestYear(data: searchData) else { throw NAIPError.noCoverage }
         let registerData = try await send(Self.buildRegisterRequest(for: padded, year: newest.year))
         let searchID = try Self.parseSearchID(data: registerData)
-        let imagery = Imagery(searchID: searchID, year: newest.year, gsd: newest.gsd, box: padded)
         logger.info("Registered NAIP \(newest.year) mosaic (gsd \(newest.gsd) m)")
-        registered.append(imagery)
-        return imagery
+        return Imagery(searchID: searchID, year: newest.year, gsd: newest.gsd, box: padded)
     }
 
     static func buildSearchRequest(for box: BoundingBox) -> URLRequest {
@@ -258,7 +296,7 @@ actor NAIPImageryClient {
             .appendingPathComponent("\(key.y)-\(bands == .rgb ? "rgb" : "nir").png")
 
         if let cacheFile, let data = try? Data(contentsOf: cacheFile) {
-            return ImagePatch.decodePNG(data)
+            return ImagePatch.decodeImage(data)
         }
 
         let url = Self.tileURL(searchID: imagery.searchID, zoom: zoom, x: key.x, y: key.y, bands: bands)
@@ -272,7 +310,7 @@ actor NAIPImageryClient {
             try? FileManager.default.createDirectory(at: cacheFile.deletingLastPathComponent(), withIntermediateDirectories: true)
             try? data.write(to: cacheFile, options: .atomic)
         }
-        return ImagePatch.decodePNG(data)
+        return ImagePatch.decodeImage(data)
     }
 
     private func send(_ request: URLRequest) async throws -> Data {

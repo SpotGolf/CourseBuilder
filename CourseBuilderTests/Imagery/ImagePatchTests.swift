@@ -31,4 +31,25 @@ struct ImagePatchTests {
         #expect(patch.contains(inside))
         #expect(!patch.contains(outside))
     }
+
+    @Test func downsampledAveragesBlocks() {
+        var patch = ImagePatch(zoom: 20, originX: 1024, originY: 512, width: 512, height: 512)
+        patch.hasNearInfrared = false
+        // Top-left 2×2 block: three valid pixels and one empty.
+        for (i, value) in [(patch.index(0, 0), 10), (patch.index(1, 0), 20), (patch.index(0, 1), 30)] {
+            patch.red[i] = UInt8(value)
+            patch.valid[i] = true
+        }
+
+        let small = patch.downsampled(by: 2)
+
+        #expect(small.zoom == 19)
+        #expect(small.originX == 512 && small.originY == 256)
+        #expect(small.width == 256 && small.height == 256)
+        #expect(!small.hasNearInfrared)
+        #expect(small.valid[small.index(0, 0)])
+        #expect(small.red[small.index(0, 0)] == 20)
+        #expect(!small.valid[small.index(1, 0)])
+        #expect(abs(small.metersPerPixel - patch.metersPerPixel * 2) < 0.001)
+    }
 }

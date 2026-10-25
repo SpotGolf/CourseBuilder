@@ -132,7 +132,7 @@ struct PublishToOSMSheet: View {
         let isConflict: Bool
     }
 
-    /// Conflicts first, then changed, multipolygon, new, and deleted. Each group is in hole order.
+    /// Conflicts first, then changed, multipolygon, course outline, new, and deleted. Each group is in hole order.
     private var rows: [Row] {
         let holeOrder = Self.holeOrder(in: course)
         return changes
@@ -150,7 +150,7 @@ struct PublishToOSMSheet: View {
                 return Row(
                     id: change.id,
                     action: Self.actionName(change.action),
-                    type: change.type.rawValue.capitalized,
+                    type: change.action == .courseOutline ? "Outline" : change.type.rawValue.capitalized,
                     feature: change.featureID.map { "#\($0)" } ?? "",
                     hole: change.featureID.flatMap { holeOrder[$0].map { "Hole \($0.number)" } } ?? "",
                     osmID: change.osmID ?? "",
@@ -164,6 +164,7 @@ struct PublishToOSMSheet: View {
         switch action {
         case .modify: "Changed"
         case .multipolygon: "Multipolygon"
+        case .courseOutline: "Course outline"
         case .create: "New"
         case .delete: "Deleted"
         }
@@ -172,6 +173,9 @@ struct PublishToOSMSheet: View {
     static func detail(for change: OSMFeatureChange) -> String {
         if change.action == .multipolygon {
             return "inner: \(change.innerOSMIDs.joined(separator: ", "))"
+        }
+        if change.action == .courseOutline {
+            return change.osmID?.hasPrefix("n") == true ? "replaces the node" : "takes tags from it"
         }
         var parts: [String] = []
         if change.pointsChanged { parts.append("points") }

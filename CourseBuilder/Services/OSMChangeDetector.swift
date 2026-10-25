@@ -4,7 +4,7 @@ import CourseDataSwift
 /// One difference between a course and its ``OSMBaseline``.
 struct OSMFeatureChange: Hashable, Identifiable {
     enum Action: Int, Comparable {
-        case modify, multipolygon, create, delete
+        case modify, multipolygon, courseOutline, create, delete
 
         static func < (lhs: Action, rhs: Action) -> Bool { lhs.rawValue < rhs.rawValue }
     }
@@ -12,7 +12,8 @@ struct OSMFeatureChange: Hashable, Identifiable {
     let action: Action
     /// The course feature. Nil for a deleted feature.
     let featureID: Int?
-    /// The feature's type. For a deleted feature, the type from the baseline.
+    /// The feature's type. For a deleted feature, the type from the baseline. Not used for a
+    /// course outline.
     let type: FeatureType
     let osmID: String?
     /// The baseline type, when the type changed.
@@ -26,6 +27,8 @@ struct OSMFeatureChange: Hashable, Identifiable {
     /// For a points change, the other OSM ways with nodes at the feature's new points. The way
     /// reuses their nodes, such as a fairway reshaped to follow the edge of a green.
     var sharedNodeOSMIDs: [String] = []
+    /// For a course outline change, the outline to create. ``osmID`` is the misplaced element.
+    var courseOutline: PendingCourseOutline? = nil
 
     var id: String { "\(action)-\(featureID.map(String.init) ?? "")-\(osmID ?? "")" }
 }
@@ -35,7 +38,7 @@ enum OSMChangeDetector {
     static let samePointMeters = 0.5
 
     /// The changes between the course and the baseline: modified, then made into multipolygons,
-    /// then created, then deleted.
+    /// then the course outline, then created, then deleted.
     ///
     /// Point edits on a relation are sent as edits to its outer way. Features in `ignoredOSMIDs`
     /// are left out of the course on purpose, not deleted, so they are not deleted from OSM.
@@ -82,6 +85,16 @@ enum OSMChangeDetector {
                 type: fairway.type,
                 osmID: pending.fairwayOSMID,
                 innerOSMIDs: inner
+            ))
+        }
+
+        if let outline = baseline.pendingCourseOutline, let element = baseline.misplacedCourseElement {
+            changes.append(OSMFeatureChange(
+                action: .courseOutline,
+                featureID: nil,
+                type: .fairway,
+                osmID: element.osmID,
+                courseOutline: outline
             ))
         }
 

@@ -52,6 +52,8 @@ struct MapEditorView: View {
     @State private var isSigningInToOSM = false
     @State private var publishRequest: PublishRequest?
     @State private var publishedChangeset: (id: Int, url: URL)?
+    /// Whether the course outline tag sheet is showing.
+    @State private var isShowingCourseOutlineSheet = false
     private let baselineStore = OSMBaselineStore()
 
     /// What the publish dialog needs once the user is signed in.
@@ -223,6 +225,13 @@ struct MapEditorView: View {
         }
         .onChange(of: course.features) {
             updateOSMChanges()
+        }
+        .sheet(isPresented: $isShowingCourseOutlineSheet) {
+            if let element = osmBaseline?.misplacedCourseElement {
+                CourseOutlineSheet(element: element, outline: osmBaseline?.pendingCourseOutline) { tags, tagsOldElementClubhouse in
+                    saveCourseOutlineTags(tags, tagsOldElementClubhouse: tagsOldElementClubhouse)
+                }
+            }
         }
         .sheet(item: $publishRequest) { request in
             PublishToOSMSheet(
@@ -629,6 +638,13 @@ struct MapEditorView: View {
             }
             .disabled(isImportingOSM || !course.features.isEmpty)
 
+            if osmBaseline?.misplacedCourseElement != nil && osmBaseline?.pendingCourseOutline == nil && !isMappingMode {
+                Button("Fix Course Outline…") {
+                    isShowingCourseOutlineSheet = true
+                }
+                .help("The leisure=golf_course tag in OSM is not on an outline of the whole course")
+            }
+
             if !osmChanges.isEmpty && !isMappingMode {
                 Button {
                     Task { await startOSMPublish() }
@@ -694,11 +710,11 @@ struct MapEditorView: View {
                isEditingFeature,
                let featureID = selectedFeatureID,
                let vertexIdx = selectedVertexIndex,
-               let feature = course.findFeature(id: featureID),
-               vertexIdx < feature.polygon.count {
+               let polygon = editablePolygon(id: featureID),
+               vertexIdx < polygon.count {
                 VertexDragHandle(
                     camera: camera,
-                    coordinate: feature.polygon[vertexIdx],
+                    coordinate: polygon[vertexIdx],
                     onDragStarted: { isDraggingVertex = true },
                     onDragEnded: { translation in
                         updateVertexAfterDrag(featureID: featureID, vertexIndex: vertexIdx, translation: translation)
@@ -736,10 +752,10 @@ struct MapEditorView: View {
                         guard activeTool == .select,
                               isEditingFeature,
                               let featureID = selectedFeatureID,
-                              let feature = course.findFeature(id: featureID),
+                              let polygon = editablePolygon(id: featureID),
                               let edge = PolygonEditorOperations.nearestEdge(
                                 to: tap.location,
-                                polygon: Array(feature.polygon),
+                                polygon: Array(polygon),
                                 convert: { projection.point(for: Coordinate($0)) }
                               ) else {
                             camera.zoomIn(anchor: tap.location)
@@ -771,6 +787,19 @@ struct MapEditorView: View {
     /// Everything drawn on the map, bottom to top.
     private func mapShapes(_ featureSets: HoleFeatureSets) -> [MapShape] {
         var shapes: [MapShape] = []
+
+        // Pending course outline, under every feature
+        if let outline = osmBaseline?.pendingCourseOutline, !isMappingMode {
+            let isSelected = selectedFeatureID == CourseOutline.featureID
+            shapes.append(MapShape(
+                kind: .polygon,
+                coordinates: outline.coordinates,
+                fill: .clear,
+                stroke: .white,
+                lineWidth: isSelected ? 3 : 2,
+                dash: [6, 4]
+            ))
+        }
 
         // Centerline groups during mapping mode
         if isMappingMode {
@@ -916,8 +945,8 @@ struct MapEditorView: View {
         // Vertex handles for selected feature (only in edit mode)
         if isEditingFeature,
            let featureID = selectedFeatureID,
-           let feature = course.findFeature(id: featureID) {
-            for (index, coord) in feature.polygon.enumerated() {
+           let polygon = editablePolygon(id: featureID) {
+            for (index, coord) in polygon.enumerated() {
                 let isSelected = selectedVertexIndex == index
                 markers.append(MapMarker(
                     id: "vertex-\(index)",
@@ -977,7 +1006,9 @@ struct MapEditorView: View {
 
             Divider()
 
-            if let featureID = selectedFeatureID,
+            if selectedFeatureID == CourseOutline.featureID, let outline = osmBaseline?.pendingCourseOutline {
+                courseOutlineInspector(outline)
+            } else if let featureID = selectedFeatureID,
                let featureIndex = course.features.firstIndex(where: { $0.id == featureID }),
                selectedHoleIndex < course.subCourses[selectedSubCourseIndex].holes.count {
                 FeatureEditorView(
@@ -1321,13 +1352,20 @@ struct MapEditorView: View {
         // In feature edit mode, check if tapping near a vertex of the selected feature
         if isEditingFeature,
            let featureID = selectedFeatureID,
-           let feature = course.findFeature(id: featureID) {
-            for (index, vertex) in feature.polygon.enumerated() {
+           let polygon = editablePolygon(id: featureID) {
+            for (index, vertex) in polygon.enumerated() {
                 if isClose(point, to: vertex) {
                     selectedVertexIndex = index
                     return
                 }
             }
+        }
+
+        // The course outline's line. Clicking inside it does not select it, so features stay clickable.
+        if let outline = osmBaseline?.pendingCourseOutline, let first = outline.coordinates.first,
+           distanceToPolyline(from: point, polyline: CoordinatePath(outline.coordinates + [first])) < camera.projection.latitudeDegrees(forPoints: 8) {
+            selectOrEdit(id: CourseOutline.featureID)
+            return
         }
 
         // Check all features, sorted by type priority so small features (tees, greens)
@@ -1387,24 +1425,29 @@ struct MapEditorView: View {
     }
 
     private func selectOrEditFeature(_ feature: Feature) {
-        if selectedFeatureID == feature.id && !isEditingFeature {
+        selectOrEdit(id: feature.id)
+    }
+
+    /// Selects the feature or course outline, or starts editing it when it is already selected.
+    private func selectOrEdit(id: Int) {
+        if selectedFeatureID == id && !isEditingFeature {
             // Second click enters edit mode
             beginEditingSelectedFeature()
         } else {
             deselectAll()
-            selectedFeatureID = feature.id
+            selectedFeatureID = id
         }
     }
 
     @discardableResult
     private func beginEditingSelectedFeature() -> Bool {
         guard let featureID = selectedFeatureID,
-              let feature = course.findFeature(id: featureID),
-              !feature.polygon.isEmpty else { return false }
+              let polygon = editablePolygon(id: featureID),
+              !polygon.isEmpty else { return false }
 
         isEditingFeature = true
         if let hoveredCoordinate = camera.hoveredCoordinate {
-            selectedVertexIndex = PolygonEditorOperations.nearestVertexIndex(to: hoveredCoordinate, in: Array(feature.polygon))
+            selectedVertexIndex = PolygonEditorOperations.nearestVertexIndex(to: hoveredCoordinate, in: Array(polygon))
         } else {
             selectedVertexIndex = nil
         }
@@ -1492,23 +1535,46 @@ struct MapEditorView: View {
     private func selectAdjacentPolygonVertex(offset: Int) -> KeyPress.Result {
         guard isEditingFeature,
               let featureID = selectedFeatureID,
-              let feature = course.findFeature(id: featureID),
-              !feature.polygon.isEmpty else { return .ignored }
+              let polygon = editablePolygon(id: featureID),
+              !polygon.isEmpty else { return .ignored }
 
         selectedVertexIndex = PolygonEditorOperations.adjacentVertexIndex(
             current: selectedVertexIndex,
-            count: feature.polygon.count,
+            count: polygon.count,
             offset: offset
         )
         return .handled
     }
 
     private func addVertex(_ coordinate: Coordinate, to featureID: Int, at insertionIndex: Int) {
-        guard let featureIndex = course.features.firstIndex(where: { $0.id == featureID }),
-              insertionIndex <= course.features[featureIndex].polygon.count else { return }
+        guard var polygon = editablePolygon(id: featureID), insertionIndex <= polygon.count else { return }
 
-        course.features[featureIndex].polygon.insert(coordinate, at: insertionIndex)
+        polygon.insert(coordinate, at: insertionIndex)
+        setEditablePolygon(polygon, id: featureID)
         selectedVertexIndex = insertionIndex
+    }
+
+    /// The points the vertex tools edit: a course feature's, or the pending course outline's for
+    /// ``CourseOutline/featureID``.
+    private func editablePolygon(id: Int) -> CoordinatePath? {
+        if id == CourseOutline.featureID {
+            return osmBaseline?.pendingCourseOutline.map { CoordinatePath($0.coordinates) }
+        }
+        return course.findFeature(id: id)?.polygon
+    }
+
+    private func setEditablePolygon(_ polygon: CoordinatePath, id: Int) {
+        if id == CourseOutline.featureID {
+            guard var baseline = osmBaseline, let outline = baseline.pendingCourseOutline else { return }
+            baseline.pendingCourseOutline = PendingCourseOutline(
+                coordinates: Array(polygon),
+                tags: outline.tags,
+                tagsOldElementClubhouse: outline.tagsOldElementClubhouse
+            )
+            saveOSMBaseline(baseline)
+        } else if let index = course.features.firstIndex(where: { $0.id == id }) {
+            course.features[index].polygon = polygon
+        }
     }
 
     private func distanceToPolyline(from point: Coordinate, polyline: CoordinatePath) -> Double {
@@ -1612,10 +1678,9 @@ struct MapEditorView: View {
     // MARK: - Vertex Dragging
 
     private func updateVertexAfterDrag(featureID: Int, vertexIndex: Int, translation: CGSize) {
-        guard let featureIndex = course.features.firstIndex(where: { $0.id == featureID }),
-              vertexIndex < course.features[featureIndex].polygon.count else { return }
-        let movedCoordinate = moved(course.features[featureIndex].polygon[vertexIndex], by: translation)
-        course.features[featureIndex].polygon.replace(at: vertexIndex, with: movedCoordinate)
+        guard var polygon = editablePolygon(id: featureID), vertexIndex < polygon.count else { return }
+        polygon.replace(at: vertexIndex, with: moved(polygon[vertexIndex], by: translation))
+        setEditablePolygon(polygon, id: featureID)
     }
 
     private func applyCenterlineVertexDrag(vertexIndex: Int, translation: CGSize) {
@@ -1668,20 +1733,21 @@ struct MapEditorView: View {
     private func deleteSelectedVertex() {
         guard let featureID = selectedFeatureID,
               let vertexIdx = selectedVertexIndex,
-              let featureIndex = course.features.firstIndex(where: { $0.id == featureID }),
-              vertexIdx < course.features[featureIndex].polygon.count else { return }
+              var polygon = editablePolygon(id: featureID),
+              vertexIdx < polygon.count else { return }
 
         // A polygon needs at least 3 vertices
-        if course.features[featureIndex].polygon.count <= 3 {
+        if polygon.count <= 3 {
             statusMessage = "Cannot delete vertex — polygon needs at least 3 points"
             clearStatusAfterDelay()
             return
         }
 
-        course.features[featureIndex].polygon.remove(at: vertexIdx)
+        polygon.remove(at: vertexIdx)
+        setEditablePolygon(polygon, id: featureID)
         // Adjust selection: select previous vertex, or wrap to last
-        if vertexIdx >= course.features[featureIndex].polygon.count {
-            selectedVertexIndex = course.features[featureIndex].polygon.count - 1
+        if vertexIdx >= polygon.count {
+            selectedVertexIndex = polygon.count - 1
         }
     }
 
@@ -1732,7 +1798,7 @@ struct MapEditorView: View {
     }
 
     private func deleteSelectedFeature() {
-        guard let featureID = selectedFeatureID else { return }
+        guard let featureID = selectedFeatureID, featureID != CourseOutline.featureID else { return }
         featureToDelete = featureID
     }
 
@@ -2003,7 +2069,8 @@ struct MapEditorView: View {
         let mappedResult = OverpassAPIClient.ParsedResult(
             features: result.features,
             centerlines: renumbered,
-            courseBoundary: result.courseBoundary
+            courseBoundary: result.courseBoundary,
+            misplacedCourseElements: result.misplacedCourseElements
         )
 
         let featureCountBefore = course.features.count
@@ -2012,7 +2079,10 @@ struct MapEditorView: View {
         let importedFeatureCount = importedCourse.features.count - featureCountBefore
 
         course = importedCourse
-        saveOSMBaseline(OSMBaseline(course: importedCourse, details: Self.osmDetails(in: result)))
+        var baseline = OSMBaseline(course: importedCourse, details: Self.osmDetails(in: result))
+        baseline.misplacedCourseElement = CourseOutline.nearest(result.misplacedCourseElements, to: course.location.coordinate)
+        baseline.checkedCourseElement = true
+        saveOSMBaseline(baseline)
         logger.info("Imported \(importedFeatureCount, privacy: .public) features")
         osmImportStatus = "Imported \(importedFeatureCount) features"
         pendingOSMResult = nil
@@ -2128,6 +2198,97 @@ struct MapEditorView: View {
         clearStatusAfterDelay()
     }
 
+    // MARK: - Course Outline
+
+    /// The selected course outline: its points, the tags it will get, and ways to change or cancel it.
+    private func courseOutlineInspector(_ outline: PendingCourseOutline) -> some View {
+        ScrollView {
+            VStack(alignment: .leading, spacing: 12) {
+                Text("Course Outline")
+                    .font(.headline)
+                if let element = osmBaseline?.misplacedCourseElement {
+                    Text(element.isNode
+                         ? "Replaces \(element.osmID) on the next publish."
+                         : "Takes these tags from \(element.osmID) on the next publish.")
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                        .fixedSize(horizontal: false, vertical: true)
+                }
+                LabeledContent("Points", value: "\(outline.points.count)")
+                VStack(alignment: .leading, spacing: 2) {
+                    ForEach(outline.tags.keys.sorted(), id: \.self) { key in
+                        Text("\(key)=\(outline.tags[key] ?? "")")
+                            .monospaced()
+                            .lineLimit(1)
+                            .truncationMode(.tail)
+                    }
+                    if outline.tagsOldElementClubhouse {
+                        Text("Old element gets golf=clubhouse")
+                            .foregroundStyle(.secondary)
+                    }
+                }
+                .font(.caption)
+                Button("Edit Tags…") {
+                    isShowingCourseOutlineSheet = true
+                }
+                Button("Cancel Course Outline", role: .destructive) {
+                    cancelCourseOutline()
+                }
+            }
+            .frame(maxWidth: .infinity, alignment: .leading)
+            .padding()
+        }
+    }
+
+    /// Saves the sheet's tags. A new outline starts as a padded hull around the course and is
+    /// selected for editing.
+    private func saveCourseOutlineTags(_ tags: [String: String], tagsOldElementClubhouse: Bool) {
+        guard var baseline = osmBaseline else { return }
+        let isNew = baseline.pendingCourseOutline == nil
+        let coordinates = baseline.pendingCourseOutline?.coordinates ?? CourseOutline.hull(for: course)
+        guard coordinates.count >= 3 else {
+            statusMessage = "The course needs features before it can have an outline"
+            clearStatusAfterDelay()
+            return
+        }
+        baseline.pendingCourseOutline = PendingCourseOutline(coordinates: coordinates, tags: tags, tagsOldElementClubhouse: tagsOldElementClubhouse)
+        saveOSMBaseline(baseline)
+        if isNew {
+            deselectAll()
+            activeTool = .select
+            selectedFeatureID = CourseOutline.featureID
+            isEditingFeature = true
+            statusMessage = "Created the course outline. Drag its points to fit the course."
+            clearStatusAfterDelay()
+        }
+    }
+
+    private func cancelCourseOutline() {
+        guard var baseline = osmBaseline else { return }
+        baseline.pendingCourseOutline = nil
+        saveOSMBaseline(baseline)
+        if selectedFeatureID == CourseOutline.featureID {
+            deselectAll()
+        }
+    }
+
+    /// Looks in OSM for a misplaced `leisure=golf_course` element, for courses imported before
+    /// the import looked for one. Tried again each time the course is opened until it works.
+    private func findMisplacedCourseElement() async {
+        guard let baseline = osmBaseline, !baseline.checkedCourseElement, !baseline.entries.isEmpty,
+              let bbox = OverpassAPIClient.BoundingBox(containing: course.features.flatMap(\.polygon)) else { return }
+        let courseID = course.id
+        do {
+            let elements = try await OverpassAPIClient().fetchCourseElements(bbox: bbox.padded(by: 0.25))
+            guard course.id == courseID, var baseline = osmBaseline else { return }
+            baseline.misplacedCourseElement = CourseOutline.nearest(elements, to: course.location.coordinate)
+            baseline.checkedCourseElement = true
+            saveOSMBaseline(baseline)
+        } catch {
+            logger.error("Could not look for the course outline in OSM: \(error, privacy: .public)")
+        }
+    }
+
     /// Records or removes the fairway's pending multipolygon.
     private func setPendingMultipolygon(_ pending: PendingMultipolygon?, for fairway: Feature) {
         guard var baseline = osmBaseline, let osmID = fairway.osmID else { return }
@@ -2162,7 +2323,10 @@ struct MapEditorView: View {
             osmImportStatus = "Could not load OSM changes: \(error.localizedDescription)"
         }
         updateOSMChanges()
-        Task { await fillOSMDetails() }
+        Task {
+            await fillOSMDetails()
+            await findMisplacedCourseElement()
+        }
     }
 
     /// Reads from OSM the tags and members the baseline does not know, such as for courses

@@ -75,6 +75,16 @@ struct OSMBaseline: Codable, Equatable {
     /// Fairways to make into multipolygons, or fairway relations to add greens to, on the next publish.
     var pendingMultipolygons: [PendingMultipolygon] = []
 
+    /// The `leisure=golf_course` element that is not a usable course outline, found by the last import.
+    var misplacedCourseElement: MisplacedCourseElement?
+
+    /// A new course outline to publish, taking tags from ``misplacedCourseElement``.
+    var pendingCourseOutline: PendingCourseOutline?
+
+    /// Whether OSM was searched for a misplaced `leisure=golf_course` element. Courses imported
+    /// before the import looked for one are searched when they are opened.
+    var checkedCourseElement = false
+
     /// A baseline of every course feature that has an OSM ID.
     ///
     /// - Parameter details: Known OSM details by OSM ID. Features not in it get an unknown
@@ -110,6 +120,10 @@ struct OSMBaseline: Codable, Equatable {
         entries = try container.decode([String: Entry].self, forKey: .entries)
         // Baselines saved before multipolygon support have no pending list.
         pendingMultipolygons = try container.decodeIfPresent([PendingMultipolygon].self, forKey: .pendingMultipolygons) ?? []
+        // Baselines saved before course outline support have neither.
+        misplacedCourseElement = try container.decodeIfPresent(MisplacedCourseElement.self, forKey: .misplacedCourseElement)
+        pendingCourseOutline = try container.decodeIfPresent(PendingCourseOutline.self, forKey: .pendingCourseOutline)
+        checkedCourseElement = try container.decodeIfPresent(Bool.self, forKey: .checkedCourseElement) ?? false
     }
 }
 

@@ -80,6 +80,9 @@ actor OverpassAPIClient {
         let features: [ParsedFeature]
         let centerlines: [ParsedCenterline]
         let courseBoundary: [Coordinate]?
+        /// The `leisure=golf_course` elements that are not a usable course outline. Empty when
+        /// the result has a usable outline.
+        var misplacedCourseElements: [MisplacedCourseElement] = []
 
         /// The inner way members of the relations in the result that are not in it themselves,
         /// such as a green outside the search area inside a fairway relation that reaches into it.
@@ -96,7 +99,8 @@ actor OverpassAPIClient {
             return ParsedResult(
                 features: features + other.features.filter { $0.osmID.map { !present.contains($0) } ?? true },
                 centerlines: centerlines + other.centerlines.filter { $0.osmID.map { !present.contains($0) } ?? true },
-                courseBoundary: courseBoundary
+                courseBoundary: courseBoundary,
+                misplacedCourseElements: misplacedCourseElements
             )
         }
     }
@@ -173,6 +177,7 @@ actor OverpassAPIClient {
         (
           way["golf"](\(b));
           relation["golf"](\(b));
+          node["leisure"="golf_course"](\(b));
           way["leisure"="golf_course"](\(b));
           relation["leisure"="golf_course"](\(b));
           way["natural"="water"](\(b));
@@ -180,6 +185,16 @@ actor OverpassAPIClient {
           way["natural"="sand"](\(b));
           relation["natural"="sand"](\(b));
         );
+        out geom meta;
+        """
+    }
+
+    /// Every `leisure=golf_course` element in the area.
+    static func buildCourseElementQuery(bbox: BoundingBox) -> String {
+        let b = "\(bbox.south),\(bbox.west),\(bbox.north),\(bbox.east)"
+        return """
+        [out:json][timeout:30];
+        nwr["leisure"="golf_course"](\(b));
         out geom meta;
         """
     }
@@ -206,6 +221,12 @@ actor OverpassAPIClient {
     func fetchFeatures(bbox: BoundingBox) async throws -> ParsedResult {
         logger.info("Overpass query bbox: \(bbox.south, privacy: .public),\(bbox.west, privacy: .public),\(bbox.north, privacy: .public),\(bbox.east, privacy: .public)")
         return try await run(Self.buildQuery(bbox: bbox))
+    }
+
+    /// The misplaced `leisure=golf_course` elements in the area. Empty when the area has a usable
+    /// course outline.
+    func fetchCourseElements(bbox: BoundingBox) async throws -> [MisplacedCourseElement] {
+        try await run(Self.buildCourseElementQuery(bbox: bbox)).misplacedCourseElements
     }
 
     /// The ways with the given IDs, wherever they are.
@@ -294,12 +315,20 @@ actor OverpassAPIClient {
         var features: [ParsedFeature] = []
         var centerlines: [ParsedCenterline] = []
         var courseBoundary: [Coordinate]?
+        var hasUsableBoundary = false
+        var misplaced: [MisplacedCourseElement] = []
 
         for element in elements {
             guard let rawTags = element["tags"] as? [String: Any] else {
                 continue
             }
             let tags = rawTags.mapValues { "\($0)" }
+
+            if tags["leisure"] == "golf_course", let wrong = misplacedCourseElement(element, tags: tags, nodeLookup: nodeLookup, wayGeometry: wayGeometry) {
+                misplaced.append(wrong)
+            } else if tags["leisure"] == "golf_course" {
+                hasUsableBoundary = true
+            }
 
             let coords = extractCoordinates(from: element, nodeLookup: nodeLookup, wayGeometry: wayGeometry)
             guard !coords.isEmpty else { continue }
@@ -338,7 +367,39 @@ actor OverpassAPIClient {
             }
         }
 
-        return ParsedResult(features: features, centerlines: centerlines, courseBoundary: courseBoundary)
+        return ParsedResult(
+            features: features,
+            centerlines: centerlines,
+            courseBoundary: courseBoundary,
+            misplacedCourseElements: hasUsableBoundary ? [] : misplaced
+        )
+    }
+
+    /// The `leisure=golf_course` element as a misplaced element, or nil when it is a usable
+    /// course outline: a way or relation that passes ``isCourseBoundary(tags:)`` and spans at
+    /// least ``minimumBoundarySpanMeters``.
+    private static func misplacedCourseElement(
+        _ element: [String: Any],
+        tags: [String: String],
+        nodeLookup: [Int: Coordinate],
+        wayGeometry: [Int: [Coordinate]]
+    ) -> MisplacedCourseElement? {
+        guard let osmID = osmID(of: element) else { return nil }
+        let coords: [Coordinate]
+        if osmID.hasPrefix("n") {
+            guard let lat = element["lat"] as? Double, let lon = element["lon"] as? Double else { return nil }
+            coords = [Coordinate(lat: lat, lon: lon)]
+        } else {
+            coords = extractCoordinates(from: element, nodeLookup: nodeLookup, wayGeometry: wayGeometry)
+            if isCourseBoundary(tags: tags), boundaryBoundingBox(for: coords) != nil { return nil }
+        }
+        guard let bbox = BoundingBox(containing: coords) else { return nil }
+        return MisplacedCourseElement(
+            osmID: osmID,
+            version: element["version"] as? Int,
+            tags: tags,
+            center: Coordinate(lat: (bbox.south + bbox.north) / 2, lon: (bbox.west + bbox.east) / 2)
+        )
     }
 
     /// The element's ID in short form: `n`, `w`, or `r` for a node, way, or relation, followed

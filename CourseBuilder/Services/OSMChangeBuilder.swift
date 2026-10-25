@@ -51,11 +51,14 @@ struct OSMFetchedElements: Equatable {
     /// The one outer way of each relation whose points are edited, by relation ID. The outer ways
     /// of a deleted relation are in ``ways`` but not here.
     var outerWays: [Int: Int] = [:]
+    /// Nodes fetched on their own, such as a misplaced `leisure=golf_course` node.
+    var nodes: [Int: OSMNode] = [:]
 
     /// The fetched version of an element, by its short OSM ID.
     func version(of osmID: String) -> Int? {
         guard let (kind, id) = OSMChangeBuilder.parse(osmID) else { return nil }
         switch kind {
+        case "n": return nodes[id]?.version
         case "w": return ways[id]?.way.version
         case "r": return relations[id]?.version
         default: return nil
@@ -165,16 +168,20 @@ enum OSMChangeBuilder {
 
     // MARK: - Upload
 
-    /// The OSM IDs whose current version is not the baseline version.
+    /// The OSM IDs whose current version is not the baseline version. For a course outline, the
+    /// misplaced element's version is the baseline version.
     static func conflicts(
         in changes: [OSMFeatureChange],
         baseline: OSMBaseline,
         fetched: OSMFetchedElements
     ) -> [String] {
         changes.compactMap { change in
-            guard change.action == .modify || change.action == .delete || change.action == .multipolygon,
-                  let osmID = change.osmID,
-                  let known = baseline.entries[osmID]?.version,
+            guard let osmID = change.osmID else { return nil }
+            let known = change.action == .courseOutline
+                ? baseline.misplacedCourseElement.flatMap { $0.osmID == osmID ? $0.version : nil }
+                : baseline.entries[osmID]?.version
+            guard change.action != .create,
+                  let known,
                   let current = fetched.version(of: osmID),
                   known != current else { return nil }
             return osmID
@@ -188,6 +195,10 @@ enum OSMChangeBuilder {
     /// moves the way's tags to the relation. A multipolygon change on a fairway relation adds the
     /// greens it is missing as inner members. A deleted relation also deletes its outer ways that
     /// have no tags. Its inner ways are features of their own and are left alone.
+    ///
+    /// A course outline change creates a closed way with the outline's tags. A misplaced node is
+    /// deleted. A misplaced way or relation loses the tags the outline took, and can get
+    /// `golf=clubhouse`.
     static func upload(
         for changes: [OSMFeatureChange],
         course: Course,
@@ -339,6 +350,29 @@ enum OSMChangeBuilder {
                 fairway.tags = [:]
                 modify(fairway)
 
+            case .courseOutline:
+                guard let outline = change.courseOutline, let osmID = change.osmID, let (kind, id) = parse(osmID) else { continue }
+                let (refs, newNodes) = nodeList(for: outline.coordinates, closed: true, existing: [], nextID: &nextID)
+                createdNodes.append(contentsOf: newNodes)
+                createdWays.append(OSMWay(id: nextID, version: 0, nodes: refs, tags: outline.tags))
+                nextID -= 1
+                switch kind {
+                case "n":
+                    if let node = fetched.nodes[id] { unusedNodes[id] = node }
+                case "w":
+                    if var way = currentWay(id) {
+                        way.tags = CourseOutline.remainingTags(way.tags, outline: outline)
+                        modify(way)
+                    }
+                case "r":
+                    if var relation = currentRelation(id) {
+                        relation.tags = CourseOutline.remainingTags(relation.tags, outline: outline)
+                        modify(relation)
+                    }
+                default:
+                    continue
+                }
+
             case .delete:
                 guard let osmID = change.osmID, let (kind, id) = parse(osmID) else { continue }
                 if kind == "r", let relation = fetched.relations[id] {
@@ -441,6 +475,15 @@ enum OSMChangeBuilder {
                 result.pendingMultipolygons.removeAll { $0.fairwayOSMID == osmID }
                 if kind == "r", var entry = result.entries[osmID] {
                     entry.version = newRelationVersions[id] ?? entry.version
+                    entry.takeSent(upload.sent[osmID])
+                    result.entries[osmID] = entry
+                }
+            case .courseOutline:
+                result.pendingCourseOutline = nil
+                result.misplacedCourseElement = nil
+                // A misplaced element that is also a course feature keeps its baseline current.
+                if var entry = result.entries[osmID] {
+                    entry.version = kind == "r" ? (newRelationVersions[id] ?? entry.version) : (newWayVersions[id] ?? entry.version)
                     entry.takeSent(upload.sent[osmID])
                     result.entries[osmID] = entry
                 }

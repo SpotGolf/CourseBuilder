@@ -50,6 +50,13 @@ struct OSMAPIClient {
         return name
     }
 
+    func node(id: Int) async throws -> OSMNode {
+        let elements = try elements(from: try await send("GET", "node/\(id).json"))
+        guard let element = elements.first(where: { $0["type"] as? String == "node" }),
+              let node = Self.node(from: element) else { throw APIError.invalidResponse }
+        return node
+    }
+
     func wayFull(id: Int) async throws -> OSMWayFull {
         let elements = try elements(from: try await send("GET", "way/\(id)/full.json"))
         var nodes: [Int: OSMNode] = [:]
@@ -118,10 +125,20 @@ struct OSMAPIClient {
     ///
     /// A relation whose points changed also gets its outer way. Throws
     /// ``APIError/multipleOuterWays(osmID:count:)`` when it does not have exactly one. A deleted
-    /// relation also gets all of its outer ways. Ways whose nodes a change reuses are fetched too.
+    /// relation also gets all of its outer ways. Ways whose nodes a change reuses are fetched too, and
+    /// so is the misplaced element of a course outline change.
     /// One that can't be fetched is skipped, and its nodes are not reused.
     func fetchElements(for changes: [OSMFeatureChange]) async throws -> OSMFetchedElements {
         var fetched = OSMFetchedElements()
+        for change in changes where change.action == .courseOutline {
+            guard let osmID = change.osmID, let (kind, id) = OSMChangeBuilder.parse(osmID) else { continue }
+            switch kind {
+            case "n": fetched.nodes[id] = try await node(id: id)
+            case "w" where fetched.ways[id] == nil: fetched.ways[id] = try await wayFull(id: id)
+            case "r" where fetched.relations[id] == nil: fetched.relations[id] = try await relation(id: id)
+            default: continue
+            }
+        }
         for change in changes where change.action == .modify || change.action == .delete || change.action == .multipolygon {
             guard let osmID = change.osmID, let (kind, id) = OSMChangeBuilder.parse(osmID) else { continue }
             for shared in change.sharedNodeOSMIDs {

@@ -23,6 +23,9 @@ struct OSMFeatureChange: Hashable, Identifiable {
     var addsGolfTag = false
     /// For a multipolygon change, the OSM IDs of the inner greens.
     var innerOSMIDs: [String] = []
+    /// For a points change, the other OSM ways with nodes at the feature's new points. The way
+    /// reuses their nodes, such as a fairway reshaped to follow the edge of a green.
+    var sharedNodeOSMIDs: [String] = []
 
     var id: String { "\(action)-\(featureID.map(String.init) ?? "")-\(osmID ?? "")" }
 }
@@ -62,7 +65,8 @@ enum OSMChangeDetector {
                     osmID: osmID,
                     oldType: typeChanged ? entry.type : nil,
                     pointsChanged: pointsChanged,
-                    addsGolfTag: addsGolfTag
+                    addsGolfTag: addsGolfTag,
+                    sharedNodeOSMIDs: pointsChanged ? sharedNodeOSMIDs(for: feature, entry: entry, in: baseline) : []
                 ))
             }
         }
@@ -90,6 +94,21 @@ enum OSMChangeDetector {
         return changes.enumerated()
             .sorted { ($0.element.action, $0.offset) < ($1.element.action, $1.offset) }
             .map(\.element)
+    }
+
+    /// The other ways in the baseline with a point at one of the feature's points that its own
+    /// element does not have.
+    static func sharedNodeOSMIDs(for feature: Feature, entry: OSMBaseline.Entry, in baseline: OSMBaseline) -> [String] {
+        let own = entry.coordinates
+        let added = feature.polygon.filter { point in !own.contains { distanceMeters($0, point) <= samePointMeters } }
+        guard !added.isEmpty else { return [] }
+        return baseline.entries.values
+            .filter { other in
+                other.osmID != entry.osmID && other.osmID.hasPrefix("w")
+                    && other.coordinates.contains { point in added.contains { distanceMeters($0, point) <= samePointMeters } }
+            }
+            .map(\.osmID)
+            .sorted()
     }
 
     /// Whether the two lists have the same number of points and each point is within

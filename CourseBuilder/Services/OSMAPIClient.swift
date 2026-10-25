@@ -118,11 +118,16 @@ struct OSMAPIClient {
     ///
     /// A relation whose points changed also gets its outer way. Throws
     /// ``APIError/multipleOuterWays(osmID:count:)`` when it does not have exactly one. A deleted
-    /// relation also gets all of its outer ways.
+    /// relation also gets all of its outer ways. Ways whose nodes a change reuses are fetched too.
+    /// One that can't be fetched is skipped, and its nodes are not reused.
     func fetchElements(for changes: [OSMFeatureChange]) async throws -> OSMFetchedElements {
         var fetched = OSMFetchedElements()
         for change in changes where change.action == .modify || change.action == .delete || change.action == .multipolygon {
             guard let osmID = change.osmID, let (kind, id) = OSMChangeBuilder.parse(osmID) else { continue }
+            for shared in change.sharedNodeOSMIDs {
+                guard let (_, wayID) = OSMChangeBuilder.parse(shared), fetched.ways[wayID] == nil else { continue }
+                fetched.ways[wayID] = try? await wayFull(id: wayID)
+            }
             switch kind {
             case "w":
                 if fetched.ways[id] == nil {

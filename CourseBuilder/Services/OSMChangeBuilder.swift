@@ -228,14 +228,19 @@ enum OSMChangeBuilder {
                 modifiedRelations.append(relation)
             }
         }
-        /// Moves the way onto the feature's points, reusing its nodes where they still fit.
-        func reshape(_ way: inout OSMWay, to feature: Feature) {
+        /// Moves the way onto the feature's points, reusing its nodes, and those of the shared
+        /// ways, where they still fit.
+        func reshape(_ way: inout OSMWay, to feature: Feature, sharing sharedOSMIDs: [String]) {
             guard let full = fetched.ways[way.id] else { return }
             let existing = full.way.nodes.compactMap { full.nodes[$0] }
+            let ownIDs = Set(existing.map(\.id))
+            let shared = sharedOSMIDs.compactMap { parse($0).flatMap { fetched.ways[$0.id] } }
+                .flatMap { other in other.way.nodes.compactMap { other.nodes[$0] } }
+                .filter { !ownIDs.contains($0.id) }
             let (refs, newNodes) = nodeList(
                 for: Array(feature.polygon),
                 closed: feature.type != .centerline,
-                existing: existing,
+                existing: existing + shared,
                 nextID: &nextID
             )
             createdNodes.append(contentsOf: newNodes)
@@ -283,7 +288,7 @@ enum OSMChangeBuilder {
                         modify(relation)
                     }
                     if change.pointsChanged, let outerID = fetched.outerWays[id], var outer = currentWay(outerID) {
-                        reshape(&outer, to: feature)
+                        reshape(&outer, to: feature, sharing: change.sharedNodeOSMIDs)
                         modify(outer)
                     }
                 } else if kind == "w", var way = currentWay(id) {
@@ -293,7 +298,7 @@ enum OSMChangeBuilder {
                         way.tags.merge(tags(for: feature.type)) { existing, _ in existing }
                     }
                     if change.pointsChanged {
-                        reshape(&way, to: feature)
+                        reshape(&way, to: feature, sharing: change.sharedNodeOSMIDs)
                     }
                     modify(way)
                 }

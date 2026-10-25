@@ -580,6 +580,86 @@ struct OSMMultipolygonTests {
     }
 }
 
+@Suite("Green cut out")
+struct GreenCutOutTests {
+    /// A 10 by 20 m fairway whose north edge runs along the north edge of the green.
+    private let fairwayPoints = [
+        point(north: 0), point(north: 0, east: 10), point(north: 20, east: 10),
+        point(north: 20, east: 8), point(north: 20, east: 2), point(north: 20),
+    ]
+    /// A 6 by 10 m green in the north end of the fairway.
+    private let greenPoints = [point(north: 10, east: 2), point(north: 10, east: 8), point(north: 20, east: 8), point(north: 20, east: 2)]
+
+    @Test func greenSharingEdgeIsCutOut() {
+        let result = GreenCutOut.cutOut(greenPoints, from: fairwayPoints)
+
+        #expect(result == [
+            fairwayPoints[4], fairwayPoints[5], fairwayPoints[0], fairwayPoints[1], fairwayPoints[2], fairwayPoints[3],
+            greenPoints[1], greenPoints[0],
+        ])
+    }
+
+    @Test func closedFairwayStaysClosed() {
+        let result = GreenCutOut.cutOut(greenPoints + [greenPoints[0]], from: fairwayPoints + [fairwayPoints[0]])
+
+        #expect(result?.count == 9)
+        #expect(result?.first == result?.last)
+    }
+
+    @Test func greenOutsideSharedEdgeIsNotCutOut() {
+        let outside = [point(north: 30, east: 2), point(north: 30, east: 8), point(north: 20, east: 8), point(north: 20, east: 2)]
+        #expect(GreenCutOut.cutOut(outside, from: fairwayPoints) == nil)
+    }
+
+    @Test func greenNotSharingEdgeIsNotCutOut() {
+        let inside = [point(north: 5, east: 2), point(north: 5, east: 8), point(north: 15, east: 8), point(north: 15, east: 2)]
+        #expect(GreenCutOut.cutOut(inside, from: fairwayPoints) == nil)
+    }
+
+    @Test func onlyGreensAreOffered() {
+        let fairway = Feature(id: 1, type: .fairway, polygon: CoordinatePath(fairwayPoints), osmID: "w1")
+        let green = Feature(id: 2, type: .green, polygon: CoordinatePath(greenPoints), osmID: "w2")
+        let bunker = Feature(id: 3, type: .bunker, polygon: CoordinatePath(greenPoints), osmID: "w3")
+        let course = makeCourse(features: [fairway, green, bunker])
+
+        #expect(GreenCutOut.greens(toCutOutOf: fairway, course: course).map(\.id) == [2])
+        #expect(GreenCutOut.greens(toCutOutOf: green, course: course).isEmpty)
+    }
+
+    @Test func cutOutFairwaySharesGreenNodes() {
+        var course = makeCourse(features: [
+            Feature(id: 1, type: .fairway, polygon: CoordinatePath(fairwayPoints), osmID: "w1"),
+            Feature(id: 2, type: .green, polygon: CoordinatePath(greenPoints), osmID: "w2"),
+        ])
+        let baseline = OSMBaseline(course: course)
+        course.features[0].polygon = CoordinatePath(GreenCutOut.cutOut(greenPoints, from: fairwayPoints)!)
+
+        let changes = OSMChangeDetector.changes(in: course, from: baseline)
+        #expect(changes == [OSMFeatureChange(action: .modify, featureID: 1, type: .fairway, osmID: "w1", pointsChanged: true, sharedNodeOSMIDs: ["w2"])])
+
+        let fairwayNodes = fairwayPoints.enumerated().map { OSMNode(id: 100 + $0.offset, version: 1, lat: $0.element.lat, lon: $0.element.lon) }
+        let greenNodes = [
+            OSMNode(id: 200, version: 1, lat: greenPoints[0].lat, lon: greenPoints[0].lon),
+            OSMNode(id: 201, version: 1, lat: greenPoints[1].lat, lon: greenPoints[1].lon),
+            fairwayNodes[3], fairwayNodes[4],
+        ]
+        let fetched = OSMFetchedElements(ways: [
+            1: OSMWayFull(way: OSMWay(id: 1, version: 1, nodes: [100, 101, 102, 103, 104, 105, 100], tags: ["golf": "fairway"]),
+                          nodes: Dictionary(uniqueKeysWithValues: fairwayNodes.map { ($0.id, $0) })),
+            2: OSMWayFull(way: OSMWay(id: 2, version: 1, nodes: [200, 201, 103, 104, 200], tags: ["golf": "green"]),
+                          nodes: Dictionary(uniqueKeysWithValues: greenNodes.map { ($0.id, $0) })),
+        ])
+
+        let upload = OSMChangeBuilder.upload(for: changes, course: course, fetched: fetched, changesetID: 7)
+
+        let refs = [104, 105, 100, 101, 102, 103, 201, 200, 104].map { "    <nd ref=\"\($0)\"/>\n" }.joined()
+        #expect(upload.xml.contains("<way id=\"1\" version=\"1\" changeset=\"7\">\n" + refs))
+        #expect(!upload.xml.contains("<create>"))
+        #expect(!upload.xml.contains("<delete"))
+        #expect(!upload.xml.contains("<way id=\"2\""))
+    }
+}
+
 @Suite("OSM baseline store")
 struct OSMBaselineStoreTests {
     @Test func createsBaselineForCourseWithoutOne() throws {

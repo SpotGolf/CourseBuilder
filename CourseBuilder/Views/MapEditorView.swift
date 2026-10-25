@@ -997,6 +997,7 @@ struct MapEditorView: View {
 
                     revertControls(for: course.features[featureIndex])
                     multipolygonControls(for: course.features[featureIndex])
+                    cutOutGreenControls(for: course.features[featureIndex])
 
                     Button("Delete Feature", role: .destructive) {
                         featureToDelete = featureID
@@ -2100,6 +2101,31 @@ struct MapEditorView: View {
                 }
             }
         }
+    }
+
+    /// Cut Out Green for a fairway drawn over a green that shares part of its outline.
+    @ViewBuilder
+    private func cutOutGreenControls(for feature: Feature) -> some View {
+        if !GreenCutOut.greens(toCutOutOf: feature, course: course).isEmpty {
+            Button("Cut Out Green") {
+                cutOutGreens(from: feature)
+            }
+            .help("Reshape this fairway to leave out the green it covers, sharing the green's edge")
+        }
+    }
+
+    private func cutOutGreens(from fairway: Feature) {
+        guard let index = course.features.firstIndex(where: { $0.id == fairway.id }) else { return }
+        var polygon = Array(fairway.polygon)
+        for green in GreenCutOut.greens(toCutOutOf: fairway, course: course) {
+            polygon = GreenCutOut.cutOut(Array(green.polygon), from: polygon) ?? polygon
+        }
+        course.features[index].polygon = CoordinatePath(polygon)
+        undoRecords.append(.replacedPolygon(featureID: fairway.id, oldPolygon: Array(fairway.polygon)))
+        selectedVertexIndex = nil
+        isEditingFeature = false
+        statusMessage = "Cut the green out of feature #\(fairway.id)"
+        clearStatusAfterDelay()
     }
 
     /// Records or removes the fairway's pending multipolygon.

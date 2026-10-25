@@ -31,8 +31,8 @@ targets:
         ENABLE_HARDENED_RUNTIME: YES
         ASSETCATALOG_COMPILER_APPICON_NAME: AppIcon
         GENERATE_INFOPLIST_FILE: YES
-        MARKETING_VERSION: "2.0.0"
-        CURRENT_PROJECT_VERSION: "6"
+        MARKETING_VERSION: "2.1.0"
+        CURRENT_PROJECT_VERSION: "7"
         INFOPLIST_KEY_NSLocationUsageDescription: "CourseBuilder uses your location for course distance verification"
     dependencies:
       - package: CourseDataSwift

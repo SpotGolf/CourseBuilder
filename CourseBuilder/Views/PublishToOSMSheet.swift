@@ -132,7 +132,7 @@ struct PublishToOSMSheet: View {
         let isConflict: Bool
     }
 
-    /// Conflicts first, then changed, multipolygon, new, deleted, and skipped. Each group is in hole order.
+    /// Conflicts first, then changed, multipolygon, new, and deleted. Each group is in hole order.
     private var rows: [Row] {
         let holeOrder = Self.holeOrder(in: course)
         return changes
@@ -166,18 +166,17 @@ struct PublishToOSMSheet: View {
         case .multipolygon: "Multipolygon"
         case .create: "New"
         case .delete: "Deleted"
-        case .skip: "Skipped"
         }
     }
 
     static func detail(for change: OSMFeatureChange) -> String {
-        if let reason = change.reason { return reason }
         if change.action == .multipolygon {
             return "inner: \(change.innerOSMIDs.joined(separator: ", "))"
         }
         var parts: [String] = []
         if change.pointsChanged { parts.append("points") }
         if let oldType = change.oldType { parts.append("type, was \(oldType.rawValue)") }
+        if change.addsGolfTag { parts.append("adds golf=\(OSMChangeBuilder.tags(for: change.type)["golf"] ?? "")") }
         return parts.joined(separator: ", ")
     }
 

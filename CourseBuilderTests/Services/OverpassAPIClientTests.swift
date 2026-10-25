@@ -11,6 +11,8 @@ final class OverpassAPIClientTests: XCTestCase {
         XCTAssertTrue(query.contains("-74.96"))
         XCTAssertTrue(query.contains("39.8"))
         XCTAssertTrue(query.contains("-74.94"))
+        XCTAssertTrue(query.contains(#"way["natural"="sand"]"#))
+        XCTAssertTrue(query.contains(#"relation["natural"="sand"]"#))
     }
 
     func testParseFeaturesFromJSON() throws {
@@ -176,6 +178,96 @@ final class OverpassAPIClientTests: XCTestCase {
         XCTAssertEqual(result.courseBoundary?.count, 5)
     }
 
+    func testBuildQueryForWayIDs() {
+        XCTAssertEqual(OverpassAPIClient.buildQuery(wayIDs: [907057602, 5]), """
+        [out:json][timeout:30];
+        way(id:907057602,5);
+        out geom meta;
+        """)
+    }
+
+    func testMissingInnerWaysAreFoundAndAdded() {
+        // Bear Dance hole 14: the fairway relation reaches into the search area, its green does not.
+        let fairway = OverpassAPIClient.ParsedFeature(type: .fairway, polygon: [], osmID: "r19767874", members: [
+            OSMRelation.Member(type: "way", ref: 1118168789, role: "outer"),
+            OSMRelation.Member(type: "way", ref: 907057602, role: "inner"),
+            OSMRelation.Member(type: "way", ref: 10, role: "inner"),
+        ])
+        let present = OverpassAPIClient.ParsedFeature(type: .green, polygon: [], osmID: "w10")
+        let result = OverpassAPIClient.ParsedResult(features: [fairway, present], centerlines: [], courseBoundary: nil)
+
+        XCTAssertEqual(result.missingInnerWayIDs, [907057602])
+
+        let green = OverpassAPIClient.ParsedFeature(type: .green, polygon: [], osmID: "w907057602")
+        let extra = OverpassAPIClient.ParsedResult(features: [green, present], centerlines: [], courseBoundary: nil)
+        let combined = result.adding(extra)
+
+        XCTAssertEqual(combined.features.compactMap(\.osmID), ["r19767874", "w10", "w907057602"])
+        XCTAssertTrue(combined.missingInnerWayIDs.isEmpty)
+    }
+
+    func testSearchAreaGrowsToHoldFeaturesPastItsEdge() {
+        let bbox = OverpassAPIClient.BoundingBox(south: 39.257, west: -104.922, north: 39.275, east: -104.899)
+        // A fairway reaching 0.001° west of the area, and a lake far to the east.
+        let fairway = OverpassAPIClient.ParsedFeature(type: .fairway, polygon: [
+            Coordinate(lat: 39.265, lon: -104.923), Coordinate(lat: 39.266, lon: -104.915),
+        ])
+        let lake = OverpassAPIClient.ParsedFeature(type: .water, polygon: [Coordinate(lat: 39.265, lon: -104.85)])
+        let result = OverpassAPIClient.ParsedResult(features: [fairway, lake], centerlines: [], courseBoundary: nil)
+
+        let grown = OverpassAPIClient.grownBoundingBox(bbox, for: result, marginMeters: 100)
+
+        let lonMargin = 100 / (111_320.0 * cos(39.2655 * .pi / 180))
+        XCTAssertEqual(grown?.west ?? 0, -104.923 - lonMargin, accuracy: 1e-9)
+        XCTAssertEqual(grown?.east, bbox.east)
+        XCTAssertEqual(grown?.south, bbox.south)
+        XCTAssertEqual(grown?.north, bbox.north)
+    }
+
+    func testSearchAreaDoesNotGrowWhenFeaturesAreInside() {
+        let bbox = OverpassAPIClient.BoundingBox(south: 39.257, west: -104.922, north: 39.275, east: -104.899)
+        let green = OverpassAPIClient.ParsedFeature(type: .green, polygon: [Coordinate(lat: 39.266, lon: -104.91)])
+        let result = OverpassAPIClient.ParsedResult(features: [green], centerlines: [], courseBoundary: nil)
+
+        XCTAssertNil(OverpassAPIClient.grownBoundingBox(bbox, for: result))
+    }
+
+    func testSearchAreaDoesNotGrowBySmallAmounts() {
+        let bbox = OverpassAPIClient.BoundingBox(south: 39.257, west: -104.922, north: 39.275, east: -104.899)
+        // 10 m inside the west edge, so the 150 m margin grows it by about 140 m, but a 200 m minimum is not met.
+        let tee = OverpassAPIClient.ParsedFeature(type: .tee, polygon: [Coordinate(lat: 39.266, lon: -104.922 + 10 / (111_320.0 * cos(39.266 * .pi / 180)))])
+        let result = OverpassAPIClient.ParsedResult(features: [tee], centerlines: [], courseBoundary: nil)
+
+        XCTAssertNil(OverpassAPIClient.grownBoundingBox(bbox, for: result, minimumGrowthMeters: 200))
+        XCTAssertNotNil(OverpassAPIClient.grownBoundingBox(bbox, for: result))
+    }
+
+    func testSearchAreaDoesNotGrowPastLimit() {
+        let bbox = OverpassAPIClient.BoundingBox(south: 39.257, west: -104.922, north: 39.275, east: -104.899)
+        let farTee = OverpassAPIClient.ParsedFeature(type: .tee, polygon: [Coordinate(lat: 39.266, lon: -105.0)])
+        let result = OverpassAPIClient.ParsedResult(features: [farTee], centerlines: [], courseBoundary: nil)
+
+        XCTAssertNil(OverpassAPIClient.grownBoundingBox(bbox, for: result))
+    }
+
+    func testMembersOfRelation() {
+        let relation: [String: Any] = [
+            "type": "relation",
+            "id": 14322211,
+            "members": [
+                ["type": "way", "ref": 742745098, "role": "outer"],
+                ["type": "way", "ref": 742745097, "role": "inner"],
+                ["type": "node", "ref": 5, "role": "inner"],
+            ],
+        ]
+        XCTAssertEqual(OverpassAPIClient.members(of: relation), [
+            OSMRelation.Member(type: "way", ref: 742745098, role: "outer"),
+            OSMRelation.Member(type: "way", ref: 742745097, role: "inner"),
+            OSMRelation.Member(type: "node", ref: 5, role: "inner"),
+        ])
+        XCTAssertNil(OverpassAPIClient.members(of: ["type": "way", "id": 1]))
+    }
+
     func testClubhouseTaggedAsGolfCourseIsNotBoundary() throws {
         // Bear Dance: the clubhouse building carries leisure=golf_course by mistake.
         let json = """
@@ -266,6 +358,30 @@ final class OverpassAPIClientTests: XCTestCase {
         let result = try OverpassAPIClient.parseResponse(data: data)
         XCTAssertEqual(result.features.count, 1)
         XCTAssertEqual(result.features[0].type, .water)
+    }
+
+    func testParseSandAsBunker() throws {
+        // Bear Dance hole 16: a bunker tagged only natural=sand.
+        let json = """
+        {
+          "elements": [
+            {
+              "type": "way",
+              "id": 1373233826,
+              "tags": { "natural": "sand" },
+              "geometry": [
+                { "lat": 39.26009, "lon": -104.91688 },
+                { "lat": 39.26022, "lon": -104.91688 },
+                { "lat": 39.26022, "lon": -104.91674 }
+              ]
+            }
+          ]
+        }
+        """
+        let result = try OverpassAPIClient.parseResponse(data: json.data(using: .utf8)!)
+        XCTAssertEqual(result.features.count, 1)
+        XCTAssertEqual(result.features[0].type, .bunker)
+        XCTAssertEqual(result.features[0].tags, ["natural": "sand"])
     }
 
     func testParseRelationFairway() throws {

@@ -26,16 +26,16 @@ enum ToolMode: String, CaseIterable {
     }
 }
 
-struct FeatureEditorView: View {
+/// The inspector for a selected feature: type, then General, OSM, Vertices, and Actions sections.
+/// Points are edited on the map, so the vertex list is read only.
+struct FeatureEditorView<Actions: View>: View {
     @Binding var feature: Feature
-    let onDelete: () -> Void
-
-    /// The feature's current tags in OSM. Nil while loading.
-    @State private var osmTags: [String: String]?
-    @State private var osmTagsFailed = false
+    /// What OSM had for the feature the last time the app and OSM agreed.
+    let osmEntry: OSMBaseline.Entry?
+    @ViewBuilder let actions: Actions
 
     var body: some View {
-        VStack(alignment: .leading, spacing: 8) {
+        VStack(alignment: .leading, spacing: 12) {
             Text("Feature #\(feature.id)")
                 .font(.headline)
 
@@ -50,110 +50,130 @@ struct FeatureEditorView: View {
                 }
             }
 
-            let centroid = feature.center
-            let area = PolygonGeometry.area(of: feature.polygon)
-
-            HStack {
-                Text("Vertices: \(feature.polygon.count)")
-                    .font(.caption)
-                Spacer()
-                Text(String(format: "Area: %.2e", area))
-                    .font(.caption)
-            }
-            .foregroundStyle(.secondary)
-
-            HStack {
-                Text(String(format: "Centroid: %.6f, %.6f", centroid.lat, centroid.lon))
-                    .font(.caption)
-                    .foregroundStyle(.secondary)
+            GroupBox("General") {
+                general
             }
 
             if let osmID = feature.osmID {
-                osmMetadata(osmID: osmID)
+                GroupBox("OSM") {
+                    osmMetadata(osmID: osmID)
+                }
             }
 
-            Divider()
+            GroupBox("Vertices") {
+                vertices
+            }
+            .frame(maxHeight: .infinity)
 
-            Text("Vertices")
-                .font(.subheadline.bold())
+            GroupBox("Actions") {
+                VStack(alignment: .leading, spacing: 8) {
+                    actions
+                }
+                .frame(maxWidth: .infinity, alignment: .leading)
+            }
+        }
+        .padding()
+        .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
+    }
 
-            ScrollView {
-                VStack(spacing: 4) {
-                    ForEach(feature.polygon.indices, id: \.self) { index in
-                        HStack(spacing: 4) {
-                            Text("\(index)")
-                                .font(.caption2.monospacedDigit())
-                                .frame(width: 20)
-                                .foregroundStyle(.secondary)
-                            TextField("Lat", value: vertexBinding(index, \.lat), format: .number)
-                                .textFieldStyle(.roundedBorder)
-                                .font(.caption)
-                            TextField("Lon", value: vertexBinding(index, \.lon), format: .number)
-                                .textFieldStyle(.roundedBorder)
-                                .font(.caption)
-                        }
+    private var general: some View {
+        let centroid = feature.center
+        return Grid(alignment: .leading, horizontalSpacing: 8, verticalSpacing: 4) {
+            GridRow {
+                Text("Vertices").foregroundStyle(.secondary)
+                Text("\(feature.polygon.count)")
+            }
+            GridRow {
+                Text("Area").foregroundStyle(.secondary)
+                Text(String(format: "%.2e", PolygonGeometry.area(of: feature.polygon)))
+            }
+            GridRow {
+                Text("Centroid").foregroundStyle(.secondary)
+                Text(String(format: "%.6f, %.6f", centroid.lat, centroid.lon))
+                    .textSelection(.enabled)
+            }
+        }
+        .font(.caption)
+        .frame(maxWidth: .infinity, alignment: .leading)
+    }
+
+    /// The OSM ID, linked to its page, the element's version and tags, and a relation's members.
+    private func osmMetadata(osmID: String) -> some View {
+        VStack(alignment: .leading, spacing: 6) {
+            Grid(alignment: .leading, horizontalSpacing: 8, verticalSpacing: 4) {
+                GridRow {
+                    Text("ID").foregroundStyle(.secondary)
+                    elementLink(osmID)
+                }
+                if let version = osmEntry?.version {
+                    GridRow {
+                        Text("Version").foregroundStyle(.secondary)
+                        Text("\(version)")
                     }
                 }
             }
 
-            Button("Delete Feature", role: .destructive, action: onDelete)
-        }
-        .padding()
-        .frame(maxWidth: .infinity, alignment: .leading)
-        .task(id: feature.osmID) {
-            await loadOSMTags()
-        }
-    }
-
-    /// The OSM ID, linked to its page, and the element's tags.
-    private func osmMetadata(osmID: String) -> some View {
-        VStack(alignment: .leading, spacing: 2) {
-            HStack(spacing: 4) {
-                Text("OSM:")
-                if let url = OSMServer.elementURL(osmID: osmID) {
-                    Link(osmID, destination: url)
+            if let tags = osmEntry?.tags {
+                Text("Tags").font(.caption.bold())
+                if tags.isEmpty {
+                    Text("No tags").foregroundStyle(.secondary)
                 } else {
-                    Text(osmID)
-                }
-            }
-            if let osmTags {
-                if osmTags.isEmpty {
-                    Text("No tags")
-                } else {
-                    ForEach(osmTags.sorted { $0.key < $1.key }, id: \.key) { tag in
+                    ForEach(tags.sorted { $0.key < $1.key }, id: \.key) { tag in
                         Text("\(tag.key)=\(tag.value)")
                             .textSelection(.enabled)
                     }
                 }
+
+                if let members = osmEntry?.members {
+                    Text("Members").font(.caption.bold())
+                    if members.isEmpty {
+                        Text("No members").foregroundStyle(.secondary)
+                    } else {
+                        Grid(alignment: .leading, horizontalSpacing: 8, verticalSpacing: 2) {
+                            ForEach(Array(members.enumerated()), id: \.offset) { _, member in
+                                GridRow {
+                                    elementLink("\(member.type.prefix(1))\(member.ref)")
+                                    Text(member.role.isEmpty ? "no role" : member.role)
+                                        .foregroundStyle(.secondary)
+                                }
+                            }
+                        }
+                    }
+                }
             } else {
-                Text(osmTagsFailed ? "Tags could not be loaded" : "Loading tags…")
+                Text("Tags not read from OSM yet")
+                    .foregroundStyle(.secondary)
             }
         }
         .font(.caption)
-        .foregroundStyle(.secondary)
+        .frame(maxWidth: .infinity, alignment: .leading)
     }
 
-    private func loadOSMTags() async {
-        osmTags = nil
-        osmTagsFailed = false
-        guard let osmID = feature.osmID else { return }
-        do {
-            osmTags = try await OSMAPIClient.tags(of: osmID)
-        } catch {
-            osmTagsFailed = !Task.isCancelled
+    @ViewBuilder
+    private func elementLink(_ osmID: String) -> some View {
+        if let url = OSMServer.elementURL(osmID: osmID) {
+            Link(osmID, destination: url)
+        } else {
+            Text(osmID)
         }
     }
 
-    /// A binding to one value of a polygon vertex. A path's points can't be changed in place, so
-    /// setting it replaces the polygon.
-    private func vertexBinding(_ index: Int, _ keyPath: WritableKeyPath<Coordinate, Double>) -> Binding<Double> {
-        Binding(
-            get: { feature.polygon[index][keyPath: keyPath] },
-            set: { value in
-                var points = Array(feature.polygon)
-                points[index][keyPath: keyPath] = value
-                feature.polygon = CoordinatePath(points)
+    private var vertices: some View {
+        ScrollView {
+            LazyVStack(alignment: .leading, spacing: 2) {
+                ForEach(Array(feature.polygon.enumerated()), id: \.offset) { index, point in
+                    HStack(spacing: 8) {
+                        Text("\(index)")
+                            .frame(width: 24, alignment: .trailing)
+                            .foregroundStyle(.secondary)
+                        Text(String(format: "%.7f, %.7f", point.lat, point.lon))
+                    }
+                }
             }
-        )
+            .font(.caption.monospacedDigit())
+            .textSelection(.enabled)
+            .frame(maxWidth: .infinity, alignment: .leading)
+        }
+        .frame(minHeight: 60)
     }
 }

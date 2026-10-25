@@ -73,7 +73,7 @@ struct OSMChangeDetectorTests {
         ])
     }
 
-    @Test func relationPointsAreSentAndDeletesAreSkipped() {
+    @Test func relationPointsAndDeletesAreSent() {
         var course = makeCourse(features: [
             Feature(id: 1, type: .fairway, polygon: CoordinatePath(square()), osmID: "r1"),
             Feature(id: 2, type: .fairway, polygon: CoordinatePath(square()), osmID: "r2"),
@@ -86,7 +86,7 @@ struct OSMChangeDetectorTests {
 
         #expect(changes == [
             OSMFeatureChange(action: .modify, featureID: 1, type: .fairway, osmID: "r1", pointsChanged: true),
-            OSMFeatureChange(action: .skip, featureID: nil, type: .fairway, osmID: "r2", reason: "relations can't be deleted"),
+            OSMFeatureChange(action: .delete, featureID: nil, type: .fairway, osmID: "r2"),
         ])
     }
 
@@ -110,6 +110,24 @@ struct OSMChangeDetectorTests {
         baseline.pendingMultipolygons = [PendingMultipolygon(fairwayOSMID: "w1", innerOSMIDs: ["w2"])]
 
         #expect(OSMChangeDetector.changes(in: course, from: baseline).isEmpty)
+    }
+
+    @Test func sandBunkerGetsGolfTag() {
+        let course = makeCourse(features: [
+            Feature(id: 1, type: .bunker, polygon: CoordinatePath(square()), osmID: "w1"),
+            Feature(id: 2, type: .bunker, polygon: CoordinatePath(square()), osmID: "w2"),
+            Feature(id: 3, type: .bunker, polygon: CoordinatePath(square()), osmID: "w3"),
+            Feature(id: 4, type: .water, polygon: CoordinatePath(square()), osmID: "w4"),
+        ])
+        var baseline = OSMBaseline(course: course)
+        baseline.entries["w1"]?.tags = ["natural": "sand"]
+        baseline.entries["w2"]?.tags = ["golf": "bunker", "natural": "sand"]
+        // w3's tags are unknown.
+        baseline.entries["w4"]?.tags = ["natural": "water"]
+
+        let changes = OSMChangeDetector.changes(in: course, from: baseline)
+
+        #expect(changes == [OSMFeatureChange(action: .modify, featureID: 1, type: .bunker, osmID: "w1", addsGolfTag: true)])
     }
 
     @Test func relationTypeChangeIsSent() {
@@ -244,7 +262,10 @@ struct OSMChangeBuilderTests {
             OSMFeatureChange(action: .create, featureID: 2, type: .tee, osmID: nil),
             OSMFeatureChange(action: .delete, featureID: nil, type: .tee, osmID: "w11"),
         ]
-        let upload = OSMChangeBuilder.Upload(xml: "", createdWays: [-5: 2])
+        let upload = OSMChangeBuilder.Upload(xml: "", createdWays: [-5: 2], sent: [
+            "w10": OSMElementDetails(tags: ["golf": "green", "name": "Practice"]),
+            "w-5": OSMElementDetails(tags: ["golf": "tee"]),
+        ])
         let diff = [
             OSMDiffEntry(type: "way", oldID: 10, newID: 10, newVersion: 6),
             OSMDiffEntry(type: "way", oldID: -5, newID: 500, newVersion: 1),
@@ -258,8 +279,41 @@ struct OSMChangeBuilderTests {
         #expect(result.entries["w10"]?.version == 6)
         #expect(result.entries["w10"]?.type == .green)
         #expect(result.entries["w10"]?.points.count == 4)
+        #expect(result.entries["w10"]?.tags == ["golf": "green", "name": "Practice"])
+        #expect(result.entries["w500"]?.tags == ["golf": "tee"])
         #expect(result.entries["w11"] == nil)
         #expect(OSMChangeDetector.changes(in: course, from: result).isEmpty)
+    }
+
+    @Test func golfTagIsAddedAndOtherTagsKept() {
+        let fetched = OSMFetchedElements(
+            ways: [1: OSMWayFull(way: OSMWay(id: 1, version: 2, nodes: [10, 11, 12, 10], tags: ["natural": "sand", "name": "Pit"]), nodes: [:])],
+            relations: [9: OSMRelation(id: 9, version: 4, members: [], tags: ["natural": "sand", "type": "multipolygon"])]
+        )
+        let course = makeCourse(features: [
+            Feature(id: 1, type: .bunker, polygon: CoordinatePath(square()), osmID: "w1"),
+            Feature(id: 2, type: .bunker, polygon: CoordinatePath(square()), osmID: "r9"),
+        ])
+        let changes = [
+            OSMFeatureChange(action: .modify, featureID: 1, type: .bunker, osmID: "w1", addsGolfTag: true),
+            OSMFeatureChange(action: .modify, featureID: 2, type: .bunker, osmID: "r9", addsGolfTag: true),
+        ]
+
+        let upload = OSMChangeBuilder.upload(for: changes, course: course, fetched: fetched, changesetID: 7)
+
+        #expect(upload.sent["w1"]?.tags == ["golf": "bunker", "natural": "sand", "name": "Pit"])
+        #expect(upload.sent["r9"]?.tags == ["golf": "bunker", "natural": "sand", "type": "multipolygon"])
+        #expect(upload.xml.contains("<way id=\"1\" version=\"2\" changeset=\"7\">\n    <nd ref=\"10\"/>"))
+
+        var updated = course
+        let baseline = OSMBaseline(course: course)
+        let result = OSMChangeBuilder.apply(
+            [OSMDiffEntry(type: "way", oldID: 1, newID: 1, newVersion: 3), OSMDiffEntry(type: "relation", oldID: 9, newID: 9, newVersion: 5)],
+            upload: upload, changes: changes, course: &updated, baseline: baseline
+        )
+        #expect(result.entries["w1"]?.tags?["golf"] == "bunker")
+        #expect(result.entries["r9"]?.version == 5)
+        #expect(OSMChangeDetector.changes(in: updated, from: result).isEmpty)
     }
 
     @Test func diffResultParsing() {
@@ -300,11 +354,146 @@ struct OSMMultipolygonTests {
         #expect(OSMMultipolygon.containedGreens(in: fairway, course: course).isEmpty)
     }
 
-    @Test func relationFairwayIsNotOffered() {
+    @Test func greenMissingFromRelationFairwayIsOffered() {
         let fairway = Feature(id: 1, type: .fairway, polygon: CoordinatePath(fairwayPoints), osmID: "r1")
         let inside = Feature(id: 2, type: .green, polygon: CoordinatePath(square(north: 40).map { Coordinate(lat: $0.lat, lon: $0.lon + 0.0004) }), osmID: "w2")
+        let course = makeCourse(features: [fairway, inside])
+        let unknown = OSMBaseline(entries: ["r1": .init(osmID: "r1", version: 3, type: .fairway, points: [])])
+        let missing = OSMBaseline(entries: ["r1": .init(osmID: "r1", version: 3, type: .fairway, points: [], members: [.init(type: "way", ref: 50, role: "outer")])])
+        let present = OSMBaseline(entries: ["r1": .init(osmID: "r1", version: 3, type: .fairway, points: [], members: [.init(type: "way", ref: 2, role: "inner")])])
 
-        #expect(OSMMultipolygon.containedGreens(in: fairway, course: makeCourse(features: [fairway, inside])).isEmpty)
+        #expect(OSMMultipolygon.missingGreens(in: fairway, course: course, baseline: unknown).map(\.id) == [2])
+        #expect(OSMMultipolygon.missingGreens(in: fairway, course: course, baseline: missing).map(\.id) == [2])
+        #expect(OSMMultipolygon.missingGreens(in: fairway, course: course, baseline: present).isEmpty)
+    }
+
+    @Test func relationUploadAddsMissingInnerGreens() {
+        let relation = OSMRelation(
+            id: 9, version: 3,
+            members: [.init(type: "way", ref: 50, role: "outer"), .init(type: "way", ref: 2, role: "inner"), .init(type: "way", ref: 3, role: "")],
+            tags: ["golf": "fairway", "type": "multipolygon"]
+        )
+        let fetched = OSMFetchedElements(relations: [9: relation])
+        let course = makeCourse(features: [Feature(id: 5, type: .fairway, polygon: CoordinatePath(fairwayPoints), osmID: "r9")])
+        let changes = [OSMFeatureChange(action: .multipolygon, featureID: 5, type: .fairway, osmID: "r9", innerOSMIDs: ["w2", "w3", "w4"])]
+
+        let upload = OSMChangeBuilder.upload(for: changes, course: course, fetched: fetched, changesetID: 7)
+
+        #expect(upload.xml == """
+        <osmChange version="0.6" generator="CourseBuilder">
+        <modify>
+          <relation id="9" version="3" changeset="7">
+            <member type="way" ref="50" role="outer"/>
+            <member type="way" ref="2" role="inner"/>
+            <member type="way" ref="3" role="inner"/>
+            <member type="way" ref="4" role="inner"/>
+            <tag k="golf" v="fairway"/>
+            <tag k="type" v="multipolygon"/>
+          </relation>
+        </modify>
+        </osmChange>
+
+        """)
+        #expect(upload.createdRelations.isEmpty)
+        #expect(upload.sent["r9"]?.members?.map(\.ref) == [50, 2, 3, 4])
+    }
+
+    @Test func relationUploadWithNoMissingGreensSendsNothing() {
+        let relation = OSMRelation(id: 9, version: 3, members: [.init(type: "way", ref: 50, role: "outer"), .init(type: "way", ref: 2, role: "inner")], tags: [:])
+        let course = makeCourse(features: [Feature(id: 5, type: .fairway, polygon: CoordinatePath(fairwayPoints), osmID: "r9")])
+        let changes = [OSMFeatureChange(action: .multipolygon, featureID: 5, type: .fairway, osmID: "r9", innerOSMIDs: ["w2"])]
+
+        let upload = OSMChangeBuilder.upload(for: changes, course: course, fetched: OSMFetchedElements(relations: [9: relation]), changesetID: 7)
+
+        #expect(!upload.xml.contains("<relation"))
+    }
+
+    @Test func relationDeleteAlsoDeletesUntaggedOuterWays() {
+        let relation = OSMRelation(
+            id: 9, version: 3,
+            members: [.init(type: "way", ref: 50, role: "outer"), .init(type: "way", ref: 51, role: "outer"), .init(type: "way", ref: 2, role: "inner")],
+            tags: ["golf": "fairway", "type": "multipolygon"]
+        )
+        let fetched = OSMFetchedElements(
+            ways: [
+                50: OSMWayFull(way: OSMWay(id: 50, version: 4, nodes: [100, 101, 100], tags: [:]), nodes: [
+                    100: OSMNode(id: 100, version: 1, lat: 40, lon: -105),
+                    101: OSMNode(id: 101, version: 1, lat: 40.001, lon: -105),
+                ]),
+                51: OSMWayFull(way: OSMWay(id: 51, version: 2, nodes: [], tags: ["golf": "rough"]), nodes: [:]),
+            ],
+            relations: [9: relation]
+        )
+        let changes = [OSMFeatureChange(action: .delete, featureID: nil, type: .fairway, osmID: "r9")]
+
+        let upload = OSMChangeBuilder.upload(for: changes, course: makeCourse(features: []), fetched: fetched, changesetID: 7)
+
+        #expect(upload.xml == """
+        <osmChange version="0.6" generator="CourseBuilder">
+        <delete if-unused="true">
+          <relation id="9" version="3" changeset="7"/>
+          <way id="50" version="4" changeset="7"/>
+          <node id="100" version="1" changeset="7" lat="40.0000000" lon="-105.0000000"/>
+          <node id="101" version="1" changeset="7" lat="40.0010000" lon="-105.0000000"/>
+        </delete>
+        </osmChange>
+
+        """)
+    }
+
+    @Test func applyRemovesDeletedRelation() {
+        var course = makeCourse(features: [])
+        let baseline = OSMBaseline(entries: ["r9": .init(osmID: "r9", version: 3, type: .fairway, points: [])])
+        let changes = [OSMFeatureChange(action: .delete, featureID: nil, type: .fairway, osmID: "r9")]
+
+        let result = OSMChangeBuilder.apply([], upload: .init(xml: "", createdWays: [:]), changes: changes, course: &course, baseline: baseline)
+
+        #expect(result.entries.isEmpty)
+    }
+
+    @Test func unknownDetailsAreFilled() {
+        let inner = OSMRelation.Member(type: "way", ref: 1, role: "inner")
+        var baseline = OSMBaseline(entries: [
+            "r9": .init(osmID: "r9", version: 1, type: .fairway, points: []),
+            "r10": .init(osmID: "r10", version: 1, type: .fairway, points: [], tags: ["golf": "fairway"], members: []),
+            "w1": .init(osmID: "w1", version: 1, type: .green, points: []),
+            "w2": .init(osmID: "w2", version: 1, type: .tee, points: [], tags: ["golf": "tee"]),
+        ])
+
+        #expect(baseline.osmIDsWithUnknownDetails == ["r9", "w1"])
+
+        baseline.fillDetails([
+            "r9": OSMElementDetails(version: 5, tags: ["golf": "fairway"], members: [inner]),
+            "r10": OSMElementDetails(version: 5, tags: [:], members: [inner]),
+            "w1": OSMElementDetails(version: 5, tags: ["golf": "green"]),
+        ])
+
+        #expect(baseline.entries["r9"]?.innerOSMIDs == ["w1"])
+        #expect(baseline.entries["r9"]?.version == 1)
+        #expect(baseline.entries["r10"]?.tags == ["golf": "fairway"])
+        #expect(baseline.entries["r10"]?.members == [])
+        #expect(baseline.entries["w1"]?.tags == ["golf": "green"])
+        #expect(baseline.osmIDsWithUnknownDetails.isEmpty)
+    }
+
+    @Test func applyRecordsRelationInnerGreens() {
+        var course = makeCourse(features: [Feature(id: 5, type: .fairway, polygon: CoordinatePath(fairwayPoints), osmID: "r9")])
+        let baseline = OSMBaseline(
+            entries: ["r9": .init(osmID: "r9", version: 3, type: .fairway, points: [])],
+            pendingMultipolygons: [PendingMultipolygon(fairwayOSMID: "r9", innerOSMIDs: ["w2"])]
+        )
+        let changes = [OSMFeatureChange(action: .multipolygon, featureID: 5, type: .fairway, osmID: "r9", innerOSMIDs: ["w2"])]
+        let diff = [OSMDiffEntry(type: "relation", oldID: 9, newID: 9, newVersion: 4)]
+        let upload = OSMChangeBuilder.Upload(xml: "", createdWays: [:], sent: [
+            "r9": OSMElementDetails(tags: ["golf": "fairway"], members: [.init(type: "way", ref: 50, role: "outer"), .init(type: "way", ref: 2, role: "inner")]),
+        ])
+
+        let result = OSMChangeBuilder.apply(diff, upload: upload, changes: changes, course: &course, baseline: baseline)
+
+        #expect(course.features[0].osmID == "r9")
+        #expect(result.entries["r9"]?.version == 4)
+        #expect(result.entries["r9"]?.innerOSMIDs == ["w2"])
+        #expect(result.pendingMultipolygons.isEmpty)
     }
 
     @Test func multipolygonUploadMovesTagsToNewRelation() {
@@ -327,6 +516,8 @@ struct OSMMultipolygonTests {
         """))
         #expect(upload.xml.contains("<way id=\"1\" version=\"3\" changeset=\"7\">\n    <nd ref=\"10\"/>\n    <nd ref=\"11\"/>\n    <nd ref=\"12\"/>\n    <nd ref=\"10\"/>\n  </way>"))
         #expect(upload.createdRelations == [-1: 5])
+        #expect(upload.sent["w1"] == OSMElementDetails(tags: [:]))
+        #expect(upload.sent["r-1"]?.tags == ["golf": "fairway", "landuse": "grass", "type": "multipolygon"])
     }
 
     @Test func relationPointEditChangesOuterWayOnly() {
@@ -357,7 +548,9 @@ struct OSMMultipolygonTests {
             pendingMultipolygons: [PendingMultipolygon(fairwayOSMID: "w1", innerOSMIDs: ["w2"])]
         )
         let changes = [OSMFeatureChange(action: .multipolygon, featureID: 5, type: .fairway, osmID: "w1", innerOSMIDs: ["w2"])]
-        let upload = OSMChangeBuilder.Upload(xml: "", createdWays: [:], createdRelations: [-1: 5])
+        let upload = OSMChangeBuilder.Upload(xml: "", createdWays: [:], createdRelations: [-1: 5], sent: [
+            "r-1": OSMElementDetails(tags: ["golf": "fairway", "type": "multipolygon"], members: [.init(type: "way", ref: 1, role: "outer"), .init(type: "way", ref: 2, role: "inner")]),
+        ])
         let diff = [
             OSMDiffEntry(type: "relation", oldID: -1, newID: 800, newVersion: 1),
             OSMDiffEntry(type: "way", oldID: 1, newID: 1, newVersion: 4),
@@ -368,6 +561,8 @@ struct OSMMultipolygonTests {
         #expect(course.features[0].osmID == "r800")
         #expect(result.entries["w1"] == nil)
         #expect(result.entries["r800"]?.version == 1)
+        #expect(result.entries["r800"]?.innerOSMIDs == ["w2"])
+        #expect(result.entries["r800"]?.tags == ["golf": "fairway", "type": "multipolygon"])
         #expect(result.pendingMultipolygons.isEmpty)
         #expect(OSMChangeDetector.changes(in: course, from: result).isEmpty)
     }
@@ -405,7 +600,7 @@ struct OSMBaselineStoreTests {
 
     @Test func revertRestoresTypeAndPoints() {
         let original = Feature(id: 1, type: .bunker, polygon: CoordinatePath(square()), osmID: "w1")
-        let entry = OSMBaseline.Entry(feature: original, osmID: "w1", version: 3)
+        let entry = OSMBaseline.Entry(feature: original, osmID: "w1", details: OSMElementDetails(version: 3, tags: [:]))
         var moved = square()
         moved[0] = point(north: -5)
         let edited = Feature(id: 1, type: .water, polygon: CoordinatePath(moved), osmID: "w1")
@@ -446,6 +641,6 @@ struct PublishToOSMSheetTests {
 
     @Test func detailText() {
         #expect(PublishToOSMSheet.detail(for: OSMFeatureChange(action: .modify, featureID: 1, type: .water, osmID: "w1", oldType: .bunker, pointsChanged: true)) == "points, type, was bunker")
-        #expect(PublishToOSMSheet.detail(for: OSMFeatureChange(action: .skip, featureID: 1, type: .water, osmID: "r1", reason: "relations can't be deleted")) == "relations can't be deleted")
+        #expect(PublishToOSMSheet.detail(for: OSMFeatureChange(action: .modify, featureID: 1, type: .bunker, osmID: "w1", addsGolfTag: true)) == "adds golf=bunker")
     }
 }

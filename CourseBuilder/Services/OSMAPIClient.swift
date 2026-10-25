@@ -71,15 +71,35 @@ struct OSMAPIClient {
         return OSMWayFull(way: way, nodes: nodes)
     }
 
-    /// The current tags of an element, by its short OSM ID. Reading needs no sign in.
-    static func tags(of osmID: String, session: URLSession = .shared) async throws -> [String: String] {
-        guard let path = OSMServer.elementPath(osmID: osmID) else { throw APIError.invalidResponse }
-        let (data, response) = try await session.data(from: OSMServer.apiURL.appendingPathComponent("\(path).json"))
-        let statusCode = (response as? HTTPURLResponse)?.statusCode ?? 0
-        guard statusCode == 200 else { throw APIError.http(statusCode: statusCode, message: "") }
-        guard let json = try JSONSerialization.jsonObject(with: data) as? [String: Any],
-              let element = (json["elements"] as? [[String: Any]])?.first else { throw APIError.invalidResponse }
-        return Self.tags(from: element)
+    /// The most elements read in one request, which keeps the URL short.
+    static let detailsBatchSize = 100
+
+    /// The current version, tags, and members of ways and relations, by short OSM ID such as
+    /// `w123`. Other IDs are ignored. Reading needs no sign in.
+    static func details(of osmIDs: [String], session: URLSession = .shared) async throws -> [String: OSMElementDetails] {
+        var details: [String: OSMElementDetails] = [:]
+        for (kind, plural) in [("w", "ways"), ("r", "relations")] {
+            let ids = osmIDs.compactMap(OSMChangeBuilder.parse).filter { $0.kind == kind }.map(\.id)
+            for start in stride(from: 0, to: ids.count, by: detailsBatchSize) {
+                let batch = ids[start..<min(start + detailsBatchSize, ids.count)]
+                var components = URLComponents(url: OSMServer.apiURL.appendingPathComponent("\(plural).json"), resolvingAgainstBaseURL: false)!
+                components.queryItems = [URLQueryItem(name: plural, value: batch.map(String.init).joined(separator: ","))]
+                let (data, response) = try await session.data(from: components.url!)
+                let statusCode = (response as? HTTPURLResponse)?.statusCode ?? 0
+                guard statusCode == 200 else { throw APIError.http(statusCode: statusCode, message: "") }
+                guard let json = try JSONSerialization.jsonObject(with: data) as? [String: Any],
+                      let elements = json["elements"] as? [[String: Any]] else { throw APIError.invalidResponse }
+                for element in elements {
+                    guard let osmID = OverpassAPIClient.osmID(of: element) else { continue }
+                    details[osmID] = OSMElementDetails(
+                        version: element["version"] as? Int,
+                        tags: Self.tags(from: element),
+                        members: OverpassAPIClient.members(of: element)
+                    )
+                }
+            }
+        }
+        return details
     }
 
     func relation(id: Int) async throws -> OSMRelation {
@@ -94,10 +114,11 @@ struct OSMAPIClient {
         return OSMRelation(id: id, version: version, members: members, tags: Self.tags(from: element))
     }
 
-    /// The current elements for every sent change that modifies or deletes an OSM element.
+    /// The current elements for every change that modifies or deletes an OSM element.
     ///
     /// A relation whose points changed also gets its outer way. Throws
-    /// ``APIError/multipleOuterWays(osmID:count:)`` when it does not have exactly one.
+    /// ``APIError/multipleOuterWays(osmID:count:)`` when it does not have exactly one. A deleted
+    /// relation also gets all of its outer ways.
     func fetchElements(for changes: [OSMFeatureChange]) async throws -> OSMFetchedElements {
         var fetched = OSMFetchedElements()
         for change in changes where change.action == .modify || change.action == .delete || change.action == .multipolygon {
@@ -110,6 +131,12 @@ struct OSMAPIClient {
             case "r":
                 let relation = try await relation(id: id)
                 fetched.relations[id] = relation
+                if change.action == .delete {
+                    for member in relation.members where member.type == "way" && member.role == "outer" && fetched.ways[member.ref] == nil {
+                        fetched.ways[member.ref] = try await wayFull(id: member.ref)
+                    }
+                    continue
+                }
                 guard change.pointsChanged else { continue }
                 let outers = relation.members.filter { $0.type == "way" && $0.role == "outer" }
                 guard outers.count == 1 else { throw APIError.multipleOuterWays(osmID: osmID, count: outers.count) }
@@ -163,13 +190,12 @@ struct OSMAPIClient {
         baseline: OSMBaseline,
         comment: String
     ) async throws -> PublishResult {
-        let sent = changes.filter(\.isSent)
-        let fetched = try await fetchElements(for: sent)
-        let conflicts = OSMChangeBuilder.conflicts(in: sent, baseline: baseline, fetched: fetched)
+        let fetched = try await fetchElements(for: changes)
+        let conflicts = OSMChangeBuilder.conflicts(in: changes, baseline: baseline, fetched: fetched)
         guard conflicts.isEmpty else { throw APIError.conflicts(osmIDs: conflicts) }
 
         let changesetID = try await createChangeset(comment: comment)
-        let osmChange = OSMChangeBuilder.upload(for: sent, course: course, fetched: fetched, changesetID: changesetID)
+        let osmChange = OSMChangeBuilder.upload(for: changes, course: course, fetched: fetched, changesetID: changesetID)
         let diff: [OSMDiffEntry]
         do {
             diff = try await upload(changesetID: changesetID, xml: osmChange.xml)
@@ -185,7 +211,7 @@ struct OSMAPIClient {
         }
 
         var updated = course
-        let newBaseline = OSMChangeBuilder.apply(diff, upload: osmChange, changes: sent, course: &updated, baseline: baseline)
+        let newBaseline = OSMChangeBuilder.apply(diff, upload: osmChange, changes: changes, course: &updated, baseline: baseline)
         return PublishResult(course: updated, baseline: newBaseline, changesetID: changesetID)
     }
 

@@ -12,16 +12,46 @@ struct OSMBaseline: Codable, Equatable {
         var type: FeatureType
         /// Points as `[latitude, longitude]`. Elevation is not kept.
         var points: [[Double]]
+        /// The element's tags. Nil when unknown, such as for baselines saved before tags were kept.
+        var tags: [String: String]?
+        /// For a relation, its members. Nil for a way, and for a relation whose members are unknown.
+        var members: [OSMRelation.Member]?
 
-        init(osmID: String, version: Int?, type: FeatureType, points: [[Double]]) {
+        init(osmID: String, version: Int?, type: FeatureType, points: [[Double]], tags: [String: String]? = nil, members: [OSMRelation.Member]? = nil) {
             self.osmID = osmID
             self.version = version
             self.type = type
             self.points = points
+            self.tags = tags
+            self.members = members
         }
 
-        init(feature: Feature, osmID: String, version: Int?) {
-            self.init(osmID: osmID, version: version, type: feature.type, points: feature.polygon.map { [$0.lat, $0.lon] })
+        init(feature: Feature, osmID: String, details: OSMElementDetails?) {
+            self.init(
+                osmID: osmID,
+                version: details?.version,
+                type: feature.type,
+                points: feature.polygon.map { [$0.lat, $0.lon] },
+                tags: details?.tags,
+                members: details?.members
+            )
+        }
+
+        /// Whether the tags, and for a relation the members, are unknown.
+        var detailsUnknown: Bool {
+            tags == nil || (osmID.hasPrefix("r") && members == nil)
+        }
+
+        /// Takes the tags and members sent to OSM for this element. Nothing changes when nothing was sent.
+        mutating func takeSent(_ sent: OSMElementDetails?) {
+            guard let sent else { return }
+            tags = sent.tags
+            if sent.members != nil { members = sent.members }
+        }
+
+        /// For a relation, its inner way members. Nil when the members are unknown.
+        var innerOSMIDs: [String]? {
+            members?.filter { $0.type == "way" && $0.role == "inner" }.map { "w\($0.ref)" }
         }
 
         var coordinates: [Coordinate] {
@@ -42,16 +72,31 @@ struct OSMBaseline: Codable, Equatable {
     /// Entries by OSM ID.
     var entries: [String: Entry] = [:]
 
-    /// Fairways to make into multipolygons on the next publish.
+    /// Fairways to make into multipolygons, or fairway relations to add greens to, on the next publish.
     var pendingMultipolygons: [PendingMultipolygon] = []
 
     /// A baseline of every course feature that has an OSM ID.
     ///
-    /// - Parameter versions: Known OSM versions by OSM ID. Features not in it get an unknown version.
-    init(course: Course, versions: [String: Int] = [:]) {
+    /// - Parameter details: Known OSM details by OSM ID. Features not in it get an unknown
+    ///   version, tags, and members.
+    init(course: Course, details: [String: OSMElementDetails] = [:]) {
         for feature in course.features {
             guard let osmID = feature.osmID else { continue }
-            entries[osmID] = Entry(feature: feature, osmID: osmID, version: versions[osmID])
+            entries[osmID] = Entry(feature: feature, osmID: osmID, details: details[osmID])
+        }
+    }
+
+    /// The OSM IDs whose tags or members are unknown, such as entries saved before they were kept.
+    var osmIDsWithUnknownDetails: [String] {
+        entries.values.filter(\.detailsUnknown).map(\.osmID).sorted()
+    }
+
+    /// Sets the tags and members of entries whose details are unknown. Versions are not changed,
+    /// since they are what the conflict check compares to.
+    mutating func fillDetails(_ details: [String: OSMElementDetails]) {
+        for (osmID, detail) in details where entries[osmID]?.detailsUnknown == true {
+            entries[osmID]?.tags = detail.tags
+            entries[osmID]?.members = detail.members
         }
     }
 

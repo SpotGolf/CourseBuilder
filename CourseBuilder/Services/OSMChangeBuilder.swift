@@ -18,7 +18,7 @@ struct OSMWay: Equatable {
 }
 
 struct OSMRelation: Equatable {
-    struct Member: Equatable {
+    struct Member: Codable, Equatable {
         let type: String
         let ref: Int
         let role: String
@@ -28,6 +28,14 @@ struct OSMRelation: Equatable {
     let version: Int
     var members: [Member]
     var tags: [String: String]
+}
+
+/// An element's version, tags, and, for a relation, members.
+struct OSMElementDetails: Equatable {
+    var version: Int? = nil
+    var tags: [String: String]
+    /// Nil for an element that is not a relation.
+    var members: [OSMRelation.Member]? = nil
 }
 
 /// A way and its nodes, from `/way/{id}/full`.
@@ -40,7 +48,8 @@ struct OSMWayFull: Equatable {
 struct OSMFetchedElements: Equatable {
     var ways: [Int: OSMWayFull] = [:]
     var relations: [Int: OSMRelation] = [:]
-    /// The one outer way of each relation whose points are edited, by relation ID.
+    /// The one outer way of each relation whose points are edited, by relation ID. The outer ways
+    /// of a deleted relation are in ``ways`` but not here.
     var outerWays: [Int: Int] = [:]
 
     /// The fetched version of an element, by its short OSM ID.
@@ -70,6 +79,9 @@ enum OSMChangeBuilder {
         let createdWays: [Int: Int]
         /// The fairway feature ID of each created multipolygon, by its placeholder (negative) relation ID.
         var createdRelations: [Int: Int] = [:]
+        /// The tags and members sent for each created or modified way and relation, by short OSM
+        /// ID such as `w123`. Created elements use their placeholder (negative) IDs.
+        var sent: [String: OSMElementDetails] = [:]
     }
 
     // MARK: - Tags
@@ -171,9 +183,11 @@ enum OSMChangeBuilder {
 
     /// Builds the `osmChange` XML for the sent changes.
     ///
-    /// Point edits on a relation go to its one outer way. A multipolygon change makes a relation
-    /// with the fairway way as its outer member and the greens as inner members, and moves the
-    /// fairway way's tags to the relation.
+    /// Point edits on a relation go to its one outer way. A multipolygon change on a fairway way
+    /// makes a relation with the way as its outer member and the greens as inner members, and
+    /// moves the way's tags to the relation. A multipolygon change on a fairway relation adds the
+    /// greens it is missing as inner members. A deleted relation also deletes its outer ways that
+    /// have no tags. Its inner ways are features of their own and are left alone.
     static func upload(
         for changes: [OSMFeatureChange],
         course: Course,
@@ -190,6 +204,7 @@ enum OSMChangeBuilder {
         var modifiedWayIDs: [Int] = []
         var modifiedWays: [Int: OSMWay] = [:]
         var modifiedRelations: [OSMRelation] = []
+        var deletedRelations: [OSMRelation] = []
         var deletedWays: [OSMWay] = []
         var unusedNodes: [Int: OSMNode] = [:]
         var usedNodes: Set<Int> = []
@@ -201,6 +216,17 @@ enum OSMChangeBuilder {
         func modify(_ way: OSMWay) {
             if modifiedWays[way.id] == nil { modifiedWayIDs.append(way.id) }
             modifiedWays[way.id] = way
+        }
+        /// The relation as already changed in this upload, or as fetched.
+        func currentRelation(_ id: Int) -> OSMRelation? {
+            modifiedRelations.first { $0.id == id } ?? fetched.relations[id]
+        }
+        func modify(_ relation: OSMRelation) {
+            if let index = modifiedRelations.firstIndex(where: { $0.id == relation.id }) {
+                modifiedRelations[index] = relation
+            } else {
+                modifiedRelations.append(relation)
+            }
         }
         /// Moves the way onto the feature's points, reusing its nodes where they still fit.
         func reshape(_ way: inout OSMWay, to feature: Feature) {
@@ -219,7 +245,15 @@ enum OSMChangeBuilder {
             way.nodes = refs
         }
 
-        for change in changes where change.isSent {
+        /// Deletes the way and marks its untagged nodes as unused.
+        func delete(_ full: OSMWayFull) {
+            deletedWays.append(full.way)
+            for node in full.way.nodes.compactMap({ full.nodes[$0] }) where node.tags.isEmpty {
+                unusedNodes[node.id] = node
+            }
+        }
+
+        for change in changes {
             switch change.action {
             case .create:
                 guard let featureID = change.featureID, let feature = course.findFeature(id: featureID) else { continue }
@@ -240,10 +274,13 @@ enum OSMChangeBuilder {
                       let feature = course.findFeature(id: featureID),
                       let osmID = change.osmID,
                       let (kind, id) = parse(osmID) else { continue }
-                if kind == "r", var relation = fetched.relations[id] {
+                if kind == "r", var relation = currentRelation(id) {
                     if let oldType = change.oldType {
                         relation.tags = retag(relation.tags, from: oldType, to: feature.type)
-                        modifiedRelations.append(relation)
+                        modify(relation)
+                    } else if change.addsGolfTag {
+                        relation.tags.merge(tags(for: feature.type)) { existing, _ in existing }
+                        modify(relation)
                     }
                     if change.pointsChanged, let outerID = fetched.outerWays[id], var outer = currentWay(outerID) {
                         reshape(&outer, to: feature)
@@ -252,6 +289,8 @@ enum OSMChangeBuilder {
                 } else if kind == "w", var way = currentWay(id) {
                     if let oldType = change.oldType {
                         way.tags = retag(way.tags, from: oldType, to: feature.type)
+                    } else if change.addsGolfTag {
+                        way.tags.merge(tags(for: feature.type)) { existing, _ in existing }
                     }
                     if change.pointsChanged {
                         reshape(&way, to: feature)
@@ -262,8 +301,25 @@ enum OSMChangeBuilder {
             case .multipolygon:
                 guard let featureID = change.featureID,
                       let osmID = change.osmID,
-                      let (kind, id) = parse(osmID), kind == "w",
-                      var fairway = currentWay(id) else { continue }
+                      let (kind, id) = parse(osmID) else { continue }
+                if kind == "r" {
+                    guard var relation = currentRelation(id) else { continue }
+                    var changed = false
+                    for inner in change.innerOSMIDs {
+                        guard let (innerKind, innerID) = parse(inner), innerKind == "w" else { continue }
+                        if let index = relation.members.firstIndex(where: { $0.type == "way" && $0.ref == innerID }) {
+                            // A member with no role is fixed. One with a role is left alone.
+                            guard relation.members[index].role.isEmpty else { continue }
+                            relation.members[index] = OSMRelation.Member(type: "way", ref: innerID, role: "inner")
+                        } else {
+                            relation.members.append(OSMRelation.Member(type: "way", ref: innerID, role: "inner"))
+                        }
+                        changed = true
+                    }
+                    if changed { modify(relation) }
+                    continue
+                }
+                guard kind == "w", var fairway = currentWay(id) else { continue }
                 let relationID = nextID
                 nextID -= 1
                 var members = [OSMRelation.Member(type: "way", ref: id, role: "outer")]
@@ -279,18 +335,20 @@ enum OSMChangeBuilder {
                 modify(fairway)
 
             case .delete:
-                guard let osmID = change.osmID, let (kind, id) = parse(osmID), kind == "w",
-                      let full = fetched.ways[id] else { continue }
-                deletedWays.append(full.way)
-                for node in full.way.nodes.compactMap({ full.nodes[$0] }) where node.tags.isEmpty {
-                    unusedNodes[node.id] = node
+                guard let osmID = change.osmID, let (kind, id) = parse(osmID) else { continue }
+                if kind == "r", let relation = fetched.relations[id] {
+                    deletedRelations.append(relation)
+                    for member in relation.members where member.type == "way" && member.role == "outer" {
+                        if let full = fetched.ways[member.ref], full.way.tags.isEmpty { delete(full) }
+                    }
+                } else if kind == "w", let full = fetched.ways[id] {
+                    delete(full)
                 }
-
-            case .skip:
-                continue
             }
         }
 
+        // A way changed in this upload is kept, such as an outer way also used by an edited relation.
+        deletedWays.removeAll { modifiedWays[$0.id] != nil }
         for way in modifiedWays.values {
             usedNodes.formUnion(way.nodes)
         }
@@ -309,22 +367,31 @@ enum OSMChangeBuilder {
             modifiedRelations.forEach { xml += relationXML($0, changesetID: changesetID, includeVersion: true) }
             xml += "</modify>\n"
         }
-        if !deletedWays.isEmpty || !deletedNodes.isEmpty {
-            // OSM skips any element that is still used, such as a node another way shares.
+        if !deletedRelations.isEmpty || !deletedWays.isEmpty || !deletedNodes.isEmpty {
+            // OSM skips any element that is still used, such as a node another way shares or an
+            // outer way another relation shares. Relations come first so their ways are unused.
             xml += "<delete if-unused=\"true\">\n"
+            deletedRelations.forEach { xml += "  <relation id=\"\($0.id)\" version=\"\($0.version)\" changeset=\"\(changesetID)\"/>\n" }
             deletedWays.forEach { xml += "  <way id=\"\($0.id)\" version=\"\($0.version)\" changeset=\"\(changesetID)\"/>\n" }
             deletedNodes.forEach { xml += nodeXML($0, changesetID: changesetID, includeVersion: true) }
             xml += "</delete>\n"
         }
         xml += "</osmChange>\n"
-        return Upload(xml: xml, createdWays: createdWayFeatures, createdRelations: createdRelationFeatures)
+        var sent: [String: OSMElementDetails] = [:]
+        for way in createdWays + Array(modifiedWays.values) {
+            sent["w\(way.id)"] = OSMElementDetails(tags: way.tags)
+        }
+        for relation in createdRelations + modifiedRelations {
+            sent["r\(relation.id)"] = OSMElementDetails(tags: relation.tags, members: relation.members)
+        }
+        return Upload(xml: xml, createdWays: createdWayFeatures, createdRelations: createdRelationFeatures, sent: sent)
     }
 
     // MARK: - Result
 
     /// Applies OSM's answer to an upload: created features get their new OSM IDs, fairways made
-    /// into multipolygons get their relation IDs, and the baseline takes the sent state and new
-    /// versions.
+    /// into multipolygons get their relation IDs, and the baseline takes the sent state, tags,
+    /// members, and new versions.
     static func apply(
         _ diff: [OSMDiffEntry],
         upload: Upload,
@@ -345,10 +412,11 @@ enum OSMChangeBuilder {
                   let index = course.features.firstIndex(where: { $0.id == featureID }) else { continue }
             let osmID = "w\(newID)"
             course.features[index].osmID = osmID
-            result.entries[osmID] = OSMBaseline.Entry(feature: course.features[index], osmID: osmID, version: entry.newVersion)
+            let sent = upload.sent["w\(entry.oldID)"]
+            result.entries[osmID] = OSMBaseline.Entry(feature: course.features[index], osmID: osmID, details: OSMElementDetails(version: entry.newVersion, tags: sent?.tags ?? [:]))
         }
 
-        for change in changes where change.isSent {
+        for change in changes {
             guard let osmID = change.osmID, let (kind, id) = parse(osmID) else { continue }
             switch change.action {
             case .modify:
@@ -360,12 +428,18 @@ enum OSMChangeBuilder {
                 }
                 // A relation whose outer way changed but whose tags did not keeps its version.
                 entry.version = kind == "r" ? (newRelationVersions[id] ?? entry.version) : newWayVersions[id]
+                entry.takeSent(upload.sent[osmID])
                 result.entries[osmID] = entry
             case .delete:
                 result.entries.removeValue(forKey: osmID)
             case .multipolygon:
                 result.pendingMultipolygons.removeAll { $0.fairwayOSMID == osmID }
-            case .create, .skip:
+                if kind == "r", var entry = result.entries[osmID] {
+                    entry.version = newRelationVersions[id] ?? entry.version
+                    entry.takeSent(upload.sent[osmID])
+                    result.entries[osmID] = entry
+                }
+            case .create:
                 break
             }
         }
@@ -376,9 +450,14 @@ enum OSMChangeBuilder {
             if let wayOSMID = course.features[index].osmID {
                 result.entries.removeValue(forKey: wayOSMID)
             }
+            let sent = upload.sent["r\(entry.oldID)"]
             let osmID = "r\(newID)"
             course.features[index].osmID = osmID
-            result.entries[osmID] = OSMBaseline.Entry(feature: course.features[index], osmID: osmID, version: entry.newVersion)
+            result.entries[osmID] = OSMBaseline.Entry(
+                feature: course.features[index],
+                osmID: osmID,
+                details: OSMElementDetails(version: entry.newVersion, tags: sent?.tags ?? [:], members: sent?.members ?? [])
+            )
         }
         return result
     }

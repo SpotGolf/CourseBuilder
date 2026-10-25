@@ -117,19 +117,75 @@ struct OSMAPIClientTests {
         #expect(fetched.ways[50]?.way.version == 4)
     }
 
-    @Test func readsTagsWithoutSignIn() async throws {
+    @Test func relationDeleteFetchesEveryOuterWay() async throws {
         StubOSMProtocol.reset()
         StubOSMProtocol.handler = { request in
-            guard request.url!.path() == "/api/0.6/relation/9.json" else { return (404, "") }
-            return (200, #"{"elements": [{"type": "relation", "id": 9, "version": 2, "members": [], "tags": {"golf": "fairway", "type": "multipolygon"}}]}"#)
+            let path = request.url!.path()
+            if path.hasSuffix("/relation/9.json") {
+                return (200, """
+                {"elements": [{"type": "relation", "id": 9, "version": 2, "tags": {"type": "multipolygon"},
+                  "members": [{"type": "way", "ref": 50, "role": "outer"}, {"type": "way", "ref": 52, "role": "outer"}, {"type": "way", "ref": 51, "role": "inner"}]}]}
+                """)
+            }
+            for id in [50, 52] where path.hasSuffix("/way/\(id)/full.json") {
+                return (200, #"{"elements": [{"type": "node", "id": 1, "version": 1, "lat": 40, "lon": -105}, {"type": "way", "id": \#(id), "version": 4, "nodes": [1]}]}"#)
+            }
+            return (404, "")
+        }
+        let changes = [OSMFeatureChange(action: .delete, featureID: nil, type: .fairway, osmID: "r9")]
+
+        let fetched = try await makeClient().fetchElements(for: changes)
+
+        #expect(fetched.relations[9]?.version == 2)
+        #expect(Set(fetched.ways.keys) == [50, 52])
+        #expect(fetched.outerWays.isEmpty)
+    }
+
+    @Test func readsDetailsWithoutSignIn() async throws {
+        StubOSMProtocol.reset()
+        StubOSMProtocol.handler = { request in
+            switch (request.url!.path(), request.url!.query()) {
+            case ("/api/0.6/relations.json", "relations=9"):
+                return (200, """
+                {"elements": [{"type": "relation", "id": 9, "version": 2, "tags": {"golf": "fairway", "type": "multipolygon"},
+                  "members": [{"type": "way", "ref": 50, "role": "outer"}, {"type": "way", "ref": 51, "role": "inner"}]}]}
+                """)
+            case ("/api/0.6/ways.json", "ways=51,52"):
+                return (200, """
+                {"elements": [{"type": "way", "id": 51, "version": 3, "nodes": [], "tags": {"golf": "green"}},
+                  {"type": "way", "id": 52, "version": 1, "nodes": []}]}
+                """)
+            default:
+                return (404, "")
+            }
         }
         let configuration = URLSessionConfiguration.ephemeral
         configuration.protocolClasses = [StubOSMProtocol.self]
 
-        let tags = try await OSMAPIClient.tags(of: "r9", session: URLSession(configuration: configuration))
+        let details = try await OSMAPIClient.details(of: ["r9", "w51", "w52"], session: URLSession(configuration: configuration))
 
-        #expect(tags == ["golf": "fairway", "type": "multipolygon"])
-        #expect(StubOSMProtocol.requests.first?.value(forHTTPHeaderField: "Authorization") == nil)
+        #expect(details == [
+            "r9": OSMElementDetails(
+                version: 2,
+                tags: ["golf": "fairway", "type": "multipolygon"],
+                members: [.init(type: "way", ref: 50, role: "outer"), .init(type: "way", ref: 51, role: "inner")]
+            ),
+            "w51": OSMElementDetails(version: 3, tags: ["golf": "green"]),
+            "w52": OSMElementDetails(version: 1, tags: [:]),
+        ])
+        #expect(StubOSMProtocol.requests.allSatisfy { $0.value(forHTTPHeaderField: "Authorization") == nil })
+    }
+
+    @Test func detailsAreReadInBatches() async throws {
+        StubOSMProtocol.reset()
+        StubOSMProtocol.handler = { _ in (200, #"{"elements": []}"#) }
+        let configuration = URLSessionConfiguration.ephemeral
+        configuration.protocolClasses = [StubOSMProtocol.self]
+        let ids = (1...(OSMAPIClient.detailsBatchSize + 1)).map { "w\($0)" }
+
+        _ = try await OSMAPIClient.details(of: ids, session: URLSession(configuration: configuration))
+
+        #expect(StubOSMProtocol.requests.count == 2)
     }
 
     @Test func elementLinks() {

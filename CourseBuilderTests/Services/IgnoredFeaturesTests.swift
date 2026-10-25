@@ -59,7 +59,7 @@ struct IgnoredFeaturesTests {
         var ignored: [Feature] = []
         IgnoredFeatures.ignore([2], in: &course, ignored: &ignored)
 
-        #expect(OSMChangeDetector.changes(in: course, from: baseline, ignoredOSMIDs: ["w2"]).filter(\.isSent).allSatisfy { $0.action != .delete })
+        #expect(OSMChangeDetector.changes(in: course, from: baseline, ignoredOSMIDs: ["w2"]).allSatisfy { $0.action != .delete })
         #expect(OSMChangeDetector.changes(in: course, from: baseline).contains { $0.action == .delete && $0.osmID == "w2" })
     }
 

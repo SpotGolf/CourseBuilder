@@ -629,7 +629,7 @@ struct MapEditorView: View {
             }
             .disabled(isImportingOSM || !course.features.isEmpty)
 
-            if osmChanges.contains(where: \.isSent) && !isMappingMode {
+            if !osmChanges.isEmpty && !isMappingMode {
                 Button {
                     Task { await startOSMPublish() }
                 } label: {
@@ -980,36 +980,28 @@ struct MapEditorView: View {
             if let featureID = selectedFeatureID,
                let featureIndex = course.features.firstIndex(where: { $0.id == featureID }),
                selectedHoleIndex < course.subCourses[selectedSubCourseIndex].holes.count {
-                VStack(alignment: .leading, spacing: 0) {
-                    FeatureEditorView(
-                        feature: $course.features[featureIndex],
-                        onDelete: {
-                            featureToDelete = featureID
+                FeatureEditorView(
+                    feature: $course.features[featureIndex],
+                    osmEntry: course.features[featureIndex].osmID.flatMap { osmBaseline?.entries[$0] }
+                ) {
+                    let isAssociated = currentHole?.features.contains(featureID) ?? false
+                    if isAssociated {
+                        Button("Disassociate from Hole \(currentHole?.number ?? 0)") {
+                            disassociateFeature(id: featureID)
                         }
-                    )
-
-                    Divider()
-
-                    // Associate/Disassociate controls
-                    VStack(alignment: .leading, spacing: 8) {
-                        let isAssociated = currentHole?.features.contains(featureID) ?? false
-
-                        if isAssociated {
-                            Button("Disassociate from Hole \(currentHole?.number ?? 0)") {
-                                disassociateFeature(id: featureID)
-                            }
-                        } else {
-                            Button("Associate with Hole \(currentHole?.number ?? 0)") {
-                                associateFeature(id: featureID)
-                            }
+                    } else {
+                        Button("Associate with Hole \(currentHole?.number ?? 0)") {
+                            associateFeature(id: featureID)
                         }
                     }
-                    .padding()
 
                     revertControls(for: course.features[featureIndex])
                     multipolygonControls(for: course.features[featureIndex])
+
+                    Button("Delete Feature", role: .destructive) {
+                        featureToDelete = featureID
+                    }
                 }
-                .frame(maxHeight: .infinity, alignment: .top)
             } else {
                 VStack(spacing: 8) {
                     Image(systemName: activeTool == .select ? "cursorarrow.click" : "pencil.and.outline")
@@ -1841,6 +1833,24 @@ struct MapEditorView: View {
                 osmImportStatus = "Fetching features within course boundary..."
                 finalResult = try await client.fetchFeatures(bbox: bbox)
                 logger.info("Full query: \(finalResult.features.count, privacy: .public) features")
+            } else {
+                // No outline: grow the search area until it holds every golf feature found.
+                var bbox = searchBBox
+                for _ in 0..<OverpassAPIClient.maximumGrowthFetches {
+                    guard let grown = OverpassAPIClient.grownBoundingBox(bbox, for: finalResult) else { break }
+                    osmImportStatus = "Searching past the edge of the course..."
+                    bbox = grown
+                    finalResult = try await client.fetchFeatures(bbox: bbox)
+                    logger.info("Grown query: \(finalResult.features.count, privacy: .public) features")
+                }
+            }
+
+            // A relation reaching into the search area can have inner ways, such as greens, outside it.
+            let missingInnerWayIDs = finalResult.missingInnerWayIDs
+            if !missingInnerWayIDs.isEmpty {
+                osmImportStatus = "Fetching ways inside relations..."
+                finalResult = finalResult.adding(try await client.fetchWays(ids: missingInnerWayIDs))
+                logger.info("Inner way query: \(finalResult.features.count, privacy: .public) features")
             }
 
             // Group centerlines to match sub-course count and present mapping dialog
@@ -1983,7 +1993,8 @@ struct MapEditorView: View {
                     holeNumber: globalNumber,
                     coordinates: centerline.coordinates,
                     osmID: centerline.osmID,
-                    version: centerline.version
+                    version: centerline.version,
+                    tags: centerline.tags
                 ))
             }
         }
@@ -2000,7 +2011,7 @@ struct MapEditorView: View {
         let importedFeatureCount = importedCourse.features.count - featureCountBefore
 
         course = importedCourse
-        saveOSMBaseline(OSMBaseline(course: importedCourse, versions: Self.osmVersions(in: result)))
+        saveOSMBaseline(OSMBaseline(course: importedCourse, details: Self.osmDetails(in: result)))
         logger.info("Imported \(importedFeatureCount, privacy: .public) features")
         osmImportStatus = "Imported \(importedFeatureCount) features"
         pendingOSMResult = nil
@@ -2035,14 +2046,10 @@ struct MapEditorView: View {
     @ViewBuilder
     private func revertControls(for feature: Feature) -> some View {
         if let osmID = feature.osmID, let entry = osmBaseline?.entries[osmID], entry.differs(from: feature) {
-            VStack(alignment: .leading, spacing: 8) {
-                Divider()
-                Button("Revert to OSM") {
-                    revertToOSM(feature, entry: entry)
-                }
-                .help("Put back the type and points this feature has in OpenStreetMap")
+            Button("Revert to OSM") {
+                revertToOSM(feature, entry: entry)
             }
-            .padding()
+            .help("Put back the type and points this feature has in OpenStreetMap")
         }
     }
 
@@ -2056,17 +2063,21 @@ struct MapEditorView: View {
         clearStatusAfterDelay()
     }
 
-    /// Convert to Multipolygon for a fairway way with greens inside it, or the pending
-    /// conversion with a way to cancel it.
+    /// Convert to Multipolygon for a fairway way with greens inside it, Add Green to Multipolygon
+    /// for a fairway relation missing greens inside it, or the pending change with a way to cancel it.
     @ViewBuilder
     private func multipolygonControls(for feature: Feature) -> some View {
         if let baseline = osmBaseline {
+            let isRelation = feature.osmID?.hasPrefix("r") == true
             if let pending = OSMMultipolygon.pending(for: feature, in: baseline) {
                 VStack(alignment: .leading, spacing: 8) {
-                    Divider()
-                    Text(pending.innerOSMIDs.count == 1
-                         ? "Becomes a multipolygon with the green inside it on the next publish."
-                         : "Becomes a multipolygon with the \(pending.innerOSMIDs.count) greens inside it on the next publish.")
+                    Text(isRelation
+                         ? (pending.innerOSMIDs.count == 1
+                            ? "Gets the green inside it as an inner member on the next publish."
+                            : "Gets the \(pending.innerOSMIDs.count) greens inside it as inner members on the next publish.")
+                         : (pending.innerOSMIDs.count == 1
+                            ? "Becomes a multipolygon with the green inside it on the next publish."
+                            : "Becomes a multipolygon with the \(pending.innerOSMIDs.count) greens inside it on the next publish."))
                         .font(.caption)
                         .foregroundStyle(.secondary)
                         .fixedSize(horizontal: false, vertical: true)
@@ -2074,21 +2085,18 @@ struct MapEditorView: View {
                         setPendingMultipolygon(nil, for: feature)
                     }
                 }
-                .padding()
             } else {
-                let greens = OSMMultipolygon.containedGreens(in: feature, course: course)
+                let greens = OSMMultipolygon.missingGreens(in: feature, course: course, baseline: baseline)
                 if !greens.isEmpty {
-                    VStack(alignment: .leading, spacing: 8) {
-                        Divider()
-                        Button("Convert to Multipolygon") {
-                            setPendingMultipolygon(
-                                PendingMultipolygon(fairwayOSMID: feature.osmID ?? "", innerOSMIDs: greens.compactMap(\.osmID)),
-                                for: feature
-                            )
-                        }
-                        .help("On the next publish, make this fairway a multipolygon with the greens inside it as inner rings")
+                    Button(isRelation ? "Add Green to Multipolygon" : "Convert to Multipolygon") {
+                        setPendingMultipolygon(
+                            PendingMultipolygon(fairwayOSMID: feature.osmID ?? "", innerOSMIDs: greens.compactMap(\.osmID)),
+                            for: feature
+                        )
                     }
-                    .padding()
+                    .help(isRelation
+                          ? "On the next publish, add the greens inside this fairway to its multipolygon as inner rings"
+                          : "On the next publish, make this fairway a multipolygon with the greens inside it as inner rings")
                 }
             }
         }
@@ -2104,16 +2112,20 @@ struct MapEditorView: View {
         saveOSMBaseline(baseline)
     }
 
-    /// The OSM version of each imported element, by OSM ID.
-    private static func osmVersions(in result: OverpassAPIClient.ParsedResult) -> [String: Int] {
-        var versions: [String: Int] = [:]
+    /// The version, tags, and members of each imported element, by OSM ID.
+    private static func osmDetails(in result: OverpassAPIClient.ParsedResult) -> [String: OSMElementDetails] {
+        var details: [String: OSMElementDetails] = [:]
         for feature in result.features {
-            if let osmID = feature.osmID, let version = feature.version { versions[osmID] = version }
+            if let osmID = feature.osmID {
+                details[osmID] = OSMElementDetails(version: feature.version, tags: feature.tags, members: feature.members)
+            }
         }
         for centerline in result.centerlines {
-            if let osmID = centerline.osmID, let version = centerline.version { versions[osmID] = version }
+            if let osmID = centerline.osmID {
+                details[osmID] = OSMElementDetails(version: centerline.version, tags: centerline.tags)
+            }
         }
-        return versions
+        return details
     }
 
     private func loadOSMBaseline() {
@@ -2124,6 +2136,22 @@ struct MapEditorView: View {
             osmImportStatus = "Could not load OSM changes: \(error.localizedDescription)"
         }
         updateOSMChanges()
+        Task { await fillOSMDetails() }
+    }
+
+    /// Reads from OSM the tags and members the baseline does not know, such as for courses
+    /// imported before they were kept. Tried again each time the course is opened until it works.
+    private func fillOSMDetails() async {
+        guard let osmIDs = osmBaseline?.osmIDsWithUnknownDetails, !osmIDs.isEmpty else { return }
+        let courseID = course.id
+        do {
+            let details = try await OSMAPIClient.details(of: osmIDs)
+            guard course.id == courseID, var baseline = osmBaseline else { return }
+            baseline.fillDetails(details)
+            saveOSMBaseline(baseline)
+        } catch {
+            logger.error("Could not read OSM details: \(error, privacy: .public)")
+        }
     }
 
     private func saveOSMBaseline(_ baseline: OSMBaseline) {

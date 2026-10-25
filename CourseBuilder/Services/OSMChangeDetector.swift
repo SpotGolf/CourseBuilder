@@ -4,7 +4,7 @@ import CourseDataSwift
 /// One difference between a course and its ``OSMBaseline``.
 struct OSMFeatureChange: Hashable, Identifiable {
     enum Action: Int, Comparable {
-        case modify, multipolygon, create, delete, skip
+        case modify, multipolygon, create, delete
 
         static func < (lhs: Action, rhs: Action) -> Bool { lhs.rawValue < rhs.rawValue }
     }
@@ -18,15 +18,13 @@ struct OSMFeatureChange: Hashable, Identifiable {
     /// The baseline type, when the type changed.
     var oldType: FeatureType? = nil
     var pointsChanged = false
-    /// Why a skipped change is not sent.
-    var reason: String? = nil
+    /// Whether the feature's OSM element is missing its `golf` tag, such as a bunker imported from
+    /// a way tagged only `natural=sand`.
+    var addsGolfTag = false
     /// For a multipolygon change, the OSM IDs of the inner greens.
     var innerOSMIDs: [String] = []
 
     var id: String { "\(action)-\(featureID.map(String.init) ?? "")-\(osmID ?? "")" }
-
-    /// Whether this change is sent to OSM.
-    var isSent: Bool { action != .skip }
 }
 
 enum OSMChangeDetector {
@@ -34,7 +32,7 @@ enum OSMChangeDetector {
     static let samePointMeters = 0.5
 
     /// The changes between the course and the baseline: modified, then made into multipolygons,
-    /// then created, then deleted, then skipped.
+    /// then created, then deleted.
     ///
     /// Point edits on a relation are sent as edits to its outer way. Features in `ignoredOSMIDs`
     /// are left out of the course on purpose, not deleted, so they are not deleted from OSM.
@@ -52,15 +50,19 @@ enum OSMChangeDetector {
 
             let typeChanged = entry.type != feature.type
             let pointsChanged = !samePoints(Array(feature.polygon), entry.coordinates)
+            // Only bunkers: water tagged only `natural=water` may be a lake that is not a hazard.
+            // A type change already adds the new type's tags.
+            let addsGolfTag = !typeChanged && feature.type == .bunker && entry.tags != nil && entry.tags?["golf"] == nil
 
-            if typeChanged || pointsChanged {
+            if typeChanged || pointsChanged || addsGolfTag {
                 changes.append(OSMFeatureChange(
                     action: .modify,
                     featureID: feature.id,
                     type: feature.type,
                     osmID: osmID,
                     oldType: typeChanged ? entry.type : nil,
-                    pointsChanged: pointsChanged
+                    pointsChanged: pointsChanged,
+                    addsGolfTag: addsGolfTag
                 ))
             }
         }
@@ -81,14 +83,7 @@ enum OSMChangeDetector {
 
         for entry in baseline.entries.values.sorted(by: { $0.osmID < $1.osmID })
         where !seen.contains(entry.osmID) && !ignoredOSMIDs.contains(entry.osmID) {
-            if entry.osmID.hasPrefix("r") {
-                changes.append(OSMFeatureChange(
-                    action: .skip, featureID: nil, type: entry.type, osmID: entry.osmID,
-                    reason: "relations can't be deleted"
-                ))
-            } else {
-                changes.append(OSMFeatureChange(action: .delete, featureID: nil, type: entry.type, osmID: entry.osmID))
-            }
+            changes.append(OSMFeatureChange(action: .delete, featureID: nil, type: entry.type, osmID: entry.osmID))
         }
 
         // Stable sort keeps feature order within each action.

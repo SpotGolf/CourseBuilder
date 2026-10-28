@@ -212,6 +212,7 @@ struct ScorecardView: View {
             ScorecardTableView(course: $course)
 
         }
+        .focusedSceneValue(\.courseActions, courseActions)
         .confirmationDialog(
             "Update \(course.name) from GolfCourseAPI?",
             isPresented: $showUpdateInfoConfirmation,
@@ -325,6 +326,19 @@ struct ScorecardView: View {
             lines.append("• Combo \(usage.comboTees.count == 1 ? "tee" : "tees") \(usage.comboTees.map { "\"\($0)\"" }.joined(separator: ", "))")
         }
         return lines.joined(separator: "\n")
+    }
+
+    /// The header buttons, for the menus. A disabled button's action is nil.
+    private var courseActions: CourseActions {
+        CourseActions(
+            updateCourseInfo: course.golfCourseAPIIds.isEmpty || apiKey.isEmpty || isUpdatingInfo
+                ? nil : { showUpdateInfoConfirmation = true },
+            export: { exportJSON() },
+            cleanup: isCleaningUp ? nil : { runCleanup() },
+            importImage: { showImagePicker = true },
+            openMapEditor: course.subCourses.isEmpty
+                ? nil : { openWindow(id: "map-editor", value: course.id) }
+        )
     }
 
     private var updateInfoHelp: String {

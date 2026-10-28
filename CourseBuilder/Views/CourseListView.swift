@@ -63,6 +63,10 @@ struct CourseListView: View {
                     .foregroundStyle(.secondary)
             }
         }
+        .focusedSceneValue(\.courseListActions, CourseListActions(
+            newCourse: { showNewCourse = true },
+            deleteCourse: selectedCourse == nil ? nil : { showDeleteConfirmation = true }
+        ))
         .sheet(isPresented: $showNewCourse) {
             AddCourseSheet { course in
                 try? store.save(course)

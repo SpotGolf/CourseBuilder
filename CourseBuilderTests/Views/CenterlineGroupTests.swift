@@ -27,10 +27,41 @@ struct CenterlineGroupTests {
         #expect(groups.map(\.label) == ["8 holes (group 1)", "10 holes (group 2)"])
     }
 
+    @Test func numberedNinesGoToFrontAndBack() {
+        var groups = [makeGroup(holes: 10...18), makeGroup(holes: 1...9)]
+
+        groups.assignNumberedSubCourses(subCourseSizes: [9, 9])
+
+        #expect(groups.map(\.assignedSubCourseIndex) == [1, 0])
+    }
+
+    @Test func otherNumberingStaysUnassigned() {
+        var groups = [makeGroup(holes: 1...9), makeGroup(holes: 1...9), makeGroup(holes: 10...17)]
+
+        groups.assignNumberedSubCourses(subCourseSizes: [9, 9])
+
+        #expect(groups.map(\.assignedSubCourseIndex) == [0, nil, nil])
+    }
+
+    @Test func eighteenHoleGroupGoesToSingleSubCourse() {
+        var groups = [makeGroup(holes: 1...18)]
+
+        groups.assignNumberedSubCourses(subCourseSizes: [18])
+
+        #expect(groups.map(\.assignedSubCourseIndex) == [0])
+    }
+
     private func makeGroup(holes: Int, label: String) -> CenterlineGroup {
         CenterlineGroup(
             label: label,
             centerlines: (1...holes).map { OverpassAPIClient.ParsedCenterline(holeNumber: $0, coordinates: []) }
+        )
+    }
+
+    private func makeGroup(holes: ClosedRange<Int>) -> CenterlineGroup {
+        CenterlineGroup(
+            label: "",
+            centerlines: holes.map { OverpassAPIClient.ParsedCenterline(holeNumber: $0, coordinates: []) }
         )
     }
 }

@@ -18,7 +18,6 @@ CourseBuilder produces JSON files containing tee, green, and hazard coordinates 
 - **Map Editor** — Draw and edit tee, green, fairway, bunker, and water polygons and hole centerlines on Esri World Imagery or USDA NAIP imagery
 - **Auto Polygon Tool** — Trace a feature from a click on the imagery
 - **Fit to Imagery** — Replace a polygon's outline with one traced from the imagery
-- **Tee Box Guessing** — Assign tee names to tee boxes by their distance to the green along the centerline
 - **Elevations** — Fill in point elevations from USGS in the background, with sea level for courses outside the US
 - **Publish to OpenStreetMap** — Send new, changed, and deleted features back to OSM, including Cut Out Green and Fix Course Outline repairs
 - **JSON Export** — Check the course for problems, then save it as JSON in the CourseData folder layout

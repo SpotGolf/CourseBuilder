@@ -40,6 +40,10 @@ struct MapEditorView: View {
     @State private var isImportingOSM = false
     @State private var osmImportStatus = ""
     @State private var pendingOSMResult: OverpassAPIClient.ParsedResult?
+    /// The check of OSM for course data on first open. Nil when the dialog is closed.
+    @State private var osmCheckState: OSMCheckState?
+    @State private var osmCheckTask: Task<Void, Never>?
+    private let osmCheckStore = OSMCheckStore()
     @State private var centerlineGroups: [CenterlineGroup] = []
     @State private var selectedMappingGroup: Int?
     @State private var selectedMappingCenterline: Int? // index into the selected group's centerlines
@@ -222,6 +226,25 @@ struct MapEditorView: View {
             isMapFocused = true
             loadIgnoredFeatures()
             loadOSMBaseline()
+            checkOSMIfNeeded()
+        }
+        .onDisappear {
+            osmCheckTask?.cancel()
+        }
+        .sheet(isPresented: Binding(
+            get: { osmCheckState != nil },
+            set: { if !$0 { osmCheckState = nil } }
+        )) {
+            if let osmCheckState {
+                OSMCheckSheet(state: osmCheckState, status: osmImportStatus) { result in
+                    self.osmCheckState = nil
+                    beginOSMMapping(result)
+                } close: {
+                    self.osmCheckState = nil
+                } cancel: {
+                    cancelOSMCheck()
+                }
+            }
         }
         .onChange(of: course.features) {
             updateOSMChanges()
@@ -625,16 +648,8 @@ struct MapEditorView: View {
             Spacer()
 
             // Import OSM button
-            Button {
-                Task { await importFromOSM() }
-            } label: {
-                HStack(spacing: 4) {
-                    if isImportingOSM {
-                        ProgressView()
-                            .scaleEffect(0.6)
-                    }
-                    Text("Import OSM")
-                }
+            Button("Import OSM") {
+                startOSMCheck(isFirstOpen: false)
             }
             .disabled(isImportingOSM || !course.features.isEmpty)
 
@@ -1884,55 +1899,93 @@ struct MapEditorView: View {
 
     // MARK: - OSM Import
 
-    private func importFromOSM() async {
+    /// The first time a course with no features is opened, checks OSM for course data and
+    /// offers to import it. If the check fails, it runs again the next time the course is opened.
+    private func checkOSMIfNeeded() {
+        guard OSMCheck.shouldCheck(course, store: osmCheckStore) else { return }
+        startOSMCheck(isFirstOpen: true)
+    }
+
+    /// Opens the OSM check dialog and searches OSM for course data in the background.
+    /// - Parameter isFirstOpen: Whether this is the check made when the course is first opened.
+    ///   Once it finishes or is cancelled, the course is not checked again on open.
+    private func startOSMCheck(isFirstOpen: Bool) {
+        osmCheckState = .checking
         isImportingOSM = true
-        osmImportStatus = "Querying OpenStreetMap..."
+        osmCheckTask = Task {
+            do {
+                let result = try await fetchOSMResult()
+                if !Task.isCancelled {
+                    osmCheckState = OSMCheck.hasCourseData(result) ? .found(result) : .notFound
+                }
+                if isFirstOpen {
+                    try? osmCheckStore.markChecked(courseID: course.id)
+                }
+            } catch {
+                if Task.isCancelled {
+                    if isFirstOpen {
+                        try? osmCheckStore.markChecked(courseID: course.id)
+                    }
+                } else {
+                    logger.error("OSM check failed: \(error, privacy: .public)")
+                    osmCheckState = .failed(error.localizedDescription)
+                }
+            }
+            osmImportStatus = ""
+            isImportingOSM = false
+        }
+    }
+
+    /// Stops the OSM check and closes its dialog.
+    private func cancelOSMCheck() {
+        osmCheckTask?.cancel()
+        osmCheckState = nil
+    }
+
+    /// Shows the mapping sidebar for the features and centerlines of an OSM result.
+    private func beginOSMMapping(_ result: OverpassAPIClient.ParsedResult) {
+        let subCourseSizes = course.subCourses.map(\.holes.count)
+        centerlineGroups = buildCenterlineGroups(from: result.centerlines, subCourseSizes: subCourseSizes)
+        centerlineGroups.assignNumberedSubCourses(subCourseSizes: subCourseSizes)
+        pendingOSMResult = result
+    }
+
+    /// Reads the golf features around the course from OSM.
+    private func fetchOSMResult() async throws -> OverpassAPIClient.ParsedResult {
+        osmImportStatus = "Searching within 1 km of the course location..."
         let client = OverpassAPIClient()
         let clubhouseCoord = course.location.coordinate
         logger.info("Starting OSM import for course '\(course.name, privacy: .public)' at \(clubhouseCoord.lat, privacy: .public), \(clubhouseCoord.lon, privacy: .public)")
         let searchBBox = OverpassAPIClient.boundingBox(around: clubhouseCoord, radiusMeters: 1000)
-        do {
-            let result = try await client.fetchFeatures(bbox: searchBBox)
-            logger.info("Initial query: \(result.features.count, privacy: .public) features, \(result.centerlines.count, privacy: .public) centerlines, boundary: \(result.courseBoundary != nil, privacy: .public)")
+        let result = try await client.fetchFeatures(bbox: searchBBox)
+        logger.info("Initial query: \(result.features.count, privacy: .public) features, \(result.centerlines.count, privacy: .public) centerlines, boundary: \(result.courseBoundary != nil, privacy: .public)")
 
-            var finalResult = result
-            if let bbox = OverpassAPIClient.boundaryBoundingBox(for: result.courseBoundary) {
-                osmImportStatus = "Fetching features within course boundary..."
+        var finalResult = result
+        if let bbox = OverpassAPIClient.boundaryBoundingBox(for: result.courseBoundary) {
+            osmImportStatus = "Found \(result.features.count) features and a course outline. Reading everything inside the outline..."
+            finalResult = try await client.fetchFeatures(bbox: bbox)
+            logger.info("Full query: \(finalResult.features.count, privacy: .public) features")
+        } else {
+            // No outline: grow the search area until it holds every golf feature found.
+            var bbox = searchBBox
+            for step in 1...OverpassAPIClient.maximumGrowthFetches {
+                guard let grown = OverpassAPIClient.grownBoundingBox(bbox, for: finalResult) else { break }
+                osmImportStatus = "Found \(finalResult.features.count) features. Widening the search past the edge of the course (step \(step) of up to \(OverpassAPIClient.maximumGrowthFetches))..."
+                bbox = grown
                 finalResult = try await client.fetchFeatures(bbox: bbox)
-                logger.info("Full query: \(finalResult.features.count, privacy: .public) features")
-            } else {
-                // No outline: grow the search area until it holds every golf feature found.
-                var bbox = searchBBox
-                for _ in 0..<OverpassAPIClient.maximumGrowthFetches {
-                    guard let grown = OverpassAPIClient.grownBoundingBox(bbox, for: finalResult) else { break }
-                    osmImportStatus = "Searching past the edge of the course..."
-                    bbox = grown
-                    finalResult = try await client.fetchFeatures(bbox: bbox)
-                    logger.info("Grown query: \(finalResult.features.count, privacy: .public) features")
-                }
+                logger.info("Grown query: \(finalResult.features.count, privacy: .public) features")
             }
-
-            // A relation reaching into the search area can have inner ways, such as greens, outside it.
-            let missingInnerWayIDs = finalResult.missingInnerWayIDs
-            if !missingInnerWayIDs.isEmpty {
-                osmImportStatus = "Fetching ways inside relations..."
-                finalResult = finalResult.adding(try await client.fetchWays(ids: missingInnerWayIDs))
-                logger.info("Inner way query: \(finalResult.features.count, privacy: .public) features")
-            }
-
-            // Group centerlines to match sub-course count and present mapping dialog
-            centerlineGroups = buildCenterlineGroups(
-                from: finalResult.centerlines,
-                subCourseSizes: course.subCourses.map(\.holes.count)
-            )
-            pendingOSMResult = finalResult
-            osmImportStatus = ""
-        } catch {
-            logger.error("OSM import failed: \(error, privacy: .public)")
-            osmImportStatus = "Import failed: \(error.localizedDescription)"
         }
-        isImportingOSM = false
-        clearOSMStatusAfterDelay()
+
+        // A relation reaching into the search area can have inner ways, such as greens, outside it.
+        let missingInnerWayIDs = finalResult.missingInnerWayIDs
+        if !missingInnerWayIDs.isEmpty {
+            osmImportStatus = "Found \(finalResult.features.count) features. Reading \(missingInnerWayIDs.count) more that belong to them..."
+            finalResult = finalResult.adding(try await client.fetchWays(ids: missingInnerWayIDs))
+            logger.info("Inner way query: \(finalResult.features.count, privacy: .public) features")
+        }
+
+        return finalResult
     }
 
     /// Group centerlines into chains by traversing them in playing order.
@@ -2469,6 +2522,22 @@ extension [CenterlineGroup] {
     mutating func removeGroup(at index: Int) {
         remove(at: index)
         relabel()
+    }
+
+    /// Assigns each group to the sub-course whose holes it numbers. With nines of 9 holes, the
+    /// group of holes 1–9 goes to the first sub-course and holes 10–18 to the second. Groups
+    /// numbered any other way, or a second group for the same sub-course, stay unassigned.
+    mutating func assignNumberedSubCourses(subCourseSizes: [Int]) {
+        var firstHole = 1
+        for (subCourseIndex, size) in subCourseSizes.enumerated() {
+            let holes = [Int](firstHole..<(firstHole + size))
+            firstHole += size
+            guard size > 0, !contains(where: { $0.assignedSubCourseIndex == subCourseIndex }),
+                  let match = firstIndex(where: {
+                      $0.assignedSubCourseIndex == nil && $0.centerlines.compactMap(\.holeNumber).sorted() == holes
+                  }) else { continue }
+            self[match].assignedSubCourseIndex = subCourseIndex
+        }
     }
 
     /// Sets each group's label from its hole count and its place in the list.

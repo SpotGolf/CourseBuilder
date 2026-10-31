@@ -117,24 +117,11 @@ struct MapEditorView: View {
         }
         .focusable()
         .focused($isMapFocused)
-        .focusedSceneValue(\.mapCamera, camera)
+        .focusedSceneValue(\.mapActions, isShowingSheet ? nil : mapActions)
         .onKeyPress(phases: .down) { press in
             // ⌘+ is shift-= on most keyboards, so also zoom in on plain ⌘=.
             guard press.key == KeyEquivalent("="), press.modifiers == .command else { return .ignored }
             camera.zoomIn()
-            return .handled
-        }
-        .onKeyPress(characters: CharacterSet(charactersIn: "spac")) { press in
-            guard !isMappingMode else { return .ignored }
-            if let mode = ToolMode.allCases.first(where: { $0.shortcutKey == press.characters.first }),
-               isToolAvailable(mode) {
-                switchTool(to: mode)
-                return .handled
-            }
-            return .ignored
-        }
-        .onKeyPress(characters: CharacterSet(charactersIn: "v")) { _ in
-            imageryLayer = imageryLayer.next
             return .handled
         }
         .onKeyPress(characters: CharacterSet(charactersIn: "e")) { _ in
@@ -613,16 +600,10 @@ struct MapEditorView: View {
                                 .font(.system(size: 9, design: .monospaced))
                                 .foregroundStyle(.secondary)
                         }
-                        .frame(width: 36, height: 36)
-                        .background(activeTool == mode ? Color.accentColor.opacity(0.2) : Color.clear)
-                        .cornerRadius(6)
-                        .overlay(
-                            RoundedRectangle(cornerRadius: 6)
-                                .stroke(activeTool == mode ? Color.accentColor : Color.clear, lineWidth: 1)
-                        )
                     }
-                    .buttonStyle(.plain)
-                    .disabled((isMappingMode && mode != .select) || !isToolAvailable(mode))
+                    .buttonStyle(ToolButtonStyle(isActive: activeTool == mode))
+                    .disabled(!canSwitchTool(to: mode))
+                    .help("\(mode.menuTitle) (\(String(mode.shortcutKey).uppercased()))")
                 }
             }
 
@@ -651,7 +632,7 @@ struct MapEditorView: View {
             Button("Import OSM") {
                 startOSMCheck(isFirstOpen: false)
             }
-            .disabled(isImportingOSM || !course.features.isEmpty)
+            .disabled(!canImportOSM)
 
             if osmBaseline?.misplacedCourseElement != nil && osmBaseline?.pendingCourseOutline == nil && !isMappingMode {
                 Button("Fix Course Outline…") {
@@ -1292,6 +1273,38 @@ struct MapEditorView: View {
     /// A hole has only one centerline, so the Centerline tool is off while the current hole has one.
     private func isToolAvailable(_ mode: ToolMode) -> Bool {
         mode != .drawCenterline || currentCenterline.isEmpty
+    }
+
+    /// Only Select can be used while OSM holes are being mapped to sub-courses.
+    private func canSwitchTool(to mode: ToolMode) -> Bool {
+        (!isMappingMode || mode == .select) && isToolAvailable(mode)
+    }
+
+    /// OSM can be imported only into a course with no features.
+    private var canImportOSM: Bool {
+        !isImportingOSM && course.features.isEmpty
+    }
+
+    /// Whether a sheet is open over the editor.
+    private var isShowingSheet: Bool {
+        osmCheckState != nil || isShowingCourseOutlineSheet || publishRequest != nil
+    }
+
+    /// The Map menu actions for this editor.
+    private var mapActions: MapActions {
+        MapActions(
+            camera: camera,
+            activeTool: activeTool,
+            selectTool: { mode in
+                canSwitchTool(to: mode) ? {
+                    switchTool(to: mode)
+                    isMapFocused = true
+                } : nil
+            },
+            imageryLayer: imageryLayer,
+            setImageryLayer: { imageryLayer = $0 },
+            importOSM: canImportOSM ? { startOSMCheck(isFirstOpen: false) } : nil
+        )
     }
 
     private func switchTool(to mode: ToolMode) {
@@ -2606,6 +2619,41 @@ struct HoleFeatureSets {
 ///
 /// It follows the camera and draws the point while it is dragged. Both change on every frame,
 /// so they are kept here instead of in the editor, which would redraw the whole window.
+/// A square toolbar button for a map tool. The whole square takes clicks and shows a
+/// background on hover.
+private struct ToolButtonStyle: ButtonStyle {
+    let isActive: Bool
+
+    func makeBody(configuration: Configuration) -> some View {
+        ToolButton(configuration: configuration, isActive: isActive)
+    }
+
+    private struct ToolButton: View {
+        let configuration: ButtonStyleConfiguration
+        let isActive: Bool
+        @Environment(\.isEnabled) private var isEnabled
+        @State private var isHovering = false
+
+        var body: some View {
+            let shape = RoundedRectangle(cornerRadius: 6)
+            configuration.label
+                .frame(width: 36, height: 36)
+                .background(shape.fill(background))
+                .overlay(shape.stroke(isActive ? Color.accentColor : Color.clear, lineWidth: 1))
+                .contentShape(shape)
+                .opacity(isEnabled ? 1 : 0.4)
+                .onHover { isHovering = $0 }
+        }
+
+        private var background: Color {
+            if configuration.isPressed && isEnabled { return Color.primary.opacity(0.2) }
+            if isActive { return Color.accentColor.opacity(0.2) }
+            if isHovering && isEnabled { return Color.primary.opacity(0.1) }
+            return .clear
+        }
+    }
+}
+
 private struct VertexDragHandle: View {
     let camera: MapCamera
     let coordinate: Coordinate

@@ -16,6 +16,15 @@ enum ToolMode: String, CaseIterable {
         }
     }
 
+    var menuTitle: String {
+        switch self {
+        case .select: "Select"
+        case .drawPolygon: "Draw Polygon"
+        case .autoPolygon: "Auto Polygon"
+        case .drawCenterline: "Draw Centerline"
+        }
+    }
+
     var systemImage: String {
         switch self {
         case .select: "cursorarrow"

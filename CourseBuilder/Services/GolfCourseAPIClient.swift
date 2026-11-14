@@ -39,7 +39,7 @@ actor GolfCourseAPIClient {
         let courses: [CourseSearchResult]
     }
 
-    struct CourseSearchResult: Codable, Hashable {
+    struct CourseSearchResult: Codable, Hashable, Identifiable {
         let id: String
         let clubName: String
         let courseName: String

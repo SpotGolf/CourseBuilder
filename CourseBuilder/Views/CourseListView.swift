@@ -123,8 +123,7 @@ struct AddCourseSheet: View {
     @AppStorage("golfCourseAPIKey") private var apiKey: String = ""
     @State private var searchQuery = ""
     @State private var searchResults: [GolfCourseAPIClient.CourseSearchResult] = []
-    @State private var selectedClubName: String?
-    @State private var checkedResultIDs: Set<String> = []
+    @State private var selectedResultID: String?
     @State private var isSearching = false
     @State private var searchError = ""
     @State private var isFetching = false
@@ -144,22 +143,17 @@ struct AddCourseSheet: View {
     @State private var holeCount = 18
     @State private var isGeocodingManual = false
 
-    private var groupedResults: [(clubName: String, courses: [GolfCourseAPIClient.CourseSearchResult])] {
-        var groups: [String: [GolfCourseAPIClient.CourseSearchResult]] = [:]
-        var order: [String] = []
-        for result in searchResults {
-            if groups[result.clubName] == nil {
-                order.append(result.clubName)
-            }
-            groups[result.clubName, default: []].append(result)
-        }
-        return order.map { (clubName: $0, courses: groups[$0]!) }
+    /// The club name, plus the course name when a club has more than one course (e.g. "South/East").
+    private func displayName(_ result: GolfCourseAPIClient.CourseSearchResult) -> String {
+        result.courseName.isEmpty || result.courseName == result.clubName
+            ? result.clubName
+            : "\(result.clubName) – \(result.courseName)"
     }
 
     private var canAdd: Bool {
         switch selectedTab {
         case .search:
-            return !checkedResultIDs.isEmpty
+            return selectedResultID != nil
         case .manualEntry:
             guard !name.isEmpty,
                   let lat = Double(latitude), (-90...90).contains(lat),
@@ -313,59 +307,11 @@ struct AddCourseSheet: View {
                     .foregroundStyle(.secondary)
                 Spacer()
             } else {
-                List {
-                    ForEach(groupedResults, id: \.clubName) { group in
-                        let isSelected = selectedClubName == group.clubName
-                        HStack {
-                            Image(systemName: isSelected ? "chevron.down" : "chevron.right")
-                                .font(.caption)
-                                .foregroundStyle(.secondary)
-                                .frame(width: 12)
-                            VStack(alignment: .leading) {
-                                Text(group.clubName)
-                                    .font(.headline)
-                                if let loc = group.courses.first?.location {
-                                    let city = loc.city ?? ""
-                                    let state = loc.state ?? ""
-                                    Text(state.isEmpty ? city : city.isEmpty ? state : "\(city), \(state)")
-                                        .font(.caption)
-                                        .foregroundStyle(.secondary)
-                                }
-                            }
-                            Spacer()
-                        }
-                        .listRowBackground(isSelected ? Color.accentColor.opacity(0.15) : Color.clear)
-                        .contentShape(Rectangle())
-                        .onTapGesture {
-                            if isSelected {
-                                selectedClubName = nil
-                                checkedResultIDs = []
-                            } else {
-                                selectedClubName = group.clubName
-                                checkedResultIDs = Set(group.courses.map(\.id))
-                            }
-                        }
-
-                        if isSelected {
-                            ForEach(group.courses, id: \.id) { result in
-                                Toggle(isOn: Binding(
-                                    get: { checkedResultIDs.contains(result.id) },
-                                    set: { checked in
-                                        if checked {
-                                            checkedResultIDs.insert(result.id)
-                                        } else {
-                                            checkedResultIDs.remove(result.id)
-                                        }
-                                    }
-                                )) {
-                                    Text(result.courseName)
-                                        .font(.subheadline)
-                                }
-                                .toggleStyle(.checkbox)
-                                .padding(.leading, 24)
-                            }
-                        }
-                    }
+                Table(searchResults, selection: $selectedResultID) {
+                    TableColumn("Name") { Text(displayName($0)) }
+                    TableColumn("City") { Text($0.location.city ?? "") }
+                    TableColumn("State") { Text($0.location.state ?? "") }
+                    TableColumn("Country") { Text($0.location.country ?? "") }
                 }
             }
         }
@@ -374,9 +320,8 @@ struct AddCourseSheet: View {
     private func addCourse() {
         switch selectedTab {
         case .search:
-            guard !checkedResultIDs.isEmpty else { return }
-            let selected = searchResults.filter { checkedResultIDs.contains($0.id) }
-            fetchAndAddCourses(selected)
+            guard let selected = searchResults.first(where: { $0.id == selectedResultID }) else { return }
+            fetchAndAddCourses([selected])
         case .importFile:
             if let course = importedCourse {
                 onCreate(course)
@@ -450,8 +395,7 @@ struct AddCourseSheet: View {
         isSearching = true
         searchError = ""
         searchResults = []
-        selectedClubName = nil
-        checkedResultIDs = []
+        selectedResultID = nil
         Task {
             do {
                 let client = GolfCourseAPIClient(apiKey: apiKey)

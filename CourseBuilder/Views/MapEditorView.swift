@@ -9,6 +9,7 @@ private let logger = Logger(subsystem: "golf.spot.CourseBuilder", category: "Map
 struct MapEditorView: View {
     @Binding var course: Course
     @ObservedObject var elevationWorker: ElevationWorker
+    @ObservedObject var greenSurfaceWorker: GreenSurfaceWorker
 
     // Selection state
     @State private var selectedSubCourseIndex: Int = 0
@@ -214,6 +215,8 @@ struct MapEditorView: View {
             loadIgnoredFeatures()
             loadOSMBaseline()
             checkOSMIfNeeded()
+            // Builds the surfaces of greens that were drawn before surfaces existed.
+            greenSurfaceWorker.courseDidChange(course.id)
         }
         .onDisappear {
             osmCheckTask?.cancel()
@@ -477,6 +480,13 @@ struct MapEditorView: View {
                                 Text("#\(feature.id)")
                                     .font(.caption2)
                                     .foregroundStyle(.secondary)
+                                if feature.type == .green, feature.surface != nil {
+                                    Image(systemName: "flame.fill")
+                                        .font(.caption2)
+                                        .foregroundStyle(.orange)
+                                        .help("Has a heat map")
+                                        .accessibilityLabel("Has a heat map")
+                                }
                                 Spacer()
                                 Button {
                                     disassociateFeature(id: feature.id)
@@ -1116,6 +1126,14 @@ struct MapEditorView: View {
                 Text(elevationStatus.message)
                     .font(.caption)
                     .foregroundStyle(.secondary)
+            }
+
+            // Background green surface lookup status
+            if let greenSurfaceStatus = greenSurfaceWorker.statuses[course.id] {
+                Label(greenSurfaceStatus.message, systemImage: greenSurfaceStatus.isWarning ? "exclamationmark.triangle.fill" : "arrow.triangle.2.circlepath")
+                    .labelStyle(.titleAndIcon)
+                    .font(.caption)
+                    .foregroundStyle(greenSurfaceStatus.isWarning ? .orange : .secondary)
             }
 
             // OSM import status

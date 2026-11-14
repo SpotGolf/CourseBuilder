@@ -73,4 +73,37 @@ final class USGSElevationClientTests: XCTestCase {
     func testParseResponseThrowsOnUnexpectedBody() {
         XCTAssertThrowsError(try USGSElevationClient.parseResponse(data: Data("{}".utf8), count: 1))
     }
+
+    /// Real answers: Cherry Hills CC in Colorado (1 m lidar), Anchorage Golf Course (5 m), and
+    /// Point Grey in Vancouver (1/3 arc-second, given in degrees).
+    func testParseSamplesReadsResolutionInMeters() throws {
+        let json = """
+        {"samples":[
+        {"locationId":0,"value":"1654.397827148","rasterId":135563,"resolution":1},
+        {"locationId":1,"value":"86.370002747","rasterId":1,"resolution":5},
+        {"locationId":2,"value":"60.581077576","rasterId":2,"resolution":9.259259341472414e-05},
+        {"locationId":3,"value":"12.5","rasterId":3}
+        ]}
+        """
+        let result = try USGSElevationClient.parseSamples(data: Data(json.utf8), count: 5)
+
+        XCTAssertEqual(result[0], USGSElevationClient.Sample(elevation: 1654.4, resolution: 1))
+        XCTAssertEqual(result[1], USGSElevationClient.Sample(elevation: 86.37, resolution: 5))
+        XCTAssertEqual(result[2]?.elevation, 60.58)
+        XCTAssertEqual(try XCTUnwrap(result[2]?.resolution), 10.3, accuracy: 0.05)
+        XCTAssertEqual(result[3], USGSElevationClient.Sample(elevation: 12.5, resolution: nil))
+        XCTAssertNil(result[4])
+    }
+
+    func testBuildRequestAsksForBilinearOnlyWhenTold() throws {
+        let point = [Coordinate(lat: 39.639, lon: -104.8846)]
+        let nearest = String(data: try XCTUnwrap(USGSElevationClient.buildRequest(for: point).httpBody), encoding: .utf8)
+        let bilinear = String(
+            data: try XCTUnwrap(USGSElevationClient.buildRequest(for: point, interpolation: .bilinear).httpBody),
+            encoding: .utf8
+        )
+
+        XCTAssertFalse(try XCTUnwrap(nearest).contains("interpolation"))
+        XCTAssertTrue(try XCTUnwrap(bilinear).contains("interpolation=RSP_BilinearInterpolation"))
+    }
 }

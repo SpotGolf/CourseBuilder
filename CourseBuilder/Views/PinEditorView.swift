@@ -63,6 +63,22 @@ struct FeatureEditorView<Actions: View>: View {
                 general
             }
 
+            if feature.type == .green {
+                GroupBox("Heat Map") {
+                    if let surface = feature.surface {
+                        GreenHeatMapPreview(
+                            heatMap: GreenHeatMap(surface: surface, polygon: feature.polygon),
+                            polygon: Array(feature.polygon)
+                        )
+                    } else {
+                        Text("No elevation surface. It is built in the background from USGS lidar data.")
+                            .font(.caption)
+                            .foregroundStyle(.secondary)
+                            .frame(maxWidth: .infinity, alignment: .leading)
+                    }
+                }
+            }
+
             if let osmID = feature.osmID {
                 GroupBox("OSM") {
                     osmMetadata(osmID: osmID)

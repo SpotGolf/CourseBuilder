@@ -112,7 +112,36 @@ struct CourseIntegrity {
             warnings.append("\(missingElevations) point(s) are missing elevations. Cleanup looks them up.")
         }
 
+        warnings.append(contentsOf: greenSurfaceWarnings(for: course))
+
         return warnings
+    }
+
+    /// Warns when greens have no elevation surface, which SpotGolf needs to draw green heat maps.
+    static func greenSurfaceWarnings(for course: Course) -> [String] {
+        var holesWithSurface = 0
+        var holesWithout: [Int] = []
+        var holeOffset = 0
+        for subCourse in course.subCourses {
+            for hole in subCourse.holes {
+                let greens = course.features(for: hole).filter { $0.type == .green }
+                guard !greens.isEmpty else { continue }
+                if greens.allSatisfy({ $0.surface != nil }) {
+                    holesWithSurface += 1
+                } else {
+                    holesWithout.append(holeOffset + hole.number)
+                }
+            }
+            holeOffset += subCourse.holes.count
+        }
+
+        guard !holesWithout.isEmpty else { return [] }
+        guard holesWithSurface > 0 else {
+            return ["No green has lidar elevation data, so green heat maps will be missing in SpotGolf. USGS has 1 m lidar data for most of the United States only."]
+        }
+        let label = holesWithout.count == 1 ? "Hole" : "Holes"
+        let numbers = holesWithout.map(String.init).joined(separator: ", ")
+        return ["\(label) \(numbers): no green lidar elevation data, but other holes have it. Fix this before exporting: open the Map Editor and wait for the green elevation lookup to finish."]
     }
 
     @discardableResult

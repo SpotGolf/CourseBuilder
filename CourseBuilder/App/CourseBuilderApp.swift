@@ -20,7 +20,7 @@ struct CourseBuilderApp: App {
 
         WindowGroup("Map Editor", id: "map-editor", for: UUID.self) { $courseID in
             if let courseID, let course = store.binding(for: courseID) {
-                MapEditorView(course: course, elevationWorker: store.elevationWorker)
+                MapEditorView(course: course, elevationWorker: store.elevationWorker, greenSurfaceWorker: store.greenSurfaceWorker)
             }
         }
         .defaultSize(width: 1200, height: 800)

@@ -51,7 +51,7 @@ final class TileLoader {
         session = URLSession(configuration: configuration)
     }
 
-    static var userAgent: String {
+    nonisolated static var userAgent: String {
         let version = Bundle.main.object(forInfoDictionaryKey: "CFBundleShortVersionString") as? String ?? "dev"
         return "CourseBuilder/\(version)"
     }

@@ -8,8 +8,8 @@ private let logger = Logger(subsystem: "golf.spot.CourseBuilder", category: "Map
 
 struct MapEditorView: View {
     @Binding var course: Course
-    @ObservedObject var elevationWorker: ElevationWorker
-    @ObservedObject var greenSurfaceWorker: GreenSurfaceWorker
+    /// Whether the Map Editor tab is showing. The Map menu only acts on it while it is.
+    var isActive = true
 
     // Selection state
     @State private var selectedSubCourseIndex: Int = 0
@@ -41,10 +41,9 @@ struct MapEditorView: View {
     @State private var isImportingOSM = false
     @State private var osmImportStatus = ""
     @State private var pendingOSMResult: OverpassAPIClient.ParsedResult?
-    /// The check of OSM for course data on first open. Nil when the dialog is closed.
+    /// The check of OSM for course data. Nil when the dialog is closed.
     @State private var osmCheckState: OSMCheckState?
     @State private var osmCheckTask: Task<Void, Never>?
-    private let osmCheckStore = OSMCheckStore()
     @State private var centerlineGroups: [CenterlineGroup] = []
     @State private var selectedMappingGroup: Int?
     @State private var selectedMappingCenterline: Int? // index into the selected group's centerlines
@@ -74,7 +73,29 @@ struct MapEditorView: View {
     @State private var undoRecords: [FeatureUndoRecord] = []
     @State private var autoPolygon = AutoPolygonController()
 
+    // Elevations. Every change that adds or moves points has its elevations fetched in a
+    // dialog as soon as the change is finished.
+    private let elevationStatusStore = ElevationStatusStore()
+    @State private var elevationRequest: ElevationFetchRequest?
+    /// The last version of the course with nothing left to fetch. A change whose elevations
+    /// cannot be fetched is given up by going back to it.
+    @State private var completeCourse: Course?
+    /// How many undo records there were at ``completeCourse``.
+    @State private var completeUndoCount = 0
+    /// The OpenStreetMap record from before an import whose elevations are not fetched yet.
+    /// It is put back if the user gives the import up.
+    @State private var baselineBeforeImport: OSMBaseline?
+
     // Sidebar list heights
+    // Panel sizes. The user drags the lines between the panels to change them.
+    private static let sidebarWidths = 200.0...480.0
+    private static let inspectorWidths = 240.0...480.0
+    private static let sectionHeights = 60.0...2000.0
+    @AppStorage("mapSidebarWidth") private var sidebarWidth = 260.0
+    @AppStorage("mapInspectorWidth") private var inspectorWidth = 270.0
+    @AppStorage("mapHolesHeight") private var holesHeight = 320.0
+    @AppStorage("mapFeaturesHeight") private var featuresHeight = 280.0
+
     @State private var holesCollapsed = false
     @State private var featuresCollapsed = false
     @State private var unassociatedCollapsed = false
@@ -93,32 +114,52 @@ struct MapEditorView: View {
             toolbar(featureSets)
             Divider()
 
-            HSplitView {
-                if pendingOSMResult != nil {
-                    mappingSidebar
-                        .frame(minWidth: 220, maxWidth: 280)
-                } else {
-                    holeSidebar(featureSets)
-                        .frame(minWidth: 200, maxWidth: 360)
+            // Plain stacks and dividers, not split views. See `PanelDivider`.
+            HStack(spacing: 0) {
+                Group {
+                    if pendingOSMResult != nil {
+                        mappingSidebar
+                    } else {
+                        holeSidebar(featureSets)
+                    }
                 }
+                .frame(minWidth: Self.sidebarWidths.lowerBound, maxWidth: sidebarWidth)
+                .layoutPriority(1)
+
+                PanelDivider(direction: .leading, size: $sidebarWidth, range: Self.sidebarWidths)
 
                 VStack(spacing: 0) {
                     mapArea(featureSets)
                     statusBar(featureSets)
                 }
+                .frame(minWidth: 200, maxWidth: .infinity)
                 .onHover { hovering in
                     if hovering {
                         NSCursor.arrow.set()
                     }
                 }
 
+                PanelDivider(direction: .trailing, size: $inspectorWidth, range: Self.inspectorWidths)
+
                 inspectorPanel
-                    .frame(minWidth: 240, maxWidth: 300)
+                    .frame(minWidth: Self.inspectorWidths.lowerBound, maxWidth: inspectorWidth)
+                    .layoutPriority(1)
             }
         }
         .focusable()
+        // No blue ring around the editor while it has the keyboard.
+        .focusEffectDisabled()
         .focused($isMapFocused)
-        .focusedSceneValue(\.mapActions, isShowingSheet ? nil : mapActions)
+        .focusedSceneValue(\.mapActions, isShowingSheet || !isActive ? nil : mapActions)
+        .onChange(of: isActive) {
+            isMapFocused = isActive
+            // Leaving the tab closes an open edit, so its elevations are fetched before the
+            // course can be used on the other tab.
+            if !isActive {
+                isEditingFeature = false
+                isEditingCenterline = false
+            }
+        }
         .onKeyPress(phases: .down) { press in
             // ⌘+ is shift-= on most keyboards, so also zoom in on plain ⌘=.
             guard press.key == KeyEquivalent("="), press.modifiers == .command else { return .ignored }
@@ -211,13 +252,16 @@ struct MapEditorView: View {
         .navigationTitle("\(course.name) — \(course.location.cityStateDisplay)")
         .onAppear {
             centerMapOnCourse()
-            isMapFocused = true
+            isMapFocused = isActive
             loadIgnoredFeatures()
             loadOSMBaseline()
-            checkOSMIfNeeded()
-            // Builds the surfaces of greens that were drawn before surfaces existed.
-            greenSurfaceWorker.courseDidChange(course.id)
+            fetchElevationsIfNeeded()
         }
+        .onChange(of: course) { fetchElevationsIfNeeded() }
+        .onChange(of: isEditingFeature) { fetchElevationsIfNeeded() }
+        .onChange(of: isEditingCenterline) { fetchElevationsIfNeeded() }
+        .onChange(of: isDraggingVertex) { fetchElevationsIfNeeded() }
+        .elevationFetchDialog($elevationRequest)
         .onDisappear {
             osmCheckTask?.cancel()
         }
@@ -294,7 +338,7 @@ struct MapEditorView: View {
                         VStack(alignment: .leading, spacing: 4) {
                             HStack {
                                 Circle()
-                                    .fill(groupColor(for: idx))
+                                    .fill(CenterlineGroup.color(for: idx))
                                     .frame(width: 10, height: 10)
                                 Text(group.label)
                                     .font(.body.bold())
@@ -327,7 +371,7 @@ struct MapEditorView: View {
                             .labelsHidden()
                         }
                         .padding(8)
-                        .background(selectedMappingGroup == idx ? groupColor(for: idx).opacity(0.15) : Color.clear)
+                        .background(selectedMappingGroup == idx ? CenterlineGroup.color(for: idx).opacity(0.15) : Color.clear)
                         .cornerRadius(6)
                     }
                 }
@@ -358,7 +402,7 @@ struct MapEditorView: View {
                     )) {
                         ForEach(centerlineGroups.indices, id: \.self) { idx in
                             HStack {
-                                Circle().fill(groupColor(for: idx)).frame(width: 8, height: 8)
+                                Circle().fill(CenterlineGroup.color(for: idx)).frame(width: 8, height: 8)
                                 Text(centerlineGroups[idx].label)
                             }.tag(idx)
                         }
@@ -411,13 +455,8 @@ struct MapEditorView: View {
         selectedMappingCenterline = nil
     }
 
-    private func groupColor(for index: Int) -> Color {
-        let colors: [Color] = [.red, .blue, .green, .orange, .purple, .cyan, .yellow, .pink, .mint]
-        return colors[index % colors.count]
-    }
-
     private func holeSidebar(_ featureSets: HoleFeatureSets) -> some View {
-        VSplitView {
+        VStack(spacing: 0) {
             // Holes pane
             VStack(alignment: .leading, spacing: 0) {
                 sectionHeader(title: "Holes", collapsed: $holesCollapsed)
@@ -462,7 +501,9 @@ struct MapEditorView: View {
                     }
                 }
             }
-            .frame(minHeight: 30)
+            .modifier(sectionSize(.holes))
+
+            PanelDivider(direction: .above, size: $holesHeight, range: Self.sectionHeights, isEnabled: isResizable(.holes))
 
             // Features pane
             VStack(alignment: .leading, spacing: 0) {
@@ -521,7 +562,9 @@ struct MapEditorView: View {
                     }
                 }
             }
-            .frame(minHeight: 30)
+            .modifier(sectionSize(.features))
+
+            PanelDivider(direction: .above, size: $featuresHeight, range: Self.sectionHeights, isEnabled: isResizable(.features))
 
             // Unassociated pane
             VStack(alignment: .leading, spacing: 0) {
@@ -552,10 +595,73 @@ struct MapEditorView: View {
                     }
                 }
             }
-            .frame(minHeight: 30)
+            .modifier(sectionSize(.unassociated))
+
+            // With every section closed, the headers stay at the top.
+            if fillingSection == nil {
+                Spacer(minLength: 0)
+            }
         }
+        .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .top)
         .background(Color(.windowBackgroundColor))
     }
+
+    // MARK: - Sidebar sections
+
+    private enum SidebarSection: CaseIterable {
+        case holes, features, unassociated
+    }
+
+    private func isCollapsed(_ section: SidebarSection) -> Bool {
+        switch section {
+        case .holes: holesCollapsed
+        case .features: featuresCollapsed
+        case .unassociated: unassociatedCollapsed
+        }
+    }
+
+    /// The open section that takes the height the others leave: the lowest open one.
+    private var fillingSection: SidebarSection? {
+        SidebarSection.allCases.last { !isCollapsed($0) }
+    }
+
+    /// Whether the line under a section can be dragged to change the section's height.
+    private func isResizable(_ section: SidebarSection) -> Bool {
+        !isCollapsed(section) && section != fillingSection
+    }
+
+    /// Sizes a section: a closed one is as tall as its header, the filling one takes what is
+    /// left, and any other open one has the height the user gave it.
+    private func sectionSize(_ section: SidebarSection) -> SectionSize {
+        let height: Double? = switch section {
+        case .holes: holesHeight
+        case .features: featuresHeight
+        case .unassociated: nil
+        }
+        return SectionSize(
+            isCollapsed: isCollapsed(section),
+            fills: section == fillingSection,
+            height: height ?? Self.sectionHeights.lowerBound
+        )
+    }
+
+    private struct SectionSize: ViewModifier {
+        let isCollapsed: Bool
+        let fills: Bool
+        let height: Double
+
+        func body(content: Content) -> some View {
+            if isCollapsed {
+                content
+            } else if fills {
+                content.frame(minHeight: 60, maxHeight: .infinity)
+            } else {
+                // Before the filling section, so it gets its height first.
+                content.frame(minHeight: 60, maxHeight: height).layoutPriority(1)
+            }
+        }
+    }
+
 
     /// Unassociated or Ignored, and Ignore or Restore for the selected rows.
     /// Two rows, so they fit the narrowest sidebar.
@@ -640,7 +746,7 @@ struct MapEditorView: View {
 
             // Import OSM button
             Button("Import OSM") {
-                startOSMCheck(isFirstOpen: false)
+                startOSMCheck()
             }
             .disabled(!canImportOSM)
 
@@ -811,7 +917,7 @@ struct MapEditorView: View {
         if isMappingMode {
             for (groupIdx, group) in centerlineGroups.enumerated() {
                 let isGroupSelected = selectedMappingGroup == groupIdx
-                let color = groupColor(for: groupIdx)
+                let color = CenterlineGroup.color(for: groupIdx)
                 for (clIdx, cl) in group.centerlines.enumerated() {
                     let isCLSelected = isGroupSelected && selectedMappingCenterline == clIdx
                     shapes.append(MapShape(
@@ -1121,21 +1227,6 @@ struct MapEditorView: View {
                     .foregroundStyle(.secondary)
             }
 
-            // Background elevation lookup status
-            if let elevationStatus = elevationWorker.statuses[course.id] {
-                Text(elevationStatus.message)
-                    .font(.caption)
-                    .foregroundStyle(.secondary)
-            }
-
-            // Background green surface lookup status
-            if let greenSurfaceStatus = greenSurfaceWorker.statuses[course.id] {
-                Label(greenSurfaceStatus.message, systemImage: greenSurfaceStatus.isWarning ? "exclamationmark.triangle.fill" : "arrow.triangle.2.circlepath")
-                    .labelStyle(.titleAndIcon)
-                    .font(.caption)
-                    .foregroundStyle(greenSurfaceStatus.isWarning ? .orange : .secondary)
-            }
-
             // OSM import status
             if !osmImportStatus.isEmpty {
                 Text(osmImportStatus)
@@ -1305,7 +1396,7 @@ struct MapEditorView: View {
 
     /// Whether a sheet is open over the editor.
     private var isShowingSheet: Bool {
-        osmCheckState != nil || isShowingCourseOutlineSheet || publishRequest != nil
+        osmCheckState != nil || isShowingCourseOutlineSheet || publishRequest != nil || elevationRequest != nil
     }
 
     /// The Map menu actions for this editor.
@@ -1321,7 +1412,7 @@ struct MapEditorView: View {
             },
             imageryLayer: imageryLayer,
             setImageryLayer: { imageryLayer = $0 },
-            importOSM: canImportOSM ? { startOSMCheck(isFirstOpen: false) } : nil
+            importOSM: canImportOSM ? { startOSMCheck() } : nil
         )
     }
 
@@ -1693,7 +1784,7 @@ struct MapEditorView: View {
         }
     }
 
-    /// Adds a feature to the course and the current hole. The elevation worker looks up its elevations.
+    /// Adds a feature to the course and the current hole. Its elevations are fetched once it is added.
     private func addFeature(type: FeatureType, polygon: [Coordinate]) -> Feature {
         // One write: during an event the course binding still returns the value from before
         // the event, so a second write would rebuild the course without the first change.
@@ -1719,6 +1810,75 @@ struct MapEditorView: View {
         activeTool = .select
         statusMessage = "Created \(featureType.rawValue) feature #\(newFeature.id)"
         clearStatusAfterDelay()
+    }
+
+    // MARK: - Elevations
+
+    /// Opens the fetch dialog if the course has points with no elevation or greens with no
+    /// surface. Nothing is fetched while a shape is still being edited: the fetch runs when the
+    /// edit is closed.
+    ///
+    /// The change that made the fetch needed is only kept once the fetch is done. If the user
+    /// gives up, the course goes back to how it was before the change.
+    private func fetchElevationsIfNeeded() {
+        guard elevationRequest == nil, !isEditingFeature, !isEditingCenterline, !isDraggingVertex else { return }
+        // Read each time, since Cleanup on the Course Details tab also changes it.
+        let elevationStatus = elevationStatusStore.load(courseID: course.id)
+        guard CourseElevationFetch.isNeeded(for: course, status: elevationStatus) else {
+            completeCourse = course
+            completeUndoCount = undoRecords.count
+            baselineBeforeImport = nil
+            return
+        }
+
+        let previous = completeCourse
+        let previousUndoCount = completeUndoCount
+        let oldIDs = Set(previous?.features.map(\.id) ?? [])
+        let newShapes = previous == nil ? 0 : course.features.filter { !oldIDs.contains($0.id) }.count
+        elevationRequest = ElevationFetchRequest(
+            course: course,
+            status: elevationStatus,
+            cancelWarning: previous == nil ? nil : Self.cancelWarning(newShapes: newShapes),
+            onFinished: { updated, status in
+                try elevationStatusStore.save(status, courseID: updated.id)
+                course = updated
+            },
+            onCancelled: {
+                guard let previous else { return }
+                deselectAll()
+                undoRecords.removeLast(max(0, undoRecords.count - previousUndoCount))
+                course = previous
+                // Without this, the shapes of a given-up import would look deleted, and
+                // publishing would delete them from OpenStreetMap.
+                if let baselineBeforeImport {
+                    saveOSMBaseline(baselineBeforeImport)
+                    self.baselineBeforeImport = nil
+                }
+            }
+        )
+    }
+
+    private static func cancelWarning(newShapes: Int) -> ElevationFetchRequest.CancelWarning {
+        switch newShapes {
+        case 0:
+            ElevationFetchRequest.CancelWarning(
+                title: "Undo your change?",
+                message: "A change is only kept once its elevations are fetched. If you cancel, the shape goes back to how it was before the change.",
+                confirmLabel: "Undo Change"
+            )
+        case 1:
+            ElevationFetchRequest.CancelWarning(
+                title: "Delete the new shape?",
+                message: "A shape is only kept once its elevations are fetched. If you cancel, the new shape is deleted.",
+                confirmLabel: "Delete"
+            )
+        default:
+            ElevationFetchRequest.CancelWarning(
+                title: "Delete the new shapes?",
+                message: "Shapes are only kept once their elevations are fetched. If you cancel, the \(newShapes) new shapes are deleted.",
+                confirmLabel: "Delete"
+            )
+        }
     }
 
     // MARK: - Vertex Dragging
@@ -1930,34 +2090,20 @@ struct MapEditorView: View {
 
     // MARK: - OSM Import
 
-    /// The first time a course with no features is opened, checks OSM for course data and
-    /// offers to import it. If the check fails, it runs again the next time the course is opened.
-    private func checkOSMIfNeeded() {
-        guard OSMCheck.shouldCheck(course, store: osmCheckStore) else { return }
-        startOSMCheck(isFirstOpen: true)
-    }
-
-    /// Opens the OSM check dialog and searches OSM for course data in the background.
-    /// - Parameter isFirstOpen: Whether this is the check made when the course is first opened.
-    ///   Once it finishes or is cancelled, the course is not checked again on open.
-    private func startOSMCheck(isFirstOpen: Bool) {
+    /// Opens the OSM check dialog and searches OSM for course data.
+    private func startOSMCheck() {
         osmCheckState = .checking
         isImportingOSM = true
+        let location = course.location.coordinate
+        logger.info("Starting OSM import for course '\(course.name, privacy: .public)'")
         osmCheckTask = Task {
             do {
-                let result = try await fetchOSMResult()
+                let result = try await OSMCourseImport.fetch(around: location) { osmImportStatus = $0 }
                 if !Task.isCancelled {
                     osmCheckState = OSMCheck.hasCourseData(result) ? .found(result) : .notFound
                 }
-                if isFirstOpen {
-                    try? osmCheckStore.markChecked(courseID: course.id)
-                }
             } catch {
-                if Task.isCancelled {
-                    if isFirstOpen {
-                        try? osmCheckStore.markChecked(courseID: course.id)
-                    }
-                } else {
+                if !Task.isCancelled {
                     logger.error("OSM check failed: \(error, privacy: .public)")
                     osmCheckState = .failed(error.localizedDescription)
                 }
@@ -1975,198 +2121,19 @@ struct MapEditorView: View {
 
     /// Shows the mapping sidebar for the features and centerlines of an OSM result.
     private func beginOSMMapping(_ result: OverpassAPIClient.ParsedResult) {
-        let subCourseSizes = course.subCourses.map(\.holes.count)
-        centerlineGroups = buildCenterlineGroups(from: result.centerlines, subCourseSizes: subCourseSizes)
-        centerlineGroups.assignNumberedSubCourses(subCourseSizes: subCourseSizes)
+        centerlineGroups = OSMCourseImport.centerlineGroups(from: result.centerlines, subCourseSizes: course.subCourses.map(\.holes.count))
         pendingOSMResult = result
     }
 
-    /// Reads the golf features around the course from OSM.
-    private func fetchOSMResult() async throws -> OverpassAPIClient.ParsedResult {
-        osmImportStatus = "Searching within 1 km of the course location..."
-        let client = OverpassAPIClient()
-        let clubhouseCoord = course.location.coordinate
-        logger.info("Starting OSM import for course '\(course.name, privacy: .public)' at \(clubhouseCoord.lat, privacy: .public), \(clubhouseCoord.lon, privacy: .public)")
-        let searchBBox = OverpassAPIClient.boundingBox(around: clubhouseCoord, radiusMeters: 1000)
-        let result = try await client.fetchFeatures(bbox: searchBBox)
-        logger.info("Initial query: \(result.features.count, privacy: .public) features, \(result.centerlines.count, privacy: .public) centerlines, boundary: \(result.courseBoundary != nil, privacy: .public)")
-
-        var finalResult = result
-        if let bbox = OverpassAPIClient.boundaryBoundingBox(for: result.courseBoundary) {
-            osmImportStatus = "Found \(result.features.count) features and a course outline. Reading everything inside the outline..."
-            finalResult = try await client.fetchFeatures(bbox: bbox)
-            logger.info("Full query: \(finalResult.features.count, privacy: .public) features")
-        } else {
-            // No outline: grow the search area until it holds every golf feature found.
-            var bbox = searchBBox
-            for step in 1...OverpassAPIClient.maximumGrowthFetches {
-                guard let grown = OverpassAPIClient.grownBoundingBox(bbox, for: finalResult) else { break }
-                osmImportStatus = "Found \(finalResult.features.count) features. Widening the search past the edge of the course (step \(step) of up to \(OverpassAPIClient.maximumGrowthFetches))..."
-                bbox = grown
-                finalResult = try await client.fetchFeatures(bbox: bbox)
-                logger.info("Grown query: \(finalResult.features.count, privacy: .public) features")
-            }
-        }
-
-        // A relation reaching into the search area can have inner ways, such as greens, outside it.
-        let missingInnerWayIDs = finalResult.missingInnerWayIDs
-        if !missingInnerWayIDs.isEmpty {
-            osmImportStatus = "Found \(finalResult.features.count) features. Reading \(missingInnerWayIDs.count) more that belong to them..."
-            finalResult = finalResult.adding(try await client.fetchWays(ids: missingInnerWayIDs))
-            logger.info("Inner way query: \(finalResult.features.count, privacy: .public) features")
-        }
-
-        return finalResult
-    }
-
-    /// Group centerlines into chains by traversing them in playing order.
-    ///
-    /// Starting from each unvisited hole with ref=1, follow the chain: find the
-    /// centerline with ref=2 whose start is nearest to the current hole's end,
-    /// then ref=3, etc. Each chain is limited to the expected sub-course size
-    /// to prevent jumping across nines (e.g., hole 9 → hole 10 on a different nine).
-    /// Leftover centerlines (e.g., holes 10-18) form additional chains.
-    private func buildCenterlineGroups(
-        from centerlines: [OverpassAPIClient.ParsedCenterline],
-        subCourseSizes: [Int]
-    ) -> [CenterlineGroup] {
-        let valid = centerlines.filter { $0.holeNumber != nil && $0.coordinates.count >= 2 }
-        guard !valid.isEmpty, !subCourseSizes.isEmpty else { return [] }
-
-        let maxChainLength = subCourseSizes.max() ?? 9
-        var used: Set<Int> = [] // indices into `valid`
-        var groups: [CenterlineGroup] = []
-
-        // Find all hole-1 centerlines as chain starting points
-        let starts = valid.enumerated().filter { $0.element.holeNumber == 1 }
-
-        for (startIdx, startCL) in starts {
-            if used.contains(startIdx) { continue }
-
-            var chain: [OverpassAPIClient.ParsedCenterline] = [startCL]
-            used.insert(startIdx)
-            var currentEnd = startCL.coordinates.last!
-
-            var nextRef = 2
-            while chain.count < maxChainLength {
-                var bestIdx: Int?
-                var bestDist = Double.greatestFiniteMagnitude
-                for (i, cl) in valid.enumerated() {
-                    guard cl.holeNumber == nextRef, !used.contains(i) else { continue }
-                    let dist = cl.coordinates.first!.clLocation.distance(from: currentEnd.clLocation)
-                    if dist < bestDist {
-                        bestDist = dist
-                        bestIdx = i
-                    }
-                }
-
-                guard let idx = bestIdx else { break }
-
-                chain.append(valid[idx])
-                used.insert(idx)
-                currentEnd = valid[idx].coordinates.last!
-                nextRef += 1
-            }
-
-            groups.append(CenterlineGroup(
-                label: "\(chain.count) holes (group \(groups.count + 1))",
-                centerlines: chain,
-                assignedSubCourseIndex: nil
-            ))
-        }
-
-        // Pick up remaining centerlines (e.g., holes 10-18 with no ref=1 start)
-        let remaining = valid.enumerated().filter { !used.contains($0.offset) }
-        if !remaining.isEmpty {
-            // Sort by ref and traverse
-            let sortedRemaining = remaining.sorted { ($0.element.holeNumber ?? 0) < ($1.element.holeNumber ?? 0) }
-            var remainingUsed: Set<Int> = []
-
-            // Start chains from the lowest unused ref
-            for (startIdx, startCL) in sortedRemaining {
-                if remainingUsed.contains(startIdx) { continue }
-
-                var chain: [OverpassAPIClient.ParsedCenterline] = [startCL]
-                remainingUsed.insert(startIdx)
-                var currentEnd = startCL.coordinates.last!
-                let startRef = startCL.holeNumber ?? 0
-
-                var nextRef = startRef + 1
-                while chain.count < maxChainLength {
-                    var bestIdx: Int?
-                    var bestDist = Double.greatestFiniteMagnitude
-                    for (idx, cl) in sortedRemaining {
-                        guard cl.holeNumber == nextRef, !remainingUsed.contains(idx) else { continue }
-                        let dist = cl.coordinates.first!.clLocation.distance(from: currentEnd.clLocation)
-                        if dist < bestDist {
-                            bestDist = dist
-                            bestIdx = idx
-                        }
-                    }
-
-                    guard let idx = bestIdx else { break }
-                    let cl = valid[idx]
-                    chain.append(cl)
-                    remainingUsed.insert(idx)
-                    currentEnd = cl.coordinates.last!
-                    nextRef += 1
-                }
-
-                groups.append(CenterlineGroup(
-                    label: "\(chain.count) holes (group \(groups.count + 1))",
-                    centerlines: chain,
-                    assignedSubCourseIndex: nil
-                ))
-            }
-        }
-
-        return groups
-    }
-
-    /// Adds the mapped OSM features and centerlines to the course. The elevation worker looks up their elevations.
+    /// Adds the mapped OSM features and centerlines to the course. Their elevations are fetched once they are added.
     private func applyMappingAndImport() {
         guard let result = pendingOSMResult else { return }
 
-        // Build renumbered centerlines based on user's sub-course mapping
-        var renumbered: [OverpassAPIClient.ParsedCenterline] = []
-        for group in centerlineGroups {
-            guard let subIdx = group.assignedSubCourseIndex else { continue }
-
-            // Compute global hole offset for this sub-course
-            var globalOffset = 0
-            for i in 0..<subIdx {
-                globalOffset += course.subCourses[i].holes.count
-            }
-
-            for (holeIdx, centerline) in group.centerlines.enumerated() {
-                let globalNumber = globalOffset + holeIdx + 1
-                renumbered.append(OverpassAPIClient.ParsedCenterline(
-                    holeNumber: globalNumber,
-                    coordinates: centerline.coordinates,
-                    osmID: centerline.osmID,
-                    version: centerline.version,
-                    tags: centerline.tags
-                ))
-            }
-        }
-
-        let mappedResult = OverpassAPIClient.ParsedResult(
-            features: result.features,
-            centerlines: renumbered,
-            courseBoundary: result.courseBoundary,
-            misplacedCourseElements: result.misplacedCourseElements
-        )
-
-        let featureCountBefore = course.features.count
-        var importedCourse = course
-        OSMImporter.applyParsedResult(mappedResult, to: &importedCourse)
-        let importedFeatureCount = importedCourse.features.count - featureCountBefore
-
-        course = importedCourse
-        var baseline = OSMBaseline(course: importedCourse, details: Self.osmDetails(in: result))
-        baseline.misplacedCourseElement = CourseOutline.nearest(result.misplacedCourseElements, to: course.location.coordinate)
-        baseline.checkedCourseElement = true
-        saveOSMBaseline(baseline)
+        let imported = OSMCourseImport.apply(result, groups: centerlineGroups, to: course)
+        let importedFeatureCount = imported.course.features.count - course.features.count
+        baselineBeforeImport = osmBaseline
+        course = imported.course
+        saveOSMBaseline(imported.baseline)
         logger.info("Imported \(importedFeatureCount, privacy: .public) features")
         osmImportStatus = "Imported \(importedFeatureCount) features"
         pendingOSMResult = nil
@@ -2356,23 +2323,6 @@ struct MapEditorView: View {
         }
     }
 
-    /// Looks in OSM for a misplaced `leisure=golf_course` element, for courses imported before
-    /// the import looked for one. Tried again each time the course is opened until it works.
-    private func findMisplacedCourseElement() async {
-        guard let baseline = osmBaseline, !baseline.checkedCourseElement, !baseline.entries.isEmpty,
-              let bbox = OverpassAPIClient.BoundingBox(containing: course.features.flatMap(\.polygon)) else { return }
-        let courseID = course.id
-        do {
-            let elements = try await OverpassAPIClient().fetchCourseElements(bbox: bbox.padded(by: 0.25))
-            guard course.id == courseID, var baseline = osmBaseline else { return }
-            baseline.misplacedCourseElement = CourseOutline.nearest(elements, to: course.location.coordinate)
-            baseline.checkedCourseElement = true
-            saveOSMBaseline(baseline)
-        } catch {
-            logger.error("Could not look for the course outline in OSM: \(error, privacy: .public)")
-        }
-    }
-
     /// Records or removes the fairway's pending multipolygon.
     private func setPendingMultipolygon(_ pending: PendingMultipolygon?, for fairway: Feature) {
         guard var baseline = osmBaseline, let osmID = fairway.osmID else { return }
@@ -2383,22 +2333,6 @@ struct MapEditorView: View {
         saveOSMBaseline(baseline)
     }
 
-    /// The version, tags, and members of each imported element, by OSM ID.
-    private static func osmDetails(in result: OverpassAPIClient.ParsedResult) -> [String: OSMElementDetails] {
-        var details: [String: OSMElementDetails] = [:]
-        for feature in result.features {
-            if let osmID = feature.osmID {
-                details[osmID] = OSMElementDetails(version: feature.version, tags: feature.tags, members: feature.members)
-            }
-        }
-        for centerline in result.centerlines {
-            if let osmID = centerline.osmID {
-                details[osmID] = OSMElementDetails(version: centerline.version, tags: centerline.tags)
-            }
-        }
-        return details
-    }
-
     private func loadOSMBaseline() {
         do {
             osmBaseline = try baselineStore.loadOrCreate(for: course)
@@ -2407,25 +2341,6 @@ struct MapEditorView: View {
             osmImportStatus = "Could not load OSM changes: \(error.localizedDescription)"
         }
         updateOSMChanges()
-        Task {
-            await fillOSMDetails()
-            await findMisplacedCourseElement()
-        }
-    }
-
-    /// Reads from OSM the tags and members the baseline does not know, such as for courses
-    /// imported before they were kept. Tried again each time the course is opened until it works.
-    private func fillOSMDetails() async {
-        guard let osmIDs = osmBaseline?.osmIDsWithUnknownDetails, !osmIDs.isEmpty else { return }
-        let courseID = course.id
-        do {
-            let details = try await OSMAPIClient.details(of: osmIDs)
-            guard course.id == courseID, var baseline = osmBaseline else { return }
-            baseline.fillDetails(details)
-            saveOSMBaseline(baseline)
-        } catch {
-            logger.error("Could not read OSM details: \(error, privacy: .public)")
-        }
     }
 
     private func saveOSMBaseline(_ baseline: OSMBaseline) {
@@ -2537,46 +2452,6 @@ struct MapEditorView: View {
         }
     }
 
-}
-
-// MARK: - Centerline Mapping
-
-struct CenterlineGroup: Identifiable {
-    let id = UUID()
-    var label: String
-    var centerlines: [OverpassAPIClient.ParsedCenterline]
-    var assignedSubCourseIndex: Int?
-}
-
-extension [CenterlineGroup] {
-    /// Removes a group and renumbers the groups after it.
-    mutating func removeGroup(at index: Int) {
-        remove(at: index)
-        relabel()
-    }
-
-    /// Assigns each group to the sub-course whose holes it numbers. With nines of 9 holes, the
-    /// group of holes 1–9 goes to the first sub-course and holes 10–18 to the second. Groups
-    /// numbered any other way, or a second group for the same sub-course, stay unassigned.
-    mutating func assignNumberedSubCourses(subCourseSizes: [Int]) {
-        var firstHole = 1
-        for (subCourseIndex, size) in subCourseSizes.enumerated() {
-            let holes = [Int](firstHole..<(firstHole + size))
-            firstHole += size
-            guard size > 0, !contains(where: { $0.assignedSubCourseIndex == subCourseIndex }),
-                  let match = firstIndex(where: {
-                      $0.assignedSubCourseIndex == nil && $0.centerlines.compactMap(\.holeNumber).sorted() == holes
-                  }) else { continue }
-            self[match].assignedSubCourseIndex = subCourseIndex
-        }
-    }
-
-    /// Sets each group's label from its hole count and its place in the list.
-    mutating func relabel() {
-        for index in indices {
-            self[index].label = "\(self[index].centerlines.count) holes (group \(index + 1))"
-        }
-    }
 }
 
 /// The rows selected in the Unassociated pane. Only one feature is selected at a time: one

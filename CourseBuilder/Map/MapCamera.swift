@@ -66,6 +66,23 @@ final class MapCamera {
         )
     }
 
+    /// Moves and zooms the map so every coordinate is in view, with `padding` points of room
+    /// around them. Does nothing until the map has a size.
+    func fit(_ coordinates: [Coordinate], padding: CGFloat = 40, maxZoom: Double = 18) {
+        guard !coordinates.isEmpty, size.width > 0, size.height > 0 else { return }
+        let pixels = coordinates.map { WebMercator.pixel(for: $0, zoom: 0.0) }
+        let xs = pixels.map(\.x)
+        let ys = pixels.map(\.y)
+        let minX = xs.min()!, maxX = xs.max()!, minY = ys.min()!, maxY = ys.max()!
+
+        let width = max(size.width - 2 * padding, 1)
+        let height = max(size.height - 2 * padding, 1)
+        // A single point has no span, so it takes the closest zoom allowed.
+        let scale = min(width / max(maxX - minX, 1e-9), height / max(maxY - minY, 1e-9))
+        center = WebMercator.coordinate(forPixel: CGPoint(x: (minX + maxX) / 2, y: (minY + maxY) / 2), zoom: 0.0)
+        zoom = min(max(log2(scale), Self.zoomRange.lowerBound), min(maxZoom, Self.zoomRange.upperBound))
+    }
+
     /// Zooms in to the next whole zoom level, keeping the coordinate under `anchor` in place.
     func zoomIn(anchor: CGPoint? = nil) {
         setZoom(zoom.rounded(.down) + 1, anchor: anchor)

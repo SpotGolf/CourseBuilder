@@ -176,6 +176,8 @@ final class OverpassAPIClientTests: XCTestCase {
         // Course boundary from outer role only
         XCTAssertNotNil(result.courseBoundary)
         XCTAssertEqual(result.courseBoundary?.count, 5)
+        // The outline is big enough to be the course, so the course takes its ID.
+        XCTAssertEqual(result.courseOSMID, "r53408")
     }
 
     func testBuildQueryForWayIDs() {

@@ -4,20 +4,11 @@ import CourseDataSwift
 class CourseStore: ObservableObject {
     @Published var courses: [Course] = []
 
-    /// Looks up elevations for points that edits add or move.
-    let elevationWorker: ElevationWorker
-    /// Builds the elevation surface of greens that edits add or change.
-    let greenSurfaceWorker: GreenSurfaceWorker
-
     private let directory: URL
     private let writer: CourseFileWriter
     private var pendingSaveTasks: [UUID: Task<Void, Never>] = [:]
 
-    init(
-        directory: URL? = nil,
-        elevationWorker: ElevationWorker = ElevationWorker(),
-        greenSurfaceWorker: GreenSurfaceWorker = GreenSurfaceWorker()
-    ) {
+    init(directory: URL? = nil) {
         if let directory {
             self.directory = directory
         } else {
@@ -26,22 +17,6 @@ class CourseStore: ObservableObject {
         }
         try? FileManager.default.createDirectory(at: self.directory, withIntermediateDirectories: true)
         writer = CourseFileWriter(directory: self.directory)
-
-        self.elevationWorker = elevationWorker
-        self.greenSurfaceWorker = greenSurfaceWorker
-        elevationWorker.read = { [weak self] id in
-            self?.courses.first { $0.id == id }
-        }
-        elevationWorker.modify = { [weak self] id, change in
-            self?.modify(id, change)
-        }
-
-        greenSurfaceWorker.read = { [weak self] id in
-            self?.courses.first { $0.id == id }
-        }
-        greenSurfaceWorker.modify = { [weak self] id, change in
-            self?.modify(id, change)
-        }
     }
 
     func save(_ course: Course) throws {
@@ -77,15 +52,6 @@ class CourseStore: ObservableObject {
         GreenSurfaceUpdater.clearStaleSurfaces(in: &course, comparedTo: courses[index])
         courses[index] = course
         scheduleSave(for: course.id)
-        elevationWorker.courseDidChange(course.id)
-        greenSurfaceWorker.courseDidChange(course.id)
-    }
-
-    /// Changes a course in place without telling the background workers, which made the change.
-    private func modify(_ id: UUID, _ change: (inout Course) -> Void) {
-        guard let index = courses.firstIndex(where: { $0.id == id }) else { return }
-        change(&courses[index])
-        scheduleSave(for: id)
     }
 
     /// Writes the course to disk once edits pause. Encoding a large course takes long enough to
@@ -126,8 +92,6 @@ class CourseStore: ObservableObject {
     func delete(id: UUID) throws {
         pendingSaveTasks[id]?.cancel()
         pendingSaveTasks[id] = nil
-        elevationWorker.cancel(id)
-        greenSurfaceWorker.cancel(id)
         let fileURL = directory.appendingPathComponent("\(id).json")
         try FileManager.default.removeItem(at: fileURL)
         courses.removeAll { $0.id == id }

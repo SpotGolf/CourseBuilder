@@ -152,25 +152,43 @@ enum GreenSurfaceUpdater {
         }
     }
 
-    /// The result of building the missing surfaces of a course.
-    struct Update {
-        var course: Course
-        /// How many greens USGS has no 1 m lidar data for. They are left with no surface.
-        var greensWithoutData: Int
-    }
+    /// Builds the surface of every green that has none and is not known to have no lidar data.
+    ///
+    /// A green USGS has no 1 m lidar data for is left with no surface and added to `status`, so
+    /// it is not asked for again until its shape changes.
+    ///
+    /// Throws if the service cannot be reached or answers with an error. What was built before
+    /// the error stays in `course` and `status`, so calling again only asks for the rest.
+    ///
+    /// - Parameter progress: Called before the first green and after each one, with the greens
+    ///   done and the greens in all.
+    /// - Returns: How many greens got a surface.
+    @MainActor
+    @discardableResult
+    static func fetchMissingSurfaces(
+        in course: inout Course,
+        status: inout ElevationStatus,
+        fetch: Fetch = usgsFetch,
+        progress: (@MainActor (_ completed: Int, _ total: Int) -> Void)? = nil
+    ) async throws -> Int {
+        let greens = greensMissingSurface(in: course).filter { !status.hasNoData(forGreen: $0) }
+        guard !greens.isEmpty else { return 0 }
+        progress?(0, greens.count)
 
-    /// Returns a copy of the course with a surface on every green that lacked one and that USGS
-    /// has 1 m lidar data for. Throws if the service cannot be reached or answers with an error.
-    static func update(_ course: Course, fetch: Fetch = usgsFetch) async throws -> Update {
-        var update = Update(course: course, greensWithoutData: 0)
-        for green in greensMissingSurface(in: course) {
-            if let surface = try await buildSurface(for: green.polygon, fetch: fetch) {
-                apply(surface, toGreen: green.id, sampledFor: positions(of: green.polygon), in: &update.course)
+        var built = 0
+        for (index, green) in greens.enumerated() {
+            let sampled = positions(of: green.polygon)
+            let surface = try await buildSurface(for: green.polygon, fetch: fetch)
+            try Task.checkCancellation()
+            if let surface {
+                apply(surface, toGreen: green.id, sampledFor: sampled, in: &course)
+                built += 1
             } else {
-                update.greensWithoutData += 1
+                status.greensWithoutData[green.id] = sampled
             }
+            progress?(index + 1, greens.count)
         }
-        return update
+        return built
     }
 
     /// Sets a green's surface, unless the green moved or got a surface since it was sampled.

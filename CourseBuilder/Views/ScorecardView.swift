@@ -4,13 +4,17 @@ import CourseDataSwift
 
 struct ScorecardView: View {
     @Binding var course: Course
+    /// Whether the Course Details tab is showing. The menus only act on it while it is.
+    var isActive = true
     @State private var isImporting = false
     @State private var statusMessage = ""
     @State private var showImagePicker = false
     @State private var exportWarnings: [String]?
     @State private var cleanupActions: [String]?
-    @State private var cleanupError: String?
     @State private var isCleaningUp = false
+    @State private var elevationRequest: ElevationFetchRequest?
+    /// What the Cleanup fetch did. Set when the fetch is done, and shown once its dialog closes.
+    @State private var fetchedElevationActions: [String]?
     @State private var showUpdateInfoConfirmation = false
     @State private var isUpdatingInfo = false
     @State private var comboTeeName: String?
@@ -18,7 +22,6 @@ struct ScorecardView: View {
     @AppStorage("golfCourseAPIKey") private var apiKey: String = ""
     /// The CourseData repository chosen for the last export.
     @AppStorage("courseDataDirectory") private var courseDataDirectory: String = ""
-    @Environment(\.openWindow) private var openWindow
 
     var body: some View {
         VStack(spacing: 0) {
@@ -45,10 +48,6 @@ struct ScorecardView: View {
                     .disabled(isCleaningUp)
                     Button("Export JSON...") { exportJSON() }
                     Button("Import Image...") { showImagePicker = true }
-                    Button("Open Map Editor") {
-                        openWindow(id: "map-editor", value: course.id)
-                    }
-                    .disabled(course.subCourses.isEmpty)
                 }
 
                 // Course Name and Club Name
@@ -212,7 +211,7 @@ struct ScorecardView: View {
             ScorecardTableView(course: $course)
 
         }
-        .focusedSceneValue(\.courseActions, courseActions)
+        .focusedSceneValue(\.courseActions, isActive ? courseActions : nil)
         .confirmationDialog(
             "Update \(course.name) from GolfCourseAPI?",
             isPresented: $showUpdateInfoConfirmation,
@@ -282,10 +281,16 @@ struct ScorecardView: View {
                 set: { if !$0 { cleanupActions = nil } }
             )
         ) {
-            CleanupResultsSheet(actions: cleanupActions ?? [], errorMessage: cleanupError) {
+            CleanupResultsSheet(actions: cleanupActions ?? []) {
                 cleanupActions = nil
-                cleanupError = nil
             }
+        }
+        .elevationFetchDialog($elevationRequest)
+        .onChange(of: elevationRequest?.id) {
+            // The fetch dialog has closed. The results sheet opens after it.
+            guard elevationRequest == nil, let actions = fetchedElevationActions else { return }
+            fetchedElevationActions = nil
+            finishCleanup(elevationActions: actions)
         }
     }
 
@@ -335,9 +340,7 @@ struct ScorecardView: View {
                 ? nil : { showUpdateInfoConfirmation = true },
             export: { exportJSON() },
             cleanup: isCleaningUp ? nil : { runCleanup() },
-            importImage: { showImagePicker = true },
-            openMapEditor: course.subCourses.isEmpty
-                ? nil : { openWindow(id: "map-editor", value: course.id) }
+            importImage: { showImagePicker = true }
         )
     }
 
@@ -373,7 +376,7 @@ struct ScorecardView: View {
     }
 
     private func exportJSON() {
-        let warnings = CourseIntegrity.validateCourse(course)
+        let warnings = CourseIntegrity.validateCourse(course, elevationStatus: ElevationStatusStore().load(courseID: course.id))
         if warnings.isEmpty {
             showSavePanelAndExport()
         } else {
@@ -381,38 +384,49 @@ struct ScorecardView: View {
         }
     }
 
-    /// Looks up missing elevations, then repairs the course data. If the elevation lookup fails,
-    /// the rest of the cleanup still runs and the results sheet shows the error.
+    /// Fetches missing elevations and green surfaces in a dialog, then repairs the course data.
+    /// If the user cancels the fetch, nothing is repaired.
     private func runCleanup() {
         guard !isCleaningUp else { return }
-        isCleaningUp = true
-        Task {
-            var elevationActions: [String] = []
-            var elevationError: String?
-            let missing = ElevationUpdater.missingCoordinates(in: course).count
-            if missing > 0 {
-                statusMessage = "Looking up elevations for \(missing) point(s)..."
-                do {
-                    let lookup = try await ElevationUpdater.lookUpMissingElevations(in: course)
-                    ElevationUpdater.apply(lookup.elevations, to: &course)
-                    let found = lookup.elevations.count - lookup.seaLevelPoints
-                    if found > 0 {
-                        elevationActions.append("Looked up elevations for \(found) point(s)")
-                    }
-                    if lookup.seaLevelPoints > 0 {
-                        elevationActions.append("Set \(lookup.seaLevelPoints) point(s) to sea level because USGS has no elevation data for them")
-                    }
-                } catch {
-                    elevationError = "Could not look up elevations. \(error.localizedDescription)"
-                }
-                statusMessage = ""
-            }
-
-            let report = CourseIntegrity.cleanup(&course)
-            cleanupError = elevationError
-            cleanupActions = elevationActions + report.actions
-            isCleaningUp = false
+        let statusStore = ElevationStatusStore()
+        let savedStatus = statusStore.load(courseID: course.id)
+        guard CourseElevationFetch.isNeeded(for: course, status: savedStatus) else {
+            finishCleanup(elevationActions: [])
+            return
         }
+
+        isCleaningUp = true
+        let pointsBefore = ElevationUpdater.missingCoordinates(in: course).count
+        let greensBefore = GreenSurfaceUpdater.greensMissingSurface(in: course).count
+        elevationRequest = ElevationFetchRequest(
+            course: course,
+            status: savedStatus,
+            onFinished: { updated, status in
+                try statusStore.save(status, courseID: updated.id)
+                course = updated
+                var actions: [String] = []
+                let points = pointsBefore - ElevationUpdater.missingCoordinates(in: updated).count
+                if points > 0 {
+                    actions.append("Fetched elevations for \(points) point(s)")
+                }
+                let greens = greensBefore - GreenSurfaceUpdater.greensMissingSurface(in: updated).count
+                if greens > 0 {
+                    actions.append("Built the surface of \(greens) green(s)")
+                }
+                if let noData = CourseElevationFetch.noDataMessage(from: savedStatus, to: status) {
+                    actions.append(noData)
+                }
+                fetchedElevationActions = actions
+            },
+            onCancelled: { isCleaningUp = false }
+        )
+    }
+
+    /// Repairs the course data and shows what was done.
+    private func finishCleanup(elevationActions: [String]) {
+        let report = CourseIntegrity.cleanup(&course)
+        cleanupActions = elevationActions + report.actions
+        isCleaningUp = false
     }
 
     /// Asks for the CourseData repository and saves the course into it, in the folder and with
@@ -487,24 +501,17 @@ struct ExportWarningsSheet: View {
 
 struct CleanupResultsSheet: View {
     let actions: [String]
-    var errorMessage: String?
     let onDismiss: () -> Void
 
     var body: some View {
         VStack(alignment: .leading, spacing: 12) {
-            Text(errorMessage == nil ? "Cleanup Complete" : "Cleanup Incomplete")
+            Text("Cleanup Complete")
                 .font(.headline)
 
-            if let errorMessage {
-                Label(errorMessage, systemImage: "exclamationmark.triangle.fill")
-                    .foregroundStyle(.red)
-                    .fixedSize(horizontal: false, vertical: true)
-            }
-
-            if actions.isEmpty && errorMessage == nil {
+            if actions.isEmpty {
                 Text("No cleanup was needed.")
                     .foregroundStyle(.secondary)
-            } else if !actions.isEmpty {
+            } else {
                 Text("The following cleanup actions were performed:")
                     .foregroundStyle(.secondary)
 

@@ -71,7 +71,7 @@ struct FeatureEditorView<Actions: View>: View {
                             polygon: Array(feature.polygon)
                         )
                     } else {
-                        Text("No elevation surface. It is built in the background from USGS lidar data.")
+                        Text("No elevation surface. USGS has no 1 m lidar data for this green.")
                             .font(.caption)
                             .foregroundStyle(.secondary)
                             .frame(maxWidth: .infinity, alignment: .leading)

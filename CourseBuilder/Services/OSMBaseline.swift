@@ -63,7 +63,7 @@ struct OSMBaseline: Codable, Equatable {
             feature.type != type || !OSMChangeDetector.samePoints(Array(feature.polygon), coordinates)
         }
 
-        /// The feature with this entry's type and points. Elevations are dropped and looked up again.
+        /// The feature with this entry's type and points. Elevations are dropped and fetched again.
         func reverted(_ feature: Feature) -> Feature {
             Feature(id: feature.id, type: type, polygon: CoordinatePath(coordinates), osmID: feature.osmID)
         }
@@ -82,8 +82,16 @@ struct OSMBaseline: Codable, Equatable {
     var pendingCourseOutline: PendingCourseOutline?
 
     /// Whether OSM was searched for a misplaced `leisure=golf_course` element. Courses imported
-    /// before the import looked for one are searched when they are opened.
+    /// before the import looked for one are searched when they are selected.
     var checkedCourseElement = false
+
+    /// Whether OSM was searched for the course outline's ID, for ``Course/osmID``. Courses
+    /// imported before the ID was kept are searched when they are selected.
+    var checkedCourseOSMID = false
+
+    /// The OSM IDs whose tags and members OSM was asked for and did not give. They stay unknown
+    /// and are not asked for again.
+    var osmIDsWithoutDetails: Set<String> = []
 
     /// A baseline of every course feature that has an OSM ID.
     ///
@@ -124,6 +132,8 @@ struct OSMBaseline: Codable, Equatable {
         misplacedCourseElement = try container.decodeIfPresent(MisplacedCourseElement.self, forKey: .misplacedCourseElement)
         pendingCourseOutline = try container.decodeIfPresent(PendingCourseOutline.self, forKey: .pendingCourseOutline)
         checkedCourseElement = try container.decodeIfPresent(Bool.self, forKey: .checkedCourseElement) ?? false
+        checkedCourseOSMID = try container.decodeIfPresent(Bool.self, forKey: .checkedCourseOSMID) ?? false
+        osmIDsWithoutDetails = try container.decodeIfPresent(Set<String>.self, forKey: .osmIDsWithoutDetails) ?? []
     }
 }
 

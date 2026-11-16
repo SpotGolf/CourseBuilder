@@ -1,61 +1,60 @@
 import Foundation
 import CourseDataSwift
 
-extension Course {
-    /// Whether any feature point, including centerline points, has no elevation.
-    var isMissingElevations: Bool {
-        features.contains { $0.polygon.contains { $0.ele == nil } }
-    }
-}
-
 enum ElevationUpdater {
-    /// Returns a copy of the course with an elevation on every coordinate that lacked one:
-    /// the course location and feature points, including centerlines.
-    ///
-    /// Throws ``USGSElevationClient/ElevationError/noData(missing:total:)`` if any point
-    /// could not be resolved, so a course is never saved partially updated.
-    static func update(
-        _ course: Course,
-        using client: USGSElevationClient = USGSElevationClient(),
-        progress: (@Sendable (_ completed: Int, _ total: Int) -> Void)? = nil
-    ) async throws -> Course {
-        var updated = course
-        var missing: [Coordinate] = []
-        forEachCoordinate(in: &updated) { coordinate in
-            if coordinate.ele == nil {
-                missing.append(coordinate)
-            }
-        }
-        guard !missing.isEmpty else { return course }
+    /// How many points are asked for in one request.
+    static let batchSize = USGSElevationClient.batchSize
 
-        let elevations = try await client.elevations(for: missing, progress: progress)
-        let resolved = elevations.compactMap { $0 }
-        guard elevations.count == missing.count, resolved.count == missing.count else {
-            throw USGSElevationClient.ElevationError.noData(missing: missing.count - resolved.count, total: missing.count)
-        }
+    /// Looks up one elevation for each point, in order, with `nil` where there is no data.
+    typealias Fetch = @Sendable ([Coordinate]) async throws -> [Double?]
 
-        var next = resolved.makeIterator()
-        forEachCoordinate(in: &updated) { coordinate in
-            if coordinate.ele == nil {
-                coordinate.ele = next.next()
-            }
-        }
-        return updated
+    static let usgsFetch: Fetch = { coordinates in
+        try await USGSElevationClient().elevations(for: coordinates)
     }
 
-    /// Returns a copy of the course with `elevation` on every coordinate that lacked one.
-    static func fillingMissingElevations(of course: Course, with elevation: Double) -> Course {
-        var updated = course
-        forEachCoordinate(in: &updated) { coordinate in
-            if coordinate.ele == nil {
-                coordinate.ele = elevation
+    /// Looks up the elevation of every point in the course that has none: the course location
+    /// and feature points, including centerlines.
+    ///
+    /// A point USGS has no data for, for example because the course is outside the United
+    /// States, is left with no elevation and added to `status`, so it is not asked for again.
+    ///
+    /// Throws if the service cannot be reached or answers with an error. What was looked up
+    /// before the error stays in `course` and `status`, so calling again only asks for the rest.
+    ///
+    /// - Parameter progress: Called after each request with the points done and the points in all.
+    /// - Returns: How many points got an elevation.
+    @MainActor
+    @discardableResult
+    static func fetchMissingElevations(
+        in course: inout Course,
+        status: inout ElevationStatus,
+        fetch: Fetch = usgsFetch,
+        progress: (@MainActor (_ completed: Int, _ total: Int) -> Void)? = nil
+    ) async throws -> Int {
+        let missing = missingCoordinates(in: course, status: status)
+        guard !missing.isEmpty else { return 0 }
+        progress?(0, missing.count)
+
+        var found = 0
+        for start in stride(from: 0, to: missing.count, by: batchSize) {
+            let batch = Array(missing[start..<min(start + batchSize, missing.count)])
+            let lookup: Lookup
+            do {
+                lookup = resolve(batch, with: try await fetch(batch))
+            } catch let error as USGSElevationClient.ElevationError where error.isOutsideUnitedStates {
+                lookup = resolve(batch, with: [])
             }
+            try Task.checkCancellation()
+            apply(lookup.elevations, to: &course)
+            status.pointsWithoutData.formUnion(lookup.withoutData)
+            found += lookup.elevations.count
+            progress?(min(start + batchSize, missing.count), missing.count)
         }
-        return updated
+        return found
     }
 
     /// A point's position, without its elevation. Elevations are matched to points by position.
-    struct Location: Hashable {
+    struct Location: Hashable, Codable {
         let latitude: Double
         let longitude: Double
 
@@ -65,12 +64,14 @@ enum ElevationUpdater {
         }
     }
 
-    /// Returns each distinct point in the course that has no elevation, in file order.
-    static func missingCoordinates(in course: Course) -> [Coordinate] {
+    /// Returns each distinct point in the course that has no elevation, in file order. Points
+    /// that `status` says USGS has no data for are left out.
+    static func missingCoordinates(in course: Course, status: ElevationStatus = ElevationStatus()) -> [Coordinate] {
         var seen: Set<Location> = []
         var missing: [Coordinate] = []
         forEachCoordinate(in: course) { coordinate in
-            if coordinate.ele == nil, seen.insert(Location(coordinate)).inserted {
+            let location = Location(coordinate)
+            if coordinate.ele == nil, !status.pointsWithoutData.contains(location), seen.insert(location).inserted {
                 missing.append(coordinate)
             }
         }
@@ -79,41 +80,23 @@ enum ElevationUpdater {
 
     /// The result of looking up elevations for a list of points.
     struct Lookup {
-        /// The elevation for each point, by position.
+        /// The elevation for each point USGS has data for, by position.
         var elevations: [Location: Double]
-        /// How many points USGS had no data for. These are set to sea level.
-        var seaLevelPoints: Int
+        /// The points USGS has no data for.
+        var withoutData: Set<Location>
     }
 
-    /// Pairs each point with its looked-up elevation, in order. Points USGS has no data for are set to sea level.
+    /// Pairs each point with its looked-up elevation, in order.
     static func resolve(_ coordinates: [Coordinate], with results: [Double?]) -> Lookup {
-        var lookup = Lookup(elevations: [:], seaLevelPoints: 0)
+        var lookup = Lookup(elevations: [:], withoutData: [])
         for (index, coordinate) in coordinates.enumerated() {
             if index < results.count, let elevation = results[index] {
                 lookup.elevations[Location(coordinate)] = elevation
             } else {
-                lookup.elevations[Location(coordinate)] = 0
-                lookup.seaLevelPoints += 1
+                lookup.withoutData.insert(Location(coordinate))
             }
         }
         return lookup
-    }
-
-    /// Looks up the elevation of every point in the course that has none.
-    ///
-    /// If USGS has no data for a point, for example because the course is outside the United States,
-    /// the point is set to sea level. Throws if the service cannot be reached or answers with an error.
-    static func lookUpMissingElevations(
-        in course: Course,
-        fetch: ElevationWorker.Fetch = ElevationWorker.usgsFetch
-    ) async throws -> Lookup {
-        let missing = missingCoordinates(in: course)
-        guard !missing.isEmpty else { return Lookup(elevations: [:], seaLevelPoints: 0) }
-        do {
-            return resolve(missing, with: try await fetch(missing))
-        } catch let error as USGSElevationClient.ElevationError where error.isOutsideUnitedStates {
-            return resolve(missing, with: [])
-        }
     }
 
     /// Sets the elevation of every point that has none and whose position is in `elevations`.

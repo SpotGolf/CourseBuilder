@@ -6,13 +6,13 @@ struct CourseListActions {
     var deleteCourse: (() -> Void)?
 }
 
-/// Actions for the selected course. An action is nil when its button is disabled.
+/// Actions for the selected course, while its Course Details tab is showing. An action is nil
+/// when its button is disabled.
 struct CourseActions {
     var updateCourseInfo: (() -> Void)?
     var export: (() -> Void)?
     var cleanup: (() -> Void)?
     var importImage: (() -> Void)?
-    var openMapEditor: (() -> Void)?
 }
 
 extension FocusedValues {
@@ -27,6 +27,7 @@ extension FocusedValues {
 struct CourseCommands: Commands {
     @FocusedValue(\.courseListActions) private var listActions
     @FocusedValue(\.courseActions) private var courseActions
+    @FocusedValue(\.courseTab) private var courseTab
 
     var body: some Commands {
         CommandGroup(replacing: .newItem) {
@@ -51,9 +52,12 @@ struct CourseCommands: Commands {
                 .disabled(courseActions?.importImage == nil)
         }
         CommandGroup(before: .toolbar) {
-            Button("Open Map Editor") { courseActions?.openMapEditor?() }
-                .keyboardShortcut("o")
-                .disabled(courseActions?.openMapEditor == nil)
+            Button(CourseTab.details.title) { courseTab?.wrappedValue = .details }
+                .keyboardShortcut("1")
+                .disabled(courseTab == nil)
+            Button(CourseTab.map.title) { courseTab?.wrappedValue = .map }
+                .keyboardShortcut("2")
+                .disabled(courseTab == nil)
             Divider()
         }
     }

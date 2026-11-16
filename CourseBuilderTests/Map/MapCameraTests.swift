@@ -21,6 +21,33 @@ struct MapCameraTests {
         #expect(abs(point.y - 300) < 1e-6)
     }
 
+    @Test func fitShowsEveryCoordinateWithRoomAround() {
+        let camera = camera(zoom: 4)
+        let corners = [Coordinate(lat: 40.000, lon: -105.030), Coordinate(lat: 40.010, lon: -105.010)]
+
+        camera.fit(corners, padding: 40)
+
+        let points = corners.map(camera.projection.point(for:))
+        for point in points {
+            #expect(point.x >= 40 - 1e-6 && point.x <= 760 + 1e-6)
+            #expect(point.y >= 40 - 1e-6 && point.y <= 560 + 1e-6)
+        }
+        // The tighter side reaches the padding, so the map is zoomed in as far as it can be.
+        let width = abs(points[0].x - points[1].x)
+        let height = abs(points[0].y - points[1].y)
+        #expect(abs(width - 720) < 1e-3 || abs(height - 520) < 1e-3)
+    }
+
+    @Test func fitDoesNotZoomPastTheLimit() {
+        let camera = camera(zoom: 4)
+
+        camera.fit([course], maxZoom: 18)
+
+        #expect(camera.zoom == 18)
+        #expect(abs(camera.center.lat - course.lat) < 1e-9)
+        #expect(abs(camera.center.lon - course.lon) < 1e-9)
+    }
+
     @Test func pointAndCoordinateRoundTrip() {
         let projection = camera().projection
         let coordinate = projection.coordinate(at: CGPoint(x: 123.5, y: 456.25))

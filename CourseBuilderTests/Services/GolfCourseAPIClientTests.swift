@@ -334,6 +334,134 @@ final class GolfCourseAPIClientTests: XCTestCase {
         XCTAssertEqual(course.tees[2].name, "Red")
     }
 
+    func testSearchResultWithoutCoordinateIsNotUsable() throws {
+        let json = """
+        {
+            "courses": [
+                { "id": "a", "club_name": "A", "course_name": "A", "location": { "city": "Denver", "latitude": 39.7, "longitude": -105.0 } },
+                { "id": "b", "club_name": "B", "course_name": "B", "location": { "city": "Denver" } },
+                { "id": "c", "club_name": "C", "course_name": "C", "location": { "city": "Denver", "latitude": 39.7 } },
+                { "id": "d", "club_name": "D", "course_name": "D", "location": { "city": "Denver", "latitude": 0, "longitude": 0 } }
+            ]
+        }
+        """.data(using: .utf8)!
+
+        let response = try JSONDecoder().decode(GolfCourseAPIClient.SearchResponse.self, from: json)
+
+        XCTAssertEqual(response.courses.filter(\.hasCoordinate).map(\.id), ["a"])
+    }
+
+    // MARK: - Combining results
+
+    /// The pars of a nine. Yardages are `firstYardage`, `firstYardage + 1`, and so on.
+    private static let ninePars = [4, 4, 3, 5, 4, 4, 3, 5, 4]
+
+    /// A result with one "Blue" tee. Each nine is given by its first yardage, and its holes get
+    /// handicaps starting at `firstHandicap` and going up by two, as on a front or back nine.
+    private func makeDetail(id: String, name: String, club: String = "Test Club", nines: [Int]) -> GolfCourseAPIClient.CourseDetail {
+        var holes: [GolfCourseAPIClient.APIHole] = []
+        for (nineIndex, firstYardage) in nines.enumerated() {
+            for (holeIndex, par) in Self.ninePars.enumerated() {
+                holes.append(GolfCourseAPIClient.APIHole(par: par, yardage: firstYardage + holeIndex, handicap: holeIndex * 2 + 1 + nineIndex))
+            }
+        }
+        let tee = GolfCourseAPIClient.TeeSet(
+            teeName: "Blue",
+            courseRating: 72.0,
+            slopeRating: 130,
+            totalYards: holes.map(\.yardage).reduce(0, +),
+            parTotal: holes.map(\.par).reduce(0, +),
+            frontCourseRating: 36.0,
+            frontSlopeRating: 128,
+            backCourseRating: 36.0,
+            backSlopeRating: 132,
+            holes: holes
+        )
+        return GolfCourseAPIClient.CourseDetail(
+            id: id,
+            courseName: name,
+            clubName: club,
+            location: GolfCourseAPIClient.APILocation(address: "", city: "Denver", state: "CO", country: "US", zipCode: "", latitude: 39.7, longitude: -105.0),
+            tees: GolfCourseAPIClient.TeeSets(male: [tee], female: [])
+        )
+    }
+
+    func testCombinesThreeNineHoleResults() throws {
+        let course = try GolfCourseAPIClient.convertToCourse(details: [
+            makeDetail(id: "a", name: "Eldorado", nines: [300]),
+            makeDetail(id: "b", name: "Vista", nines: [400]),
+            makeDetail(id: "c", name: "Sunshine", nines: [500])
+        ])
+
+        XCTAssertEqual(course.name, "Test Club")
+        XCTAssertEqual(course.golfCourseAPIIds, ["a", "b", "c"])
+        XCTAssertEqual(course.subCourses.map(\.name), ["Eldorado", "Vista", "Sunshine"])
+        XCTAssertEqual(course.subCourses.map(\.holes.count), [9, 9, 9])
+        XCTAssertEqual(course.subCourses[1].holes[0].yardages["Blue"], 400)
+    }
+
+    func testCombinesPairedResultsThatShareNines() throws {
+        // Canyon is a back nine in the first result and a front nine in the second, so its
+        // handicaps differ between them.
+        let course = try GolfCourseAPIClient.convertToCourse(details: [
+            makeDetail(id: "a", name: "Vista/Canyon", nines: [300, 400]),
+            makeDetail(id: "b", name: "Canyon/Sunshine", nines: [400, 500]),
+            makeDetail(id: "c", name: "Vista/Sunshine", nines: [300, 500])
+        ])
+
+        XCTAssertEqual(course.name, "Test Club")
+        XCTAssertEqual(course.subCourses.map(\.name), ["Vista", "Canyon", "Sunshine"])
+        XCTAssertEqual(course.subCourses.map(\.holes.count), [9, 9, 9])
+        XCTAssertEqual(course.subCourses.map { $0.holes[0].yardages["Blue"] }, [300, 400, 500])
+    }
+
+    func testSingleEighteenHoleResultIsFrontAndBack() throws {
+        let course = try GolfCourseAPIClient.convertToCourse(details: [
+            makeDetail(id: "a", name: "Broadlands Golf Course", nines: [300, 400])
+        ])
+
+        XCTAssertEqual(course.name, "Broadlands Golf Course")
+        XCTAssertEqual(course.subCourses.map(\.name), ["Front", "Back"])
+        XCTAssertEqual(course.subCourses.map(\.holes.count), [9, 9])
+    }
+
+    func testSingleNineHoleResultIsOneSubCourse() throws {
+        let course = try GolfCourseAPIClient.convertToCourse(details: [
+            makeDetail(id: "a", name: "Short Course", nines: [300])
+        ])
+
+        XCTAssertEqual(course.name, "Short Course")
+        XCTAssertEqual(course.subCourses.map(\.name), ["Front"])
+        XCTAssertEqual(course.subCourses[0].holes.count, 9)
+    }
+
+    func testCombinedEighteenHoleResultsAreNamedAfterTheResult() throws {
+        let course = try GolfCourseAPIClient.convertToCourse(details: [
+            makeDetail(id: "a", name: "North", nines: [300, 400]),
+            makeDetail(id: "b", name: "South", nines: [500, 600])
+        ])
+
+        XCTAssertEqual(course.subCourses.map(\.name), ["North Front", "North Back", "South Front", "South Back"])
+    }
+
+    func testDifferentNinesWithTheSameNameAreBothKept() throws {
+        let course = try GolfCourseAPIClient.convertToCourse(details: [
+            makeDetail(id: "a", name: "Nine", nines: [300]),
+            makeDetail(id: "b", name: "Nine", nines: [400])
+        ])
+
+        XCTAssertEqual(course.subCourses.map(\.name), ["Nine", "Nine 2"])
+    }
+
+    func testSameResultSelectedTwiceIsNotRepeated() throws {
+        let course = try GolfCourseAPIClient.convertToCourse(details: [
+            makeDetail(id: "a", name: "Eldorado", nines: [300]),
+            makeDetail(id: "b", name: "Eldorado Nine", nines: [300])
+        ])
+
+        XCTAssertEqual(course.subCourses.map(\.name), ["Eldorado"])
+    }
+
     func testConvertToCourseEmptyDetailsThrows() {
         XCTAssertThrowsError(try GolfCourseAPIClient.convertToCourse(details: [])) { error in
             XCTAssertTrue(error is GolfCourseAPIClient.APIError)

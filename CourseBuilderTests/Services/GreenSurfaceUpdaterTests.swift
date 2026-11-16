@@ -70,7 +70,7 @@ struct GreenSurfaceUpdaterTests {
         ])
         let log = GreenFetchLog()
 
-        let update = try await GreenSurfaceUpdater.update(course) { coordinates in
+        let update = try await fetchSurfaces(course) { coordinates in
             await log.record(coordinates)
             return coordinates.map { _ in lidar(1600.25) }
         }
@@ -104,21 +104,21 @@ struct GreenSurfaceUpdaterTests {
             Feature(id: 1, type: .green, polygon: GreenFixtures.rectangle(width: 4, height: 4)),
         ])
 
-        let noSamples = try await GreenSurfaceUpdater.update(course) { $0.map { _ in nil } }
-        let oneMissing = try await GreenSurfaceUpdater.update(course) { coordinates in
+        let noSamples = try await fetchSurfaces(course) { $0.map { _ in nil } }
+        let oneMissing = try await fetchSurfaces(course) { coordinates in
             coordinates.indices.map { $0 == 0 ? nil : lidar(10) }
         }
         // 1/3 arc-second data, about 10 m, as USGS has for Vancouver.
-        let coarse = try await GreenSurfaceUpdater.update(course) { coordinates in
+        let coarse = try await fetchSurfaces(course) { coordinates in
             coordinates.map { _ in USGSElevationClient.Sample(elevation: 60, resolution: 10.3) }
         }
-        let oneCoarse = try await GreenSurfaceUpdater.update(course) { coordinates in
+        let oneCoarse = try await fetchSurfaces(course) { coordinates in
             coordinates.indices.map { $0 == 0 ? USGSElevationClient.Sample(elevation: 10, resolution: 5) : lidar(10) }
         }
-        let unknownResolution = try await GreenSurfaceUpdater.update(course) { coordinates in
+        let unknownResolution = try await fetchSurfaces(course) { coordinates in
             coordinates.map { _ in USGSElevationClient.Sample(elevation: 10, resolution: nil) }
         }
-        let rejected = try await GreenSurfaceUpdater.update(course) { _ in
+        let rejected = try await fetchSurfaces(course) { _ in
             throw USGSElevationClient.ElevationError.requestRejected(message: "Outside coverage.")
         }
 
@@ -134,7 +134,7 @@ struct GreenSurfaceUpdaterTests {
         ])
 
         await #expect(throws: USGSElevationClient.ElevationError.self) {
-            _ = try await GreenSurfaceUpdater.update(course) { _ in
+            _ = try await fetchSurfaces(course) { _ in
                 throw USGSElevationClient.ElevationError.serverError(statusCode: 504)
             }
         }
@@ -198,11 +198,7 @@ struct GreenSurfaceUpdaterTests {
         let directory = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
         try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
         defer { try? FileManager.default.removeItem(at: directory) }
-        let store = CourseStore(
-            directory: directory,
-            elevationWorker: ElevationWorker(fetch: { $0.map { _ in 1 } }),
-            greenSurfaceWorker: GreenSurfaceWorker(fetch: { $0.map { _ in nil } })
-        )
+        let store = CourseStore(directory: directory)
         let course = GreenFixtures.courseWithSurfaces()
         try store.save(course)
         let binding = try #require(store.binding(for: course.id))
@@ -217,8 +213,6 @@ struct GreenSurfaceUpdaterTests {
 
         #expect(binding.wrappedValue.features[0].surface == nil)
         #expect(binding.wrappedValue.features[1].surface != nil)
-        store.greenSurfaceWorker.cancel(course.id)
-        store.elevationWorker.cancel(course.id)
     }
 
     // MARK: - Export warnings
@@ -245,116 +239,279 @@ struct GreenSurfaceUpdaterTests {
         #expect(warnings[0].hasPrefix("Hole 2: no green lidar elevation data, but other holes have it. Fix this before exporting"))
     }
 
+    @Test func exportDoesNotSayToFetchAGreenUSGSHasNoDataFor() {
+        var course = GreenFixtures.courseWithSurfaces()
+        course.features[1].surface = nil
+        var status = ElevationStatus()
+        status.greensWithoutData[course.features[1].id] = GreenSurfaceUpdater.positions(of: course.features[1].polygon)
+
+        let warnings = CourseIntegrity.greenSurfaceWarnings(for: course, elevationStatus: status)
+
+        #expect(warnings == ["Hole 2: USGS has no lidar elevation data for the green, so its heat map will be missing in SpotGolf."])
+    }
+
     @Test func exportDoesNotWarnWhenEveryGreenHasASurface() {
         #expect(CourseIntegrity.greenSurfaceWarnings(for: GreenFixtures.courseWithSurfaces()).isEmpty)
     }
 }
 
 @MainActor
-@Suite("Green surface worker")
-struct GreenSurfaceWorkerTests {
-    @Test func buildsMissingSurfacesInTheBackground() async {
-        let log = GreenFetchLog()
-        let box = GreenCourseBox(GreenFixtures.courseWithoutSurfaces())
-        let worker = makeWorker(box: box) { coordinates in
-            await log.record(coordinates)
-            return coordinates.map { _ in lidar(100) }
-        }
-
-        await change(box, worker)
-
-        #expect(box.course.features.allSatisfy { $0.surface != nil })
-        #expect(await log.requests.count == 2)
-        #expect(worker.statuses[box.course.id] == nil)
+@Suite("Course elevation fetch")
+struct CourseElevationFetchTests {
+    /// Two greens with no surface, and a bunker whose one point has no elevation.
+    private func makeCourse() -> Course {
+        var course = GreenFixtures.courseWithoutSurfaces()
+        course.features.append(Feature(id: 3, type: .bunker, polygon: [Coordinate(lat: 39.5, lon: -105.5)]))
+        return course
     }
 
-    @Test func courseOutsideUnitedStatesAsksOnceAndWarns() async {
-        let log = GreenFetchLog()
-        let box = GreenCourseBox(GreenFixtures.courseWithoutSurfaces())
-        let worker = makeWorker(box: box) { coordinates in
-            await log.record(coordinates)
-            throw USGSElevationClient.ElevationError.requestRejected(message: "Outside coverage.")
-        }
+    @Test func fetchesPointElevationsThenGreenSurfaces() async throws {
+        var course = makeCourse()
+        var status = ElevationStatus()
+        var progress: [CourseElevationFetch.Progress] = []
 
-        await change(box, worker)
-        await change(box, worker)
+        try await CourseElevationFetch.run(
+            course: &course,
+            status: &status,
+            pointFetch: { $0.map { _ in 5 } },
+            greenFetch: { $0.map { _ in lidar(100) } },
+            retryDelay: .zero
+        ) { progress.append($0) }
 
-        #expect(box.course.features.allSatisfy { $0.surface == nil })
-        #expect(await log.requests.count == 1)
-        #expect(worker.statuses[box.course.id] == .noData(greens: 2))
+        #expect(course.features[2].polygon[0].ele == pathElevation(5))
+        #expect(course.features[0].surface != nil)
+        #expect(course.features[1].surface != nil)
+        #expect(status.isEmpty)
+        #expect(progress == [
+            .points(completed: 0, total: 1), .points(completed: 1, total: 1),
+            .greens(completed: 0, total: 2), .greens(completed: 1, total: 2), .greens(completed: 2, total: 2),
+        ])
+        #expect(CourseElevationFetch.remaining(in: course, status: status) == 0)
     }
 
-    @Test func courseWithCoarseDataGetsNoSurfacesAndWarns() async {
+    @Test func missingDataIsRememberedAndIsNotAFailure() async throws {
         let log = GreenFetchLog()
-        let box = GreenCourseBox(GreenFixtures.courseWithoutSurfaces())
-        let worker = makeWorker(box: box) { coordinates in
+        var course = makeCourse()
+        var status = ElevationStatus()
+        let pointFetch: ElevationUpdater.Fetch = { coordinates in
+            await log.record(coordinates)
+            throw USGSElevationClient.ElevationError.requestRejected(message: "Out of extent.")
+        }
+        let greenFetch: GreenSurfaceUpdater.Fetch = { coordinates in
             await log.record(coordinates)
             return coordinates.map { _ in USGSElevationClient.Sample(elevation: 86, resolution: 5) }
         }
 
-        await change(box, worker)
-        await change(box, worker)
+        try await CourseElevationFetch.run(course: &course, status: &status, pointFetch: pointFetch, greenFetch: greenFetch, retryDelay: .zero) { _ in }
 
-        #expect(box.course.features.allSatisfy { $0.surface == nil })
-        // Each green is asked for once. Lidar coverage can end part way across a course.
-        #expect(await log.requests.count == 2)
-        #expect(worker.statuses[box.course.id] == .noData(greens: 2))
+        #expect(course.features[2].polygon[0].ele == nil)
+        #expect(course.features[0].surface == nil)
+        #expect(status.pointsWithoutData.count == 1)
+        #expect(Set(status.greensWithoutData.keys) == [1, 2])
+        #expect(CourseElevationFetch.remaining(in: course, status: status) == 0)
+        #expect(await log.requests.count == 3)
+
+        // Nothing is asked for a second time.
+        try await CourseElevationFetch.run(course: &course, status: &status, pointFetch: pointFetch, greenFetch: greenFetch, retryDelay: .zero) { _ in }
+        #expect(await log.requests.count == 3)
     }
 
-    @Test func greenEditedDuringLookupIsSampledAgain() async {
+    @Test func failedFetchIsTriedThreeTimesThenThrown() async {
         let log = GreenFetchLog()
+        var course = makeCourse()
+        var status = ElevationStatus()
+        var progress: [CourseElevationFetch.Progress] = []
+
+        await #expect(throws: URLError.self) {
+            try await CourseElevationFetch.run(
+                course: &course,
+                status: &status,
+                pointFetch: { coordinates in
+                    await log.record(coordinates)
+                    throw URLError(.notConnectedToInternet)
+                },
+                greenFetch: { $0.map { _ in lidar(100) } },
+                retryDelay: .zero
+            ) { progress.append($0) }
+        }
+
+        #expect(await log.requests.count == 3)
+        #expect(progress.filter { if case .retrying = $0 { true } else { false } } == [
+            .retrying(attempt: 2, maxAttempts: 3), .retrying(attempt: 3, maxAttempts: 3),
+        ])
+        #expect(course.features == makeCourse().features)
+        #expect(status.isEmpty)
+    }
+
+    @Test func retryCarriesOnFromWhereTheFetchStopped() async throws {
+        let log = GreenFetchLog()
+        var course = makeCourse()
+        var status = ElevationStatus()
+        let secondGreen = GreenSurfaceUpdater.grid(for: course.features[1].polygon)!.coordinates.count
+
+        // The second green's fetch fails every time.
+        await #expect(throws: USGSElevationClient.ElevationError.self) {
+            try await CourseElevationFetch.run(
+                course: &course,
+                status: &status,
+                pointFetch: { $0.map { _ in 5 } },
+                greenFetch: { coordinates in
+                    await log.record(coordinates)
+                    guard coordinates.count != secondGreen else {
+                        throw USGSElevationClient.ElevationError.serverError(statusCode: 504)
+                    }
+                    return coordinates.map { _ in lidar(100) }
+                },
+                retryDelay: .zero
+            ) { _ in }
+        }
+
+        // What worked is kept: the point and the first green.
+        #expect(course.features[2].polygon[0].ele == pathElevation(5))
+        #expect(course.features[0].surface != nil)
+        #expect(course.features[1].surface == nil)
+        #expect(await log.requests.count == 4)
+
+        // The user's Retry asks only for the second green.
+        try await CourseElevationFetch.run(
+            course: &course,
+            status: &status,
+            pointFetch: { _ in
+                Issue.record("The points were already fetched")
+                return []
+            },
+            greenFetch: { coordinates in
+                await log.record(coordinates)
+                return coordinates.map { _ in lidar(100) }
+            },
+            retryDelay: .zero
+        ) { _ in }
+
+        #expect(course.features[1].surface != nil)
+        #expect(await log.requests.count == 5)
+        #expect(await log.requests.last?.count == secondGreen)
+    }
+}
+
+@Suite("Elevation fetch messages")
+struct ElevationFetchMessageTests {
+    @Test func courseWithEverythingNeedsNoFetch() {
+        #expect(!CourseElevationFetch.isNeeded(for: GreenFixtures.courseWithSurfaces(), status: ElevationStatus()))
+    }
+
+    @Test func greenWithoutASurfaceNeedsAFetchUnlessUSGSHasNone() {
+        let course = GreenFixtures.courseWithoutSurfaces()
+        #expect(CourseElevationFetch.isNeeded(for: course, status: ElevationStatus()))
+
+        var status = ElevationStatus()
+        for green in course.features {
+            status.greensWithoutData[green.id] = GreenSurfaceUpdater.positions(of: green.polygon)
+        }
+        #expect(!CourseElevationFetch.isNeeded(for: course, status: status))
+    }
+
+    @Test func noMessageWhenUSGSHadEverything() {
+        #expect(CourseElevationFetch.noDataMessage(from: ElevationStatus(), to: ElevationStatus()) == nil)
+    }
+
+    @Test func messageCountsOnlyWhatIsNewlyMissing() {
+        let known = ElevationUpdater.Location(Coordinate(lat: 1, lon: 1))
+        var old = ElevationStatus()
+        old.pointsWithoutData = [known]
+        var new = old
+        new.pointsWithoutData.insert(ElevationUpdater.Location(Coordinate(lat: 2, lon: 2)))
+        new.greensWithoutData[7] = [known]
+
+        #expect(CourseElevationFetch.noDataMessage(from: old, to: new)
+            == "USGS has no elevation for 1 point and no lidar data for 1 green. They are left empty.")
+    }
+}
+
+@Suite("Elevation status")
+struct ElevationStatusTests {
+    private func makeStore() -> ElevationStatusStore {
+        ElevationStatusStore(directory: FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString))
+    }
+
+    @Test func statusIsSavedAndLoaded() throws {
+        let store = makeStore()
+        defer { try? FileManager.default.removeItem(at: store.directory) }
+        let course = GreenFixtures.courseWithoutSurfaces()
+        var status = ElevationStatus()
+        status.pointsWithoutData = [ElevationUpdater.Location(Coordinate(lat: 56.3, lon: -2.8))]
+        status.greensWithoutData[1] = GreenSurfaceUpdater.positions(of: course.features[0].polygon)
+
+        #expect(store.load(courseID: course.id).isEmpty)
+        try store.save(status, courseID: course.id)
+
+        #expect(store.load(courseID: course.id) == status)
+    }
+
+    @Test func emptyStatusRemovesTheFile() throws {
+        let store = makeStore()
+        defer { try? FileManager.default.removeItem(at: store.directory) }
+        let id = UUID()
+        var status = ElevationStatus()
+        status.pointsWithoutData = [ElevationUpdater.Location(Coordinate(lat: 56.3, lon: -2.8))]
+        try store.save(status, courseID: id)
+
+        try store.save(ElevationStatus(), courseID: id)
+
+        #expect(try FileManager.default.contentsOfDirectory(atPath: store.directory.path).isEmpty)
+    }
+
+    @Test func greenIsForgottenOnceItsShapeChanges() {
         var course = GreenFixtures.courseWithoutSurfaces()
-        course.features.removeLast()
-        let box = GreenCourseBox(course)
-        let worker = makeWorker(box: box) { coordinates in
-            if await log.requests.isEmpty {
-                await MainActor.run { box.course.features[0].polygon = GreenFixtures.rectangle(width: 3.5, height: 2.5) }
-            }
-            await log.record(coordinates)
-            return coordinates.map { _ in lidar(100) }
-        }
+        var status = ElevationStatus()
+        status.greensWithoutData[1] = GreenSurfaceUpdater.positions(of: course.features[0].polygon)
+        status.greensWithoutData[2] = GreenSurfaceUpdater.positions(of: course.features[1].polygon)
+        #expect(status.hasNoData(forGreen: course.features[0]))
 
-        await change(box, worker)
+        course.features[0].polygon = GreenFixtures.rectangle(width: 8, height: 8)
+        #expect(!status.hasNoData(forGreen: course.features[0]))
 
-        #expect(await log.requests.count == 2)
-        #expect(box.course.features[0].surface?.columns == 6)
+        status.prune(to: course)
+        #expect(Set(status.greensWithoutData.keys) == [2])
     }
 
-    @Test func failuresAreRetriedThenReported() async {
-        let log = GreenFetchLog()
-        let box = GreenCourseBox(GreenFixtures.courseWithoutSurfaces())
-        let worker = makeWorker(box: box, maxAttempts: 2) { coordinates in
-            await log.record(coordinates)
-            throw USGSElevationClient.ElevationError.serverError(statusCode: 504)
-        }
+    @Test func pointIsForgottenOnceItMovesOrGetsAnElevation() {
+        let kept = Coordinate(lat: 39.5, lon: -105.5)
+        let filled = Coordinate(lat: 39.6, lon: -105.5)
+        var course = GreenFixtures.course(features: [Feature(id: 1, type: .bunker, polygon: [kept, filled])])
+        var status = ElevationStatus()
+        status.pointsWithoutData = [kept, filled, Coordinate(lat: 1, lon: 1)].map(ElevationUpdater.Location.init).reduce(into: []) { $0.insert($1) }
 
-        await change(box, worker)
+        course.features[0].polygon = [kept, Coordinate(lat: 39.6, lon: -105.5, ele: 10)]
+        status.prune(to: course)
 
-        #expect(await log.requests.count == 2)
-        guard case .failed = worker.statuses[box.course.id] else {
-            Issue.record("Expected a failed status")
-            return
-        }
+        #expect(status.pointsWithoutData == [ElevationUpdater.Location(kept)])
     }
 
-    private func change(_ box: GreenCourseBox, _ worker: GreenSurfaceWorker) async {
-        worker.courseDidChange(box.course.id)
-        await worker.task(for: box.course.id)?.value
-    }
+    @Test func exportDoesNotWarnAboutPointsKnownToHaveNoData() {
+        let point = Coordinate(lat: 39.5, lon: -105.5)
+        let course = GreenFixtures.course(features: [Feature(id: 1, type: .bunker, polygon: [point])])
+        var status = ElevationStatus()
+        #expect(CourseIntegrity.validateCourse(course).contains { $0.contains("missing elevations") })
 
-    private func makeWorker(
-        box: GreenCourseBox,
-        maxAttempts: Int = 3,
-        fetch: @escaping GreenSurfaceUpdater.Fetch
-    ) -> GreenSurfaceWorker {
-        let worker = GreenSurfaceWorker(fetch: fetch, debounce: .zero, retryDelay: .zero, maxAttempts: maxAttempts)
-        worker.read = { _ in box.course }
-        worker.modify = { _, change in change(&box.course) }
-        return worker
+        status.pointsWithoutData = [ElevationUpdater.Location(point)]
+
+        #expect(!CourseIntegrity.validateCourse(course, elevationStatus: status).contains { $0.contains("missing elevations") })
     }
 }
 
 /// A sample from 1 m lidar data.
+/// Builds the missing surfaces of a course with a stubbed fetch.
+@MainActor
+private func fetchSurfaces(
+    _ course: Course,
+    fetch: @escaping GreenSurfaceUpdater.Fetch
+) async throws -> (course: Course, greensWithoutData: Int) {
+    var course = course
+    var status = ElevationStatus()
+    try await GreenSurfaceUpdater.fetchMissingSurfaces(in: &course, status: &status, fetch: fetch)
+    return (course, status.greensWithoutData.count)
+}
+
 private func lidar(_ elevation: Double) -> USGSElevationClient.Sample {
     USGSElevationClient.Sample(elevation: elevation, resolution: 1)
 }
@@ -415,11 +572,6 @@ private enum GreenFixtures {
         }
         return course
     }
-}
-
-private final class GreenCourseBox {
-    var course: Course
-    init(_ course: Course) { self.course = course }
 }
 
 private actor GreenFetchLog {

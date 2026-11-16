@@ -44,7 +44,9 @@ struct CourseIntegrity {
         }
     }
 
-    static func validateCourse(_ course: Course) -> [String] {
+    /// - Parameter elevationStatus: What USGS is known not to have for the course. Points and
+    ///   greens in it are not reported as missing.
+    static func validateCourse(_ course: Course, elevationStatus: ElevationStatus = ElevationStatus()) -> [String] {
         var warnings: [String] = []
         var holeOffset = 0
 
@@ -107,27 +109,34 @@ struct CourseIntegrity {
             warnings.append("\(unassignedFeatures.count) unassigned feature(s): \(ids)")
         }
 
-        let missingElevations = ElevationUpdater.missingCoordinates(in: course).count
+        let missingElevations = ElevationUpdater.missingCoordinates(in: course, status: elevationStatus).count
         if missingElevations > 0 {
             warnings.append("\(missingElevations) point(s) are missing elevations. Cleanup looks them up.")
         }
 
-        warnings.append(contentsOf: greenSurfaceWarnings(for: course))
+        warnings.append(contentsOf: greenSurfaceWarnings(for: course, elevationStatus: elevationStatus))
 
         return warnings
     }
 
     /// Warns when greens have no elevation surface, which SpotGolf needs to draw green heat maps.
-    static func greenSurfaceWarnings(for course: Course) -> [String] {
+    ///
+    /// A hole whose greens USGS is known to have no lidar data for cannot be fixed, so it gets
+    /// its own warning. Any other hole with no surface can be fixed by fetching it.
+    static func greenSurfaceWarnings(for course: Course, elevationStatus: ElevationStatus = ElevationStatus()) -> [String] {
         var holesWithSurface = 0
         var holesWithout: [Int] = []
+        var holesWithoutData: [Int] = []
         var holeOffset = 0
         for subCourse in course.subCourses {
             for hole in subCourse.holes {
                 let greens = course.features(for: hole).filter { $0.type == .green }
                 guard !greens.isEmpty else { continue }
-                if greens.allSatisfy({ $0.surface != nil }) {
+                let missing = greens.filter { $0.surface == nil }
+                if missing.isEmpty {
                     holesWithSurface += 1
+                } else if missing.allSatisfy({ elevationStatus.hasNoData(forGreen: $0) }) {
+                    holesWithoutData.append(holeOffset + hole.number)
                 } else {
                     holesWithout.append(holeOffset + hole.number)
                 }
@@ -135,13 +144,21 @@ struct CourseIntegrity {
             holeOffset += subCourse.holes.count
         }
 
-        guard !holesWithout.isEmpty else { return [] }
+        guard !holesWithout.isEmpty || !holesWithoutData.isEmpty else { return [] }
         guard holesWithSurface > 0 else {
             return ["No green has lidar elevation data, so green heat maps will be missing in SpotGolf. USGS has 1 m lidar data for most of the United States only."]
         }
-        let label = holesWithout.count == 1 ? "Hole" : "Holes"
-        let numbers = holesWithout.map(String.init).joined(separator: ", ")
-        return ["\(label) \(numbers): no green lidar elevation data, but other holes have it. Fix this before exporting: open the Map Editor and wait for the green elevation lookup to finish."]
+        func holes(_ numbers: [Int]) -> String {
+            "\(numbers.count == 1 ? "Hole" : "Holes") \(numbers.map(String.init).joined(separator: ", "))"
+        }
+        var warnings: [String] = []
+        if !holesWithout.isEmpty {
+            warnings.append("\(holes(holesWithout)): no green lidar elevation data, but other holes have it. Fix this before exporting: run Cleanup to fetch it.")
+        }
+        if !holesWithoutData.isEmpty {
+            warnings.append("\(holes(holesWithoutData)): USGS has no lidar elevation data for the green, so its heat map will be missing in SpotGolf.")
+        }
+        return warnings
     }
 
     @discardableResult

@@ -8,9 +8,17 @@ actor OverpassAPIClient {
     enum OverpassError: LocalizedError {
         case serverError(statusCode: Int)
         case rateLimited
+        /// The picked server needs an API key and none is set.
+        case missingAPIKey(server: String)
+        /// The server turned the API key down.
+        case apiKeyRefused(server: String)
 
         var errorDescription: String? {
             switch self {
+            case .missingAPIKey(let server):
+                "\(server) needs an API key. Add it in Settings, or pick another Overpass server there."
+            case .apiKeyRefused(let server):
+                "\(server) did not accept the API key. Check it in Settings."
             case .serverError(let code):
                 "Overpass API returned HTTP \(code). Try again in a moment."
             case .rateLimited:
@@ -78,8 +86,11 @@ actor OverpassAPIClient {
 
     struct ParsedResult {
         let features: [ParsedFeature]
-        let centerlines: [ParsedCenterline]
+        var centerlines: [ParsedCenterline]
         let courseBoundary: [Coordinate]?
+        /// The `leisure=golf_course` element that is a usable course outline, in short form
+        /// such as `w123456789`. Nil when the result has none.
+        var courseOSMID: String? = nil
         /// The `leisure=golf_course` elements that are not a usable course outline. Empty when
         /// the result has a usable outline.
         var misplacedCourseElements: [MisplacedCourseElement] = []
@@ -100,6 +111,7 @@ actor OverpassAPIClient {
                 features: features + other.features.filter { $0.osmID.map { !present.contains($0) } ?? true },
                 centerlines: centerlines + other.centerlines.filter { $0.osmID.map { !present.contains($0) } ?? true },
                 courseBoundary: courseBoundary,
+                courseOSMID: courseOSMID,
                 misplacedCourseElements: misplacedCourseElements
             )
         }
@@ -165,9 +177,33 @@ actor OverpassAPIClient {
     }
 
     private let session: URLSession
+    private let server: OverpassServer
+    private let apiKey: String
 
-    init(session: URLSession = .shared) {
+    /// - Parameters:
+    ///   - server: The server to ask. Defaults to the one picked in Settings.
+    ///   - apiKey: The server's API key. Defaults to the one saved in Settings for the server.
+    init(session: URLSession = .shared, server: OverpassServer? = nil, apiKey: String? = nil) {
+        let settings = OverpassSettings()
+        let server = server ?? settings.server
         self.session = session
+        self.server = server
+        self.apiKey = apiKey ?? settings.apiKey(for: server)
+    }
+
+    /// The request that sends a query to a server. Servers ask each app to name itself.
+    static func request(for query: String, server: OverpassServer, apiKey: String) throws -> URLRequest {
+        guard let url = server.interpreterURL(apiKey: apiKey) else {
+            throw OverpassError.missingAPIKey(server: server.name)
+        }
+        var request = URLRequest(url: url)
+        request.httpMethod = "POST"
+        request.httpBody = query.data(using: .utf8)
+        request.setValue(TileLoader.userAgent, forHTTPHeaderField: "User-Agent")
+        if let authorization = server.authorizationHeader(apiKey: apiKey) {
+            request.setValue(authorization, forHTTPHeaderField: "Authorization")
+        }
+        return request
     }
 
     static func buildQuery(bbox: BoundingBox) -> String {
@@ -223,10 +259,24 @@ actor OverpassAPIClient {
         return try await run(Self.buildQuery(bbox: bbox))
     }
 
-    /// The misplaced `leisure=golf_course` elements in the area. Empty when the area has a usable
-    /// course outline.
-    func fetchCourseElements(bbox: BoundingBox) async throws -> [MisplacedCourseElement] {
-        try await run(Self.buildCourseElementQuery(bbox: bbox)).misplacedCourseElements
+    /// The `leisure=golf_course` elements in an area.
+    struct CourseElements {
+        /// The usable course outline, in short form such as `w123456789`, and its points. Nil
+        /// when the area has none.
+        var outlineOSMID: String? = nil
+        var outline: [Coordinate]? = nil
+        /// The elements that are not a usable course outline. Empty when the area has one.
+        var misplaced: [MisplacedCourseElement] = []
+    }
+
+    /// The `leisure=golf_course` elements in the area.
+    func fetchCourseElements(bbox: BoundingBox) async throws -> CourseElements {
+        let result = try await run(Self.buildCourseElementQuery(bbox: bbox))
+        return CourseElements(
+            outlineOSMID: result.courseOSMID,
+            outline: result.courseOSMID == nil ? nil : result.courseBoundary,
+            misplaced: result.misplacedCourseElements
+        )
     }
 
     /// The ways with the given IDs, wherever they are.
@@ -238,9 +288,7 @@ actor OverpassAPIClient {
     private func run(_ query: String) async throws -> ParsedResult {
         let maxRetries = 3
         for attempt in 1...maxRetries {
-            var request = URLRequest(url: URL(string: "https://overpass-api.de/api/interpreter")!)
-            request.httpMethod = "POST"
-            request.httpBody = query.data(using: .utf8)
+            let request = try Self.request(for: query, server: server, apiKey: apiKey)
 
             let (data, response) = try await session.data(for: request)
             let statusCode = (response as? HTTPURLResponse)?.statusCode ?? 0
@@ -253,6 +301,10 @@ actor OverpassAPIClient {
                     continue
                 }
                 throw OverpassError.rateLimited
+            }
+
+            if server.needsAPIKey, statusCode == 401 || statusCode == 403 {
+                throw OverpassError.apiKeyRefused(server: server.name)
             }
 
             if statusCode >= 500 {
@@ -316,6 +368,7 @@ actor OverpassAPIClient {
         var centerlines: [ParsedCenterline] = []
         var courseBoundary: [Coordinate]?
         var hasUsableBoundary = false
+        var courseOSMID: String?
         var misplaced: [MisplacedCourseElement] = []
 
         for element in elements {
@@ -364,6 +417,7 @@ actor OverpassAPIClient {
 
             if isCourseBoundary(tags: tags) {
                 courseBoundary = coords
+                courseOSMID = boundaryBoundingBox(for: coords) != nil ? osmID : nil
             }
         }
 
@@ -371,6 +425,7 @@ actor OverpassAPIClient {
             features: features,
             centerlines: centerlines,
             courseBoundary: courseBoundary,
+            courseOSMID: courseOSMID,
             misplacedCourseElements: hasUsableBoundary ? [] : misplaced
         )
     }

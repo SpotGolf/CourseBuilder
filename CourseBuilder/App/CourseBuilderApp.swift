@@ -14,17 +14,9 @@ struct CourseBuilderApp: App {
             ContentView()
                 .environmentObject(store)
         }
+        .defaultSize(width: 1400, height: 900)
         .commands {
             CourseCommands()
-        }
-
-        WindowGroup("Map Editor", id: "map-editor", for: UUID.self) { $courseID in
-            if let courseID, let course = store.binding(for: courseID) {
-                MapEditorView(course: course, elevationWorker: store.elevationWorker, greenSurfaceWorker: store.greenSurfaceWorker)
-            }
-        }
-        .defaultSize(width: 1200, height: 800)
-        .commands {
             MapCommands()
         }
 

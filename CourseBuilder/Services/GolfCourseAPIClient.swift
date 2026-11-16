@@ -53,6 +53,13 @@ actor GolfCourseAPIClient {
             case location
             case holes
         }
+
+        /// Whether the result says where the course is. Without that, the course cannot be
+        /// looked for in OpenStreetMap or shown on the map.
+        var hasCoordinate: Bool {
+            guard let latitude = location.latitude, let longitude = location.longitude else { return false }
+            return latitude != 0 || longitude != 0
+        }
     }
 
     struct APILocation: Codable, Hashable {
@@ -204,7 +211,16 @@ actor GolfCourseAPIClient {
         return try convertToCourse(details: [detail])
     }
 
-    /// Convert multiple CourseDetail results into a single Course with merged sub-courses.
+    /// Combines one or more results into a single course.
+    ///
+    /// Each result gives one sub-course, or two when it has an even number of holes, such as a
+    /// front and back nine. A result named with slashes, such as "Vista/Canyon", gives one
+    /// sub-course per part. A sub-course that plays the same holes as one already taken from an
+    /// earlier result is dropped, so "Vista/Canyon" and "Canyon/Sunshine" give Vista, Canyon, and
+    /// Sunshine.
+    ///
+    /// A course made from one result takes that result's course name. A course made from several
+    /// takes the club name.
     static func convertToCourse(details: [CourseDetail]) throws -> Course {
         guard let first = details.first else {
             throw APIError.emptyDetails
@@ -223,15 +239,12 @@ actor GolfCourseAPIClient {
 
         var allTeeDefinitions: [String: TeeDefinition] = [:]
         var allSubCourses: [SubCourse] = []
-        var seenSubCourseNames: Set<String> = []
         var golfCourseAPIIds: [String] = []
 
         for detail in details {
             if let detailId = detail.id {
                 golfCourseAPIIds.append(detailId)
             }
-
-            let subCourseNames = extractSubCourseNames(from: detail.courseName)
 
             // Collect all hole data grouped by hole number
             var holeDataMap: [Int: (par: Int, maleHandicap: Int, femaleHandicap: Int, yardages: [String: Int])] = [:]
@@ -327,12 +340,12 @@ actor GolfCourseAPIClient {
                 )
             }
 
+            let subCourseNames = subCourseNames(for: detail, holeCount: allHoles.count, isOnlyResult: details.count == 1)
             let holeGroups = Hole.splitIntoSubCourses(allHoles, names: subCourseNames)
 
             // Build sub-courses with tee information
             for (groupIndex, group) in holeGroups.enumerated() {
-                guard !seenSubCourseNames.contains(group.name) else { continue }
-                seenSubCourseNames.insert(group.name)
+                guard !allSubCourses.contains(where: { playsSameHoles($0, name: group.name, holes: group.holes) }) else { continue }
 
                 let renumberedHoles = group.holes
 
@@ -389,7 +402,7 @@ actor GolfCourseAPIClient {
                 }
 
                 allSubCourses.append(SubCourse(
-                    name: group.name,
+                    name: unusedName(group.name, in: allSubCourses),
                     holes: renumberedHoles,
                     tees: subCourseTees
                 ))
@@ -397,7 +410,7 @@ actor GolfCourseAPIClient {
         }
 
         return Course(
-            name: first.courseName,
+            name: details.count > 1 && !first.clubName.isEmpty ? first.clubName : first.courseName,
             clubName: first.clubName,
             golfCourseAPIIds: golfCourseAPIIds,
             location: location,
@@ -411,14 +424,57 @@ actor GolfCourseAPIClient {
         )
     }
 
-    /// Extract sub-course names from a course name (e.g., "Vista/Canyon" -> ["Vista", "Canyon"]).
-    /// Defaults to ["Front", "Back"] if no slash separator is found.
-    private static func extractSubCourseNames(from courseName: String) -> [String] {
-        let parts = courseName.split(separator: "/").map { $0.trimmingCharacters(in: .whitespaces) }
-        if parts.count >= 2 {
+    /// The names of the sub-courses a result gives, one per sub-course.
+    ///
+    /// - A result named with slashes whose parts divide its holes evenly gives one sub-course per
+    ///   part: "Vista/Canyon" gives Vista and Canyon.
+    /// - Any other result gives two sub-courses when it has an even number of holes, and one when
+    ///   it does not, such as a 9-hole course.
+    /// - When it is the only result, they are named "Front" and "Back". When several results are
+    ///   combined, they are named after the result so they can be told apart.
+    private static func subCourseNames(for detail: CourseDetail, holeCount: Int, isOnlyResult: Bool) -> [String] {
+        let parts = detail.courseName.split(separator: "/")
+            .map { $0.trimmingCharacters(in: .whitespaces) }
+            .filter { !$0.isEmpty }
+        if parts.count >= 2, holeCount > 1, holeCount % parts.count == 0 {
             return parts
         }
-        return ["Front", "Back"]
+
+        let isSplitInTwo = holeCount > 1 && holeCount % 2 == 0
+        if isOnlyResult {
+            return isSplitInTwo ? ["Front", "Back"] : ["Front"]
+        }
+        let resultName = detail.courseName.isEmpty ? detail.clubName : detail.courseName
+        return isSplitInTwo ? ["\(resultName) Front", "\(resultName) Back"] : [resultName]
+    }
+
+    /// Whether a sub-course plays the same holes as `holes`: the same pars, and the same yardage
+    /// on every tee both have. Handicaps are not compared, since a nine has different handicaps
+    /// as a front nine than as a back nine. When the two share no tee, they must also share a name.
+    private static func playsSameHoles(_ subCourse: SubCourse, name: String, holes: [Hole]) -> Bool {
+        guard subCourse.holes.map(\.par) == holes.map(\.par) else { return false }
+        var sharesTee = false
+        for (kept, hole) in zip(subCourse.holes, holes) {
+            for (tee, yardage) in hole.yardages {
+                guard let keptYardage = kept.yardages[tee] else { continue }
+                guard keptYardage == yardage else { return false }
+                sharesTee = true
+            }
+        }
+        return sharesTee || subCourse.name.caseInsensitiveCompare(name) == .orderedSame
+    }
+
+    /// `name`, or `name` with the lowest number added that makes it differ from every sub-course's name.
+    private static func unusedName(_ name: String, in subCourses: [SubCourse]) -> String {
+        func isUsed(_ candidate: String) -> Bool {
+            subCourses.contains { $0.name.caseInsensitiveCompare(candidate) == .orderedSame }
+        }
+        guard isUsed(name) else { return name }
+        var number = 2
+        while isUsed("\(name) \(number)") {
+            number += 1
+        }
+        return "\(name) \(number)"
     }
 
 }

@@ -12,10 +12,51 @@ struct SettingsView: View {
             Section("OpenStreetMap") {
                 OSMAccountRow()
             }
+
+            Section("Overpass") {
+                OverpassServerRows()
+            }
         }
         .formStyle(.grouped)
-        .frame(width: 400)
+        .frame(width: 460)
         .navigationTitle("Settings")
+    }
+}
+
+/// Picks the Overpass server that course data is read from, with its API key if it needs one.
+private struct OverpassServerRows: View {
+    @AppStorage(OverpassSettings.serverKey) private var serverID = OverpassServer.main.id
+
+    var body: some View {
+        let server = OverpassServer.server(id: serverID)
+        Picker("Server", selection: $serverID) {
+            ForEach(OverpassServer.all) { server in
+                Text(server.name).tag(server.id)
+            }
+        }
+        if server.needsAPIKey {
+            OverpassAPIKeyField(server: server)
+                // Each server has its own key.
+                .id(server.id)
+        }
+        Text("CourseBuilder reads a course's OpenStreetMap data from this server. \(server.note)")
+            .font(.caption)
+            .foregroundStyle(.secondary)
+            .fixedSize(horizontal: false, vertical: true)
+    }
+}
+
+/// The API key for one Overpass server.
+private struct OverpassAPIKeyField: View {
+    @AppStorage private var apiKey: String
+
+    init(server: OverpassServer) {
+        _apiKey = AppStorage(wrappedValue: "", OverpassSettings.apiKeyKey(for: server))
+    }
+
+    var body: some View {
+        SecureField("API Key", text: $apiKey)
+            .textFieldStyle(.roundedBorder)
     }
 }
 

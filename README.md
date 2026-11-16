@@ -14,11 +14,11 @@ CourseBuilder produces JSON files containing tee, green, and hazard coordinates 
 - **Scorecard Import** — Pull scorecard data from GolfCourseAPI.com, web scraping, or image OCR
 - **Update Course Info** — Reload names, tees, ratings, slopes, par, handicaps, and yardages from GolfCourseAPI.com while keeping map data
 - **Combo Tees** — Build combo tees from 2 tees, guessed from the tee name and matching yardages
-- **OpenStreetMap Import** — Import OSM polygons and centerlines around the course, and remove hole groups that are not part of it
+- **OpenStreetMap Import** — When a course is added, import its OSM polygons and centerlines, assign the holes to sub-courses, and remove hole groups that are not part of it
 - **Map Editor** — Draw and edit tee, green, fairway, bunker, and water polygons and hole centerlines on Esri World Imagery or USDA NAIP imagery
 - **Auto Polygon Tool** — Trace a feature from a click on the imagery
 - **Fit to Imagery** — Replace a polygon's outline with one traced from the imagery
-- **Elevations** — Fill in point elevations from USGS in the background, with sea level for courses outside the US
+- **Elevations** — Fetch point elevations and green surfaces from USGS when a course is added or a shape changes, and leave them empty where USGS has no data
 - **Publish to OpenStreetMap** — Send new, changed, and deleted features back to OSM, including Cut Out Green and Fix Course Outline repairs
 - **JSON Export** — Check the course for problems, then save it as JSON in the CourseData folder layout
 
@@ -49,9 +49,9 @@ Or open `CourseBuilder.xcodeproj` in Xcode after running `xcodegen generate`. Ru
 
 1. Build and run from Xcode, or download a pre-built release (see below)
 2. Open Settings (Cmd+,), enter your GolfCourseAPI.com API key, and sign in to OpenStreetMap if you plan to publish
-3. Create a new course by searching for a golf course or entering details manually
+3. Create a new course by searching for a golf course or entering details manually. Its OpenStreetMap data and elevations are fetched before it is added
 4. Use the scorecard view to import hole data
-5. Open the map editor to import OSM data and draw or fix features and centerlines for each hole
+5. Switch to the Map Editor tab to draw or fix features and centerlines for each hole
 6. Publish your map changes to OpenStreetMap (optional)
 7. Export the finished course as JSON
 

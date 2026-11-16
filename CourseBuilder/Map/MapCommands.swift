@@ -1,6 +1,6 @@
 import SwiftUI
 
-/// Actions for the map editor window in front. An action is nil when its menu item is disabled.
+/// Actions for the map editor of the window in front. An action is nil when its menu item is disabled.
 struct MapActions {
     var camera: MapCamera
     /// The tool in use, for the check mark in the menu.
@@ -13,12 +13,12 @@ struct MapActions {
 }
 
 extension FocusedValues {
-    /// The map editor window in front. Nil while one of its sheets is open, so the
-    /// single-key shortcuts do not take typing from the sheet.
+    /// The map editor of the window in front. Nil while the Map Editor tab is not showing or
+    /// one of its sheets is open, so the single-key shortcuts do not take typing from elsewhere.
     @Entry var mapActions: MapActions?
 }
 
-/// The Map menu, for the map editor window in front.
+/// The Map menu, for the map editor of the window in front.
 struct MapCommands: Commands {
     @FocusedValue(\.mapActions) private var actions
 

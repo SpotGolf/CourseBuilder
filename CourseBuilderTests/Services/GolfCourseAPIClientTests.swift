@@ -154,20 +154,19 @@ final class GolfCourseAPIClientTests: XCTestCase {
         XCTAssertEqual(course.subCourses[1].holes[0].number, 1)
         XCTAssertEqual(course.subCourses[1].holes[0].par, 5)
 
-        // Front sub-course tee ratings from front_course_rating
+        // Each sub-course gets half of course_rating, not rounded, and the whole slope_rating
         let frontBlack = course.subCourses[0].tees["Black"]
-        XCTAssertEqual(frontBlack?.male?.rating, 37.6)
-        XCTAssertEqual(frontBlack?.male?.slope, 134)
+        XCTAssertEqual(frontBlack?.male?.rating, 36.75)
+        XCTAssertEqual(frontBlack?.male?.slope, 137)
 
-        // Back sub-course tee ratings from back_course_rating
         let backBlack = course.subCourses[1].tees["Black"]
-        XCTAssertEqual(backBlack?.male?.rating, 35.9)
-        XCTAssertEqual(backBlack?.male?.slope, 140)
+        XCTAssertEqual(backBlack?.male?.rating, 36.75)
+        XCTAssertEqual(backBlack?.male?.slope, 137)
 
         // Female tee ratings
         let frontRed = course.subCourses[0].tees["Red"]
-        XCTAssertEqual(frontRed?.female?.rating, 34.2)
-        XCTAssertEqual(frontRed?.female?.slope, 118)
+        XCTAssertEqual(frontRed?.female?.rating, 34.55)
+        XCTAssertEqual(frontRed?.female?.slope, 121)
     }
 
     func testLiveSearchAPI() async throws {
@@ -356,35 +355,160 @@ final class GolfCourseAPIClientTests: XCTestCase {
     /// The pars of a nine. Yardages are `firstYardage`, `firstYardage + 1`, and so on.
     private static let ninePars = [4, 4, 3, 5, 4, 4, 3, 5, 4]
 
-    /// A result with one "Blue" tee. Each nine is given by its first yardage, and its holes get
-    /// handicaps starting at `firstHandicap` and going up by two, as on a front or back nine.
-    private func makeDetail(id: String, name: String, club: String = "Test Club", nines: [Int]) -> GolfCourseAPIClient.CourseDetail {
-        var holes: [GolfCourseAPIClient.APIHole] = []
-        for (nineIndex, firstYardage) in nines.enumerated() {
-            for (holeIndex, par) in Self.ninePars.enumerated() {
-                holes.append(GolfCourseAPIClient.APIHole(par: par, yardage: firstYardage + holeIndex, handicap: holeIndex * 2 + 1 + nineIndex))
+    /// A result whose tees all have the same holes, rating, and slope. Each nine is given by its
+    /// first yardage. Its holes get male handicaps that go up by two, as on a front or back nine,
+    /// and female handicaps that go down by two.
+    private func makeDetail(
+        id: String,
+        name: String,
+        club: String = "Test Club",
+        nines: [Int],
+        rating: Double? = 72.0,
+        slope: Int? = 130,
+        tees: [String] = ["Blue"],
+        femaleTees: [String] = []
+    ) -> GolfCourseAPIClient.CourseDetail {
+        func teeSets(_ names: [String], handicap: (Int) -> Int) -> [GolfCourseAPIClient.TeeSet] {
+            var holes: [GolfCourseAPIClient.APIHole] = []
+            for (nineIndex, firstYardage) in nines.enumerated() {
+                for (holeIndex, par) in Self.ninePars.enumerated() {
+                    holes.append(GolfCourseAPIClient.APIHole(par: par, yardage: firstYardage + holeIndex, handicap: handicap(holeIndex) * 2 + 1 + nineIndex))
+                }
+            }
+            return names.map { name in
+                GolfCourseAPIClient.TeeSet(
+                    teeName: name,
+                    courseRating: rating,
+                    slopeRating: slope,
+                    totalYards: holes.map(\.yardage).reduce(0, +),
+                    parTotal: holes.map(\.par).reduce(0, +),
+                    holes: holes
+                )
             }
         }
-        let tee = GolfCourseAPIClient.TeeSet(
-            teeName: "Blue",
-            courseRating: 72.0,
-            slopeRating: 130,
-            totalYards: holes.map(\.yardage).reduce(0, +),
-            parTotal: holes.map(\.par).reduce(0, +),
-            frontCourseRating: 36.0,
-            frontSlopeRating: 128,
-            backCourseRating: 36.0,
-            backSlopeRating: 132,
-            holes: holes
-        )
         return GolfCourseAPIClient.CourseDetail(
             id: id,
             courseName: name,
             clubName: club,
             location: GolfCourseAPIClient.APILocation(address: "", city: "Denver", state: "CO", country: "US", zipCode: "", latitude: 39.7, longitude: -105.0),
-            tees: GolfCourseAPIClient.TeeSets(male: [tee], female: [])
+            tees: GolfCourseAPIClient.TeeSets(male: teeSets(tees) { $0 }, female: teeSets(femaleTees) { 8 - $0 })
         )
     }
+
+    // MARK: - Rating, slope, and handicaps
+
+    func testEighteenHoleResultSplitsRatingAndKeepsSlopeAndHandicaps() throws {
+        let course = try GolfCourseAPIClient.convertToCourse(details: [
+            makeDetail(id: "a", name: "Broadlands Golf Course", nines: [300, 400], rating: 73.5, slope: 137, femaleTees: ["Red"])
+        ])
+
+        for subCourse in course.subCourses {
+            XCTAssertEqual(subCourse.tees["Blue"]?.male?.rating, 36.75)
+            XCTAssertEqual(subCourse.tees["Blue"]?.male?.slope, 137)
+            XCTAssertNil(subCourse.tees["Blue"]?.female)
+            XCTAssertEqual(subCourse.tees["Red"]?.female?.rating, 36.75)
+            XCTAssertEqual(subCourse.tees["Red"]?.female?.slope, 137)
+        }
+        XCTAssertEqual(course.teeInformation(subCourseIndices: [0, 1], tee: "Blue", gender: .male)?.rating, 73.5)
+        XCTAssertEqual(course.teeInformation(subCourseIndices: [0, 1], tee: "Blue", gender: .male)?.slope, 137)
+
+        // Handicaps are stored as the scorecard prints them.
+        XCTAssertEqual(course.subCourses[0].holes.map(\.maleHandicap), [1, 3, 5, 7, 9, 11, 13, 15, 17])
+        XCTAssertEqual(course.subCourses[1].holes.map(\.maleHandicap), [2, 4, 6, 8, 10, 12, 14, 16, 18])
+        XCTAssertEqual(course.subCourses[0].holes.map(\.femaleHandicap), [17, 15, 13, 11, 9, 7, 5, 3, 1])
+        XCTAssertEqual(course.subCourses[1].holes.map(\.femaleHandicap), [18, 16, 14, 12, 10, 8, 6, 4, 2])
+    }
+
+    func testNineHoleResultKeepsItsRating() throws {
+        let course = try GolfCourseAPIClient.convertToCourse(details: [
+            makeDetail(id: "a", name: "Short Course", nines: [300], rating: 35.4, slope: 121)
+        ])
+
+        XCTAssertEqual(course.subCourses[0].tees["Blue"]?.male?.rating, 35.4)
+        XCTAssertEqual(course.subCourses[0].tees["Blue"]?.male?.slope, 121)
+    }
+
+    /// Vista is 35.0 / 120, Canyon is 36.2 / 130, and Sunshine is 37.1 / 140. A pair's rating is
+    /// the sum of its nines' ratings, and its slope is their average.
+    private func threePairs(sunshineTees: [String] = ["Blue"]) -> [GolfCourseAPIClient.CourseDetail] {
+        [
+            makeDetail(id: "a", name: "Vista/Canyon", nines: [300, 400], rating: 71.2, slope: 125, femaleTees: ["Blue"]),
+            makeDetail(id: "b", name: "Canyon/Sunshine", nines: [400, 500], rating: 73.3, slope: 135, tees: sunshineTees, femaleTees: ["Blue"]),
+            makeDetail(id: "c", name: "Vista/Sunshine", nines: [300, 500], rating: 72.1, slope: 130, femaleTees: ["Blue"])
+        ]
+    }
+
+    func testThreePairsGiveEachNineItsOwnRatingAndSlope() throws {
+        let course = try GolfCourseAPIClient.convertToCourse(details: threePairs())
+
+        XCTAssertEqual(course.subCourses.map(\.name), ["Vista", "Canyon", "Sunshine"])
+        for gender in Gender.allCases {
+            let information = course.subCourses.map { $0.tees["Blue"]?.information(for: gender) }
+            XCTAssertEqual(information[0]?.rating ?? 0, 35.0, accuracy: 1e-9)
+            XCTAssertEqual(information[1]?.rating ?? 0, 36.2, accuracy: 1e-9)
+            XCTAssertEqual(information[2]?.rating ?? 0, 37.1, accuracy: 1e-9)
+            XCTAssertEqual(information.map { $0?.slope }, [120, 130, 140])
+            XCTAssertEqual(information.map { $0?.parTotal }, [36, 36, 36])
+        }
+
+        // A round over two nines gives back the pair's own values.
+        let round = course.teeInformation(subCourseIndices: [1, 2], tee: "Blue", gender: .male)
+        XCTAssertEqual(round?.rating, 73.3)
+        XCTAssertEqual(round?.slope, 135)
+    }
+
+    func testThreePairsDoNotDependOnTheOrderOfTheResults() throws {
+        let details = threePairs()
+        let course = try GolfCourseAPIClient.convertToCourse(details: [details[2], details[1], details[0]])
+
+        XCTAssertEqual(course.subCourses.map(\.name), ["Vista", "Sunshine", "Canyon"])
+        XCTAssertEqual(course.subCourses.map { $0.tees["Blue"]?.male?.slope }, [120, 140, 130])
+        XCTAssertEqual(course.subCourses[1].tees["Blue"]?.male?.rating ?? 0, 37.1, accuracy: 1e-9)
+    }
+
+    func testThreePairsRankEachNinesHandicaps() throws {
+        let course = try GolfCourseAPIClient.convertToCourse(details: threePairs())
+
+        for subCourse in course.subCourses {
+            XCTAssertEqual(subCourse.holes.map(\.maleHandicap), [1, 2, 3, 4, 5, 6, 7, 8, 9], subCourse.name)
+            XCTAssertEqual(subCourse.holes.map(\.femaleHandicap), [9, 8, 7, 6, 5, 4, 3, 2, 1], subCourse.name)
+        }
+    }
+
+    func testThreePairsLeaveMissingHandicapsAlone() throws {
+        let course = try GolfCourseAPIClient.convertToCourse(details: [
+            makeDetail(id: "a", name: "Vista/Canyon", nines: [300, 400]),
+            makeDetail(id: "b", name: "Canyon/Sunshine", nines: [400, 500]),
+            makeDetail(id: "c", name: "Vista/Sunshine", nines: [300, 500])
+        ])
+
+        XCTAssertEqual(course.subCourses[0].holes.map(\.femaleHandicap), Array(repeating: 0, count: 9))
+    }
+
+    func testThreePairsSkipATeeThatIsNotInAllThreeResults() throws {
+        let course = try GolfCourseAPIClient.convertToCourse(details: threePairs(sunshineTees: ["Blue", "Gold"]))
+
+        // Gold is only in Canyon/Sunshine, and Canyon was taken from Vista/Canyon.
+        XCTAssertNil(course.subCourses[1].tees["Gold"])
+        let gold = try XCTUnwrap(course.subCourses[2].tees["Gold"]?.male)
+        XCTAssertNil(gold.rating)
+        XCTAssertNil(gold.slope)
+        XCTAssertEqual(gold.parTotal, 36)
+        XCTAssertEqual(course.subCourses[2].tees["Blue"]?.male?.slope, 140)
+    }
+
+    func testResultsThatAreNotThreePairsKeepTheirOwnValues() throws {
+        let course = try GolfCourseAPIClient.convertToCourse(details: [
+            makeDetail(id: "a", name: "North", nines: [300, 400], rating: 71.0, slope: 125),
+            makeDetail(id: "b", name: "South", nines: [500, 600], rating: 73.0, slope: 135)
+        ])
+
+        XCTAssertEqual(course.subCourses.map { $0.tees["Blue"]?.male?.rating }, [35.5, 35.5, 36.5, 36.5])
+        XCTAssertEqual(course.subCourses.map { $0.tees["Blue"]?.male?.slope }, [125, 125, 135, 135])
+        XCTAssertEqual(course.subCourses[2].holes.map(\.maleHandicap), [1, 3, 5, 7, 9, 11, 13, 15, 17])
+    }
+
+    // MARK: - Combining results (continued)
 
     func testCombinesThreeNineHoleResults() throws {
         let course = try GolfCourseAPIClient.convertToCourse(details: [

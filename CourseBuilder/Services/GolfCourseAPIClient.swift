@@ -113,10 +113,6 @@ actor GolfCourseAPIClient {
         let slopeRating: Int?
         let totalYards: Int?
         let parTotal: Int?
-        let frontCourseRating: Double?
-        let frontSlopeRating: Int?
-        let backCourseRating: Double?
-        let backSlopeRating: Int?
         let holes: [APIHole]
 
         enum CodingKeys: String, CodingKey {
@@ -125,10 +121,6 @@ actor GolfCourseAPIClient {
             case slopeRating = "slope_rating"
             case totalYards = "total_yards"
             case parTotal = "par_total"
-            case frontCourseRating = "front_course_rating"
-            case frontSlopeRating = "front_slope_rating"
-            case backCourseRating = "back_course_rating"
-            case backSlopeRating = "back_slope_rating"
             case holes
         }
     }
@@ -240,6 +232,8 @@ actor GolfCourseAPIClient {
         var allTeeDefinitions: [String: TeeDefinition] = [:]
         var allSubCourses: [SubCourse] = []
         var golfCourseAPIIds: [String] = []
+        // For each result, the index in `allSubCourses` of each of its sub-courses, in order.
+        var subCoursesByResult: [[Int]] = []
 
         for detail in details {
             if let detailId = detail.id {
@@ -249,81 +243,55 @@ actor GolfCourseAPIClient {
             // Collect all hole data grouped by hole number
             var holeDataMap: [Int: (par: Int, maleHandicap: Int, femaleHandicap: Int, yardages: [String: Int])] = [:]
 
-            // Track tee names and their API data for building sub-course tees
-            struct TeeAPIData {
-                let teeName: String
-                let frontCourseRating: Double?
-                let frontSlopeRating: Int?
-                let backCourseRating: Double?
-                let backSlopeRating: Int?
-            }
-            var maleTeeData: [TeeAPIData] = []
-            var femaleTeeData: [TeeAPIData] = []
+            let maleTees = detail.tees.male ?? []
+            let femaleTees = detail.tees.female ?? []
 
             // Process male tees
-            if let maleTees = detail.tees.male {
-                for teeSet in maleTees {
-                    allTeeDefinitions[teeSet.teeName] = TeeDefinition(
-                        name: teeSet.teeName,
-                        color: TeeDefinition.defaultColor(for: teeSet.teeName)
-                    )
-                    maleTeeData.append(TeeAPIData(
-                        teeName: teeSet.teeName,
-                        frontCourseRating: teeSet.frontCourseRating,
-                        frontSlopeRating: teeSet.frontSlopeRating,
-                        backCourseRating: teeSet.backCourseRating,
-                        backSlopeRating: teeSet.backSlopeRating
-                    ))
+            for teeSet in maleTees {
+                allTeeDefinitions[teeSet.teeName] = TeeDefinition(
+                    name: teeSet.teeName,
+                    color: TeeDefinition.defaultColor(for: teeSet.teeName)
+                )
 
-                    for (index, hole) in teeSet.holes.enumerated() {
-                        let holeNumber = index + 1
-                        if var existing = holeDataMap[holeNumber] {
-                            existing.yardages[teeSet.teeName] = hole.yardage
-                            existing.maleHandicap = hole.handicap
-                            holeDataMap[holeNumber] = existing
-                        } else {
-                            holeDataMap[holeNumber] = (
-                                par: hole.par,
-                                maleHandicap: hole.handicap,
-                                femaleHandicap: 0,
-                                yardages: [teeSet.teeName: hole.yardage]
-                            )
-                        }
+                for (index, hole) in teeSet.holes.enumerated() {
+                    let holeNumber = index + 1
+                    if var existing = holeDataMap[holeNumber] {
+                        existing.yardages[teeSet.teeName] = hole.yardage
+                        existing.maleHandicap = hole.handicap
+                        holeDataMap[holeNumber] = existing
+                    } else {
+                        holeDataMap[holeNumber] = (
+                            par: hole.par,
+                            maleHandicap: hole.handicap,
+                            femaleHandicap: 0,
+                            yardages: [teeSet.teeName: hole.yardage]
+                        )
                     }
                 }
             }
 
             // Process female tees
-            if let femaleTees = detail.tees.female {
-                for teeSet in femaleTees {
-                    if allTeeDefinitions[teeSet.teeName] == nil {
-                        allTeeDefinitions[teeSet.teeName] = TeeDefinition(
-                            name: teeSet.teeName,
-                            color: TeeDefinition.defaultColor(for: teeSet.teeName)
-                        )
-                    }
-                    femaleTeeData.append(TeeAPIData(
-                        teeName: teeSet.teeName,
-                        frontCourseRating: teeSet.frontCourseRating,
-                        frontSlopeRating: teeSet.frontSlopeRating,
-                        backCourseRating: teeSet.backCourseRating,
-                        backSlopeRating: teeSet.backSlopeRating
-                    ))
+            for teeSet in femaleTees {
+                if allTeeDefinitions[teeSet.teeName] == nil {
+                    allTeeDefinitions[teeSet.teeName] = TeeDefinition(
+                        name: teeSet.teeName,
+                        color: TeeDefinition.defaultColor(for: teeSet.teeName)
+                    )
+                }
 
-                    for (index, hole) in teeSet.holes.enumerated() {
-                        let holeNumber = index + 1
-                        if var existing = holeDataMap[holeNumber] {
-                            existing.yardages[teeSet.teeName] = hole.yardage
-                            existing.femaleHandicap = hole.handicap
-                            holeDataMap[holeNumber] = existing
-                        } else {
-                            holeDataMap[holeNumber] = (
-                                par: hole.par,
-                                maleHandicap: 0,
-                                femaleHandicap: hole.handicap,
-                                yardages: [teeSet.teeName: hole.yardage]
-                            )
-                        }
+                for (index, hole) in teeSet.holes.enumerated() {
+                    let holeNumber = index + 1
+                    if var existing = holeDataMap[holeNumber] {
+                        existing.yardages[teeSet.teeName] = hole.yardage
+                        existing.femaleHandicap = hole.handicap
+                        holeDataMap[holeNumber] = existing
+                    } else {
+                        holeDataMap[holeNumber] = (
+                            par: hole.par,
+                            maleHandicap: 0,
+                            femaleHandicap: hole.handicap,
+                            yardages: [teeSet.teeName: hole.yardage]
+                        )
                     }
                 }
             }
@@ -344,69 +312,33 @@ actor GolfCourseAPIClient {
             let holeGroups = Hole.splitIntoSubCourses(allHoles, names: subCourseNames)
 
             // Build sub-courses with tee information
-            for (groupIndex, group) in holeGroups.enumerated() {
-                guard !allSubCourses.contains(where: { playsSameHoles($0, name: group.name, holes: group.holes) }) else { continue }
-
-                let renumberedHoles = group.holes
-
-                // Build sub-course tees
-                var subCourseTees: [String: SubCourseTee] = [:]
-                let allTeeNames = Set(maleTeeData.map(\.teeName) + femaleTeeData.map(\.teeName))
-
-                for teeName in allTeeNames {
-                    var subCourseTee = SubCourseTee()
-
-                    // Male tee info
-                    if let maleData = maleTeeData.first(where: { $0.teeName == teeName }) {
-                        let rating: Double?
-                        let slope: Int?
-                        if groupIndex == 0 {
-                            rating = maleData.frontCourseRating
-                            slope = maleData.frontSlopeRating
-                        } else {
-                            rating = maleData.backCourseRating
-                            slope = maleData.backSlopeRating
-                        }
-                        let totalYards = renumberedHoles.compactMap { $0.yardages[teeName] }.reduce(0, +)
-                        let parTotal = renumberedHoles.map(\.par).reduce(0, +)
-                        subCourseTee.male = TeeInformation(
-                            rating: rating,
-                            slope: slope,
-                            totalYards: totalYards > 0 ? totalYards : nil,
-                            parTotal: parTotal > 0 ? parTotal : nil
-                        )
-                    }
-
-                    // Female tee info
-                    if let femaleData = femaleTeeData.first(where: { $0.teeName == teeName }) {
-                        let rating: Double?
-                        let slope: Int?
-                        if groupIndex == 0 {
-                            rating = femaleData.frontCourseRating
-                            slope = femaleData.frontSlopeRating
-                        } else {
-                            rating = femaleData.backCourseRating
-                            slope = femaleData.backSlopeRating
-                        }
-                        let totalYards = renumberedHoles.compactMap { $0.yardages[teeName] }.reduce(0, +)
-                        let parTotal = renumberedHoles.map(\.par).reduce(0, +)
-                        subCourseTee.female = TeeInformation(
-                            rating: rating,
-                            slope: slope,
-                            totalYards: totalYards > 0 ? totalYards : nil,
-                            parTotal: parTotal > 0 ? parTotal : nil
-                        )
-                    }
-
-                    subCourseTees[teeName] = subCourseTee
+            var resultSubCourses: [Int] = []
+            for group in holeGroups {
+                if let index = allSubCourses.firstIndex(where: { playsSameHoles($0, name: group.name, holes: group.holes) }) {
+                    resultSubCourses.append(index)
+                    continue
                 }
 
+                var subCourseTees: [String: SubCourseTee] = [:]
+                for teeName in Set((maleTees + femaleTees).map(\.teeName)) {
+                    subCourseTees[teeName] = SubCourseTee(
+                        male: teeInformation(maleTees.first { $0.teeName == teeName }, holes: group.holes, subCourseCount: holeGroups.count),
+                        female: teeInformation(femaleTees.first { $0.teeName == teeName }, holes: group.holes, subCourseCount: holeGroups.count)
+                    )
+                }
+
+                resultSubCourses.append(allSubCourses.count)
                 allSubCourses.append(SubCourse(
                     name: unusedName(group.name, in: allSubCourses),
-                    holes: renumberedHoles,
+                    holes: group.holes,
                     tees: subCourseTees
                 ))
             }
+            subCoursesByResult.append(resultSubCourses)
+        }
+
+        if isThreePairs(subCoursesByResult, subCourseCount: allSubCourses.count) {
+            solveThreePairs(&allSubCourses, details: details, subCoursesByResult: subCoursesByResult)
         }
 
         return Course(
@@ -422,6 +354,90 @@ actor GolfCourseAPIClient {
             },
             subCourses: allSubCourses
         )
+    }
+
+    /// One sub-course's values for a tee of a result that is split into `subCourseCount`
+    /// sub-courses. The result's rating is shared evenly between them and is not rounded. Each
+    /// gets the result's slope.
+    private static func teeInformation(_ teeSet: TeeSet?, holes: [Hole], subCourseCount: Int) -> TeeInformation? {
+        guard let teeSet else { return nil }
+        let totalYards = holes.compactMap { $0.yardages[teeSet.teeName] }.reduce(0, +)
+        let parTotal = holes.map(\.par).reduce(0, +)
+        return TeeInformation(
+            rating: teeSet.courseRating.map { $0 / Double(subCourseCount) },
+            slope: teeSet.slopeRating,
+            totalYards: totalYards > 0 ? totalYards : nil,
+            parTotal: parTotal > 0 ? parTotal : nil
+        )
+    }
+
+    /// Whether the results are the three pairs of three nines, such as "Vista/Canyon",
+    /// "Canyon/Sunshine", and "Vista/Sunshine".
+    private static func isThreePairs(_ subCoursesByResult: [[Int]], subCourseCount: Int) -> Bool {
+        subCourseCount == 3
+            && subCoursesByResult.count == 3
+            && subCoursesByResult.allSatisfy { $0.count == 2 }
+            && Set(subCoursesByResult.map { Set($0) }) == [[0, 1], [1, 2], [0, 2]]
+    }
+
+    /// Works out each nine's own rating, slope, and handicaps from the three pairs of three nines.
+    ///
+    /// Each result gives the rating and slope of a pair. A nine's rating is half of the two pairs
+    /// it is in, less the pair it is not in. Its slope is the same without the halving, since a
+    /// pair's slope is the average of its two nines. Ratings are not rounded. A tee that is not in
+    /// all three results gets no rating or slope.
+    ///
+    /// A nine's handicaps are its holes ranked 1 to 9 from hardest to easiest, since the numbers a
+    /// result gives depend on whether the nine is played first or second.
+    private static func solveThreePairs(_ subCourses: inout [SubCourse], details: [CourseDetail], subCoursesByResult: [[Int]]) {
+        for index in subCourses.indices {
+            let with = details.indices.filter { subCoursesByResult[$0].contains(index) }
+            let without = details.indices.filter { !subCoursesByResult[$0].contains(index) }
+
+            for teeName in subCourses[index].tees.keys {
+                for gender in Gender.allCases {
+                    func teeSet(_ result: Int) -> TeeSet? {
+                        let teeSets = gender == .male ? details[result].tees.male : details[result].tees.female
+                        return teeSets?.first { $0.teeName == teeName }
+                    }
+                    let first = teeSet(with[0])
+                    let second = teeSet(with[1])
+                    let other = teeSet(without[0])
+
+                    var rating: Double?
+                    var slope: Int?
+                    if let first = first?.courseRating, let second = second?.courseRating, let other = other?.courseRating {
+                        rating = (first + second - other) / 2
+                    }
+                    if let first = first?.slopeRating, let second = second?.slopeRating, let other = other?.slopeRating {
+                        slope = first + second - other
+                    }
+
+                    switch gender {
+                    case .male:
+                        subCourses[index].tees[teeName]?.male?.rating = rating
+                        subCourses[index].tees[teeName]?.male?.slope = slope
+                    case .female:
+                        subCourses[index].tees[teeName]?.female?.rating = rating
+                        subCourses[index].tees[teeName]?.female?.slope = slope
+                    }
+                }
+            }
+
+            let male = ranked(subCourses[index].holes.map(\.maleHandicap))
+            let female = ranked(subCourses[index].holes.map(\.femaleHandicap))
+            for hole in subCourses[index].holes.indices {
+                subCourses[index].holes[hole].maleHandicap = male[hole]
+                subCourses[index].holes[hole].femaleHandicap = female[hole]
+            }
+        }
+    }
+
+    /// Each handicap's rank among `handicaps`, where 1 is the lowest. Returned unchanged when any
+    /// handicap is missing.
+    private static func ranked(_ handicaps: [Int]) -> [Int] {
+        guard handicaps.allSatisfy({ $0 > 0 }) else { return handicaps }
+        return handicaps.map { handicap in 1 + handicaps.count { $0 < handicap } }
     }
 
     /// The names of the sub-courses a result gives, one per sub-course.

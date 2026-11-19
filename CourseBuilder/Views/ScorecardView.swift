@@ -7,9 +7,13 @@ struct ScorecardView: View {
     /// Whether the Course Details tab is showing. The menus only act on it while it is.
     var isActive = true
     @State private var isImporting = false
-    @State private var statusMessage = ""
     @State private var showImagePicker = false
     @State private var exportWarnings: [String]?
+    /// The outcome of the last export, course info update, or image import, shown in a dialog
+    /// until the user closes it.
+    @State private var actionResult: ActionResult?
+    /// Whether to export when the warnings sheet has closed, because the user chose to export anyway.
+    @State private var exportsAfterWarnings = false
     @State private var cleanupActions: [String]?
     @State private var isCleaningUp = false
     @State private var elevationRequest: ElevationFetchRequest?
@@ -24,163 +28,157 @@ struct ScorecardView: View {
     @AppStorage("courseDataDirectory") private var courseDataDirectory: String = ""
 
     var body: some View {
-        VStack(spacing: 0) {
-            // Header
-            VStack(alignment: .leading, spacing: 8) {
-                // Section heading and action buttons
-                HStack {
-                    sectionHeading("Course Info")
-                    Spacer()
-                    Button("Update course info...") { showUpdateInfoConfirmation = true }
-                        .disabled(course.golfCourseAPIIds.isEmpty || apiKey.isEmpty || isUpdatingInfo)
-                        .help(updateInfoHelp)
-                    Button {
-                        runCleanup()
-                    } label: {
-                        HStack(spacing: 4) {
-                            if isCleaningUp {
-                                ProgressView()
-                                    .scaleEffect(0.6)
+        ScrollView {
+            VStack(alignment: .leading, spacing: sectionSpacing) {
+                VStack(alignment: .leading, spacing: 8) {
+                    // Section heading and action buttons
+                    HStack {
+                        sectionHeading("Course Info")
+                        Spacer()
+                        Button {
+                            showUpdateInfoConfirmation = true
+                        } label: {
+                            HStack(spacing: 4) {
+                                if isUpdatingInfo {
+                                    ProgressView()
+                                        .scaleEffect(0.6)
+                                }
+                                Text("Update course info...")
                             }
-                            Text("Cleanup")
                         }
-                    }
-                    .disabled(isCleaningUp)
-                    Button("Export JSON...") { exportJSON() }
-                    Button("Import Image...") { showImagePicker = true }
-                }
-
-                // Course Name and Club Name
-                HStack(spacing: 12) {
-                    VStack(alignment: .leading, spacing: 2) {
-                        Text("Course Name").font(.caption).foregroundStyle(.secondary)
-                        TextField("Course Name", text: $course.name)
-                            .textFieldStyle(.roundedBorder)
-                    }
-                    VStack(alignment: .leading, spacing: 2) {
-                        Text("Club Name").font(.caption).foregroundStyle(.secondary)
-                        TextField("Club Name", text: $course.clubName)
-                            .textFieldStyle(.roundedBorder)
-                    }
-                }
-
-                // Address
-                VStack(alignment: .leading, spacing: 2) {
-                    Text("Address").font(.caption).foregroundStyle(.secondary)
-                    TextField("Address", text: $course.location.address)
-                        .textFieldStyle(.roundedBorder)
-                }
-
-                // City, State, Country, Lat/Lng
-                HStack(spacing: 12) {
-                    VStack(alignment: .leading, spacing: 2) {
-                        Text("City").font(.caption).foregroundStyle(.secondary)
-                        TextField("City", text: $course.location.city)
-                            .textFieldStyle(.roundedBorder)
-                    }
-                    VStack(alignment: .leading, spacing: 2) {
-                        Text("State").font(.caption).foregroundStyle(.secondary)
-                        TextField("State", text: $course.location.state)
-                            .textFieldStyle(.roundedBorder)
-                            .frame(maxWidth: 100)
-                    }
-                    VStack(alignment: .leading, spacing: 2) {
-                        Text("Country").font(.caption).foregroundStyle(.secondary)
-                        TextField("Country", text: $course.location.country)
-                            .textFieldStyle(.roundedBorder)
-                            .frame(maxWidth: 100)
-                    }
-                    VStack(alignment: .leading, spacing: 2) {
-                        Text("Latitude").font(.caption).foregroundStyle(.secondary)
-                        TextField("Latitude", value: $course.location.coordinate.lat, format: .number)
-                            .textFieldStyle(.roundedBorder)
-                            .frame(maxWidth: 120)
-                    }
-                    VStack(alignment: .leading, spacing: 2) {
-                        Text("Longitude").font(.caption).foregroundStyle(.secondary)
-                        TextField("Longitude", value: $course.location.coordinate.lon, format: .number)
-                            .textFieldStyle(.roundedBorder)
-                            .frame(maxWidth: 120)
-                    }
-                }
-
-                Divider()
-                    .padding(.vertical, 12)
-
-                sectionHeading("Tees")
-
-                // Tee definitions, with combo tees to the right
-                HStack(alignment: .top, spacing: 32) {
-                    VStack(alignment: .leading, spacing: 8) {
-                        HStack {
-                            Text("Main Tees").font(.caption).foregroundStyle(.secondary)
-                            Button(action: {
-                                course.tees.append(TeeDefinition(name: "", color: "#FFFFFF"))
-                            }) {
-                                Image(systemName: "plus")
+                            .disabled(course.golfCourseAPIIds.isEmpty || apiKey.isEmpty || isUpdatingInfo)
+                            .help(updateInfoHelp)
+                        Button {
+                            runCleanup()
+                        } label: {
+                            HStack(spacing: 4) {
+                                if isCleaningUp {
+                                    ProgressView()
+                                        .scaleEffect(0.6)
+                                }
+                                Text("Cleanup")
                             }
-                            .buttonStyle(.borderless)
                         }
+                        .disabled(isCleaningUp)
+                        Button("Export JSON...") { exportJSON() }
+                        Button("Import Image...") { showImagePicker = true }
+                    }
+                    .padding(.bottom, headingBottomPadding)
 
-                        ForEach(course.tees.indices, id: \.self) { index in
-                            HStack(spacing: 8) {
-                                Button {
-                                    guard index > 0 else { return }
-                                    course.tees.swapAt(index, index - 1)
-                                } label: {
-                                    Image(systemName: "chevron.up")
-                                }
-                                .buttonStyle(.borderless)
-                                .disabled(index == 0)
-
-                                Button {
-                                    guard index < course.tees.count - 1 else { return }
-                                    course.tees.swapAt(index, index + 1)
-                                } label: {
-                                    Image(systemName: "chevron.down")
-                                }
-                                .buttonStyle(.borderless)
-                                .disabled(index == course.tees.count - 1)
-
-                                TeeNameField(index: index, course: $course)
-                                ColorPicker(
-                                    "",
-                                    selection: Binding(
-                                        get: { Color(hex: course.tees[index].color) ?? .white },
-                                        set: { course.tees[index].color = $0.hexString }
-                                    )
-                                )
-                                .labelsHidden()
-                                Button("Make combo tee...") {
-                                    comboTeeName = course.tees[index].name
-                                }
-                                .disabled(course.tees.count < 3)
-                                Button(action: {
-                                    let teeName = course.tees[index].name
-                                    if CourseIntegrity.usage(ofTeeNamed: teeName, in: course).isInUse {
-                                        teeToDelete = teeName
-                                    } else {
-                                        CourseIntegrity.removeTee(at: index, from: &course)
-                                    }
-                                }) {
-                                    Image(systemName: "xmark")
-                                }
-                                .buttonStyle(.borderless)
-                            }
+                    // Course Name and Club Name
+                    HStack(spacing: 12) {
+                        VStack(alignment: .leading, spacing: 2) {
+                            Text("Course Name").font(.caption).foregroundStyle(.secondary)
+                            TextField("Course Name", text: $course.name)
+                                .textFieldStyle(.roundedBorder)
+                        }
+                        VStack(alignment: .leading, spacing: 2) {
+                            Text("Club Name").font(.caption).foregroundStyle(.secondary)
+                            TextField("Club Name", text: $course.clubName)
+                                .textFieldStyle(.roundedBorder)
                         }
                     }
 
-                    if !course.comboTees.isEmpty {
+                    // Address
+                    VStack(alignment: .leading, spacing: 2) {
+                        Text("Address").font(.caption).foregroundStyle(.secondary)
+                        TextField("Address", text: $course.location.address)
+                            .textFieldStyle(.roundedBorder)
+                    }
+
+                    // City, State, Country, Lat/Lng
+                    HStack(spacing: 12) {
+                        VStack(alignment: .leading, spacing: 2) {
+                            Text("City").font(.caption).foregroundStyle(.secondary)
+                            TextField("City", text: $course.location.city)
+                                .textFieldStyle(.roundedBorder)
+                        }
+                        VStack(alignment: .leading, spacing: 2) {
+                            Text("State").font(.caption).foregroundStyle(.secondary)
+                            TextField("State", text: $course.location.state)
+                                .textFieldStyle(.roundedBorder)
+                                .frame(maxWidth: 100)
+                        }
+                        VStack(alignment: .leading, spacing: 2) {
+                            Text("Country").font(.caption).foregroundStyle(.secondary)
+                            TextField("Country", text: $course.location.country)
+                                .textFieldStyle(.roundedBorder)
+                                .frame(maxWidth: 100)
+                        }
+                        VStack(alignment: .leading, spacing: 2) {
+                            Text("Latitude").font(.caption).foregroundStyle(.secondary)
+                            TextField("Latitude", value: $course.location.coordinate.lat, format: .number)
+                                .textFieldStyle(.roundedBorder)
+                                .frame(maxWidth: 120)
+                        }
+                        VStack(alignment: .leading, spacing: 2) {
+                            Text("Longitude").font(.caption).foregroundStyle(.secondary)
+                            TextField("Longitude", value: $course.location.coordinate.lon, format: .number)
+                                .textFieldStyle(.roundedBorder)
+                                .frame(maxWidth: 120)
+                        }
+                    }
+
+                }
+                .sectionCard()
+
+                VStack(alignment: .leading, spacing: 8) {
+                    sectionHeading("Tees")
+                        .padding(.bottom, headingBottomPadding)
+
+                    // Tee definitions, with combo tees to the right
+                    HStack(alignment: .top, spacing: 32) {
                         VStack(alignment: .leading, spacing: 8) {
-                            Text("Combo Tees").font(.caption).foregroundStyle(.secondary)
-                            ForEach(course.comboTees) { combo in
+                            HStack {
+                                Text("Main Tees").font(.caption).foregroundStyle(.secondary)
+                                Button(action: {
+                                    course.tees.append(TeeDefinition(name: "", color: "#FFFFFF"))
+                                }) {
+                                    Image(systemName: "plus")
+                                }
+                                .buttonStyle(.borderless)
+                            }
+
+                            ForEach(course.tees.indices, id: \.self) { index in
                                 HStack(spacing: 8) {
-                                    Text("\(combo.name): \(combo.tees.joined(separator: " + "))")
-                                    Button("Edit...") {
-                                        comboTeeName = combo.name
+                                    Button {
+                                        guard index > 0 else { return }
+                                        course.tees.swapAt(index, index - 1)
+                                    } label: {
+                                        Image(systemName: "chevron.up")
                                     }
+                                    .buttonStyle(.borderless)
+                                    .disabled(index == 0)
+
+                                    Button {
+                                        guard index < course.tees.count - 1 else { return }
+                                        course.tees.swapAt(index, index + 1)
+                                    } label: {
+                                        Image(systemName: "chevron.down")
+                                    }
+                                    .buttonStyle(.borderless)
+                                    .disabled(index == course.tees.count - 1)
+
+                                    TeeNameField(index: index, course: $course)
+                                    ColorPicker(
+                                        "",
+                                        selection: Binding(
+                                            get: { Color(hex: course.tees[index].color) ?? .white },
+                                            set: { course.tees[index].color = $0.hexString }
+                                        )
+                                    )
+                                    .labelsHidden()
+                                    Button("Make combo tee...") {
+                                        comboTeeName = course.tees[index].name
+                                    }
+                                    .disabled(course.tees.count < 3)
                                     Button(action: {
-                                        ComboTeeBuilder.delete(comboNamed: combo.name, from: &course)
+                                        let teeName = course.tees[index].name
+                                        if CourseIntegrity.usage(ofTeeNamed: teeName, in: course).isInUse {
+                                            teeToDelete = teeName
+                                        } else {
+                                            CourseIntegrity.removeTee(at: index, from: &course)
+                                        }
                                     }) {
                                         Image(systemName: "xmark")
                                     }
@@ -188,29 +186,36 @@ struct ScorecardView: View {
                                 }
                             }
                         }
+
+                        if !course.comboTees.isEmpty {
+                            VStack(alignment: .leading, spacing: 8) {
+                                Text("Combo Tees").font(.caption).foregroundStyle(.secondary)
+                                ForEach(course.comboTees) { combo in
+                                    HStack(spacing: 8) {
+                                        Text("\(combo.name): \(combo.tees.joined(separator: " + "))")
+                                        Button("Edit...") {
+                                            comboTeeName = combo.name
+                                        }
+                                        Button(action: {
+                                            ComboTeeBuilder.delete(comboNamed: combo.name, from: &course)
+                                        }) {
+                                            Image(systemName: "xmark")
+                                        }
+                                        .buttonStyle(.borderless)
+                                    }
+                                }
+                            }
+                        }
                     }
                 }
+                .sectionCard()
+
+                // Scorecard table
+                ScorecardTableView(course: $course)
             }
-            .padding()
-
-            Divider()
-
-            sectionHeading("Yardages")
-                .frame(maxWidth: .infinity, alignment: .leading)
-                .padding([.horizontal, .top])
-
-            if !statusMessage.isEmpty {
-                Text(statusMessage)
-                    .font(.caption)
-                    .foregroundStyle(.secondary)
-                    .padding(.horizontal)
-                    .padding(.vertical, 4)
-            }
-
-            // Scorecard table
-            ScorecardTableView(course: $course)
-
+            .padding(sectionSpacing)
         }
+        .background(DetailsBackground())
         .focusedSceneValue(\.courseActions, isActive ? courseActions : nil)
         .confirmationDialog(
             "Update \(course.name) from GolfCourseAPI?",
@@ -254,6 +259,18 @@ struct ScorecardView: View {
         } message: { teeName in
             Text(teeInUseMessage(for: teeName))
         }
+        .alert(
+            actionResult?.title ?? "",
+            isPresented: Binding(
+                get: { actionResult != nil },
+                set: { if !$0 { actionResult = nil } }
+            ),
+            presenting: actionResult
+        ) { _ in
+            Button("OK") { actionResult = nil }
+        } message: { result in
+            Text(result.message)
+        }
         .fileImporter(isPresented: $showImagePicker, allowedContentTypes: [.image, .pdf]) { result in
             if case .success(let url) = result {
                 importFromImage(url: url)
@@ -263,7 +280,14 @@ struct ScorecardView: View {
             isPresented: Binding(
                 get: { exportWarnings != nil },
                 set: { if !$0 { exportWarnings = nil } }
-            )
+            ),
+            onDismiss: {
+                // Export once the sheet has closed, so the result dialog can open.
+                if exportsAfterWarnings {
+                    exportsAfterWarnings = false
+                    showSavePanelAndExport()
+                }
+            }
         ) {
             ExportWarningsSheet(warnings: exportWarnings ?? []) {
                 exportWarnings = nil
@@ -271,8 +295,8 @@ struct ScorecardView: View {
                 exportWarnings = nil
                 runCleanup()
             } onExportAnyway: {
+                exportsAfterWarnings = true
                 exportWarnings = nil
-                showSavePanelAndExport()
             }
         }
         .sheet(
@@ -296,13 +320,13 @@ struct ScorecardView: View {
 
     private func importFromImage(url: URL) {
         guard url.startAccessingSecurityScopedResource() else {
-            statusMessage = "Could not access file"
+            actionResult = ActionResult(title: "Import Failed", message: "Could not access the file.")
             return
         }
         defer { url.stopAccessingSecurityScopedResource() }
 
         guard let image = NSImage(contentsOf: url) else {
-            statusMessage = "Could not load image"
+            actionResult = ActionResult(title: "Import Failed", message: "Could not load the image.")
             return
         }
         do {
@@ -318,9 +342,9 @@ struct ScorecardView: View {
             course.comboTees = []
             course.subCourses = imported.subCourses
             let totalHoles = imported.subCourses.reduce(0) { $0 + $1.holes.count }
-            statusMessage = "OCR imported \(totalHoles) holes"
+            actionResult = ActionResult(title: "Import Complete", message: "Imported \(totalHoles) holes from the image.")
         } catch {
-            statusMessage = "OCR failed: \(error.localizedDescription)"
+            actionResult = ActionResult(title: "Import Failed", message: error.localizedDescription)
         }
     }
 
@@ -357,7 +381,6 @@ struct ScorecardView: View {
     private func updateCourseInfo() {
         let ids = course.golfCourseAPIIds
         isUpdatingInfo = true
-        statusMessage = "Updating course info..."
         Task {
             do {
                 let client = GolfCourseAPIClient(apiKey: apiKey)
@@ -367,9 +390,9 @@ struct ScorecardView: View {
                 }
                 let fetched = try GolfCourseAPIClient.convertToCourse(details: details)
                 course = CourseInfoUpdater.merge(course, with: fetched)
-                statusMessage = "Updated course info from GolfCourseAPI"
+                actionResult = ActionResult(title: "Update Complete", message: "Course info was updated from GolfCourseAPI.")
             } catch {
-                statusMessage = "Update failed: \(error.localizedDescription)"
+                actionResult = ActionResult(title: "Update Failed", message: error.localizedDescription)
             }
             isUpdatingInfo = false
         }
@@ -453,12 +476,21 @@ struct ScorecardView: View {
             let saved = try CourseExporter.write(course, toCourseData: directory)
             let ratio = Int((1.0 - Double(saved.gzipSize) / Double(saved.jsonSize)) * 100)
             let path = saved.url.path.replacingOccurrences(of: directory.path + "/", with: "")
-            statusMessage = "Exported to \(path) (\(ratio)% smaller)"
+            actionResult = ActionResult(title: "Export Complete", message: "Saved to \(path) (\(ratio)% smaller).")
         } catch {
-            statusMessage = "Export failed: \(error.localizedDescription)"
+            actionResult = ActionResult(title: "Export Failed", message: error.localizedDescription)
         }
     }
 
+}
+
+// MARK: - ActionResult
+
+/// What an export, a course info update, or an image import did, for the dialog that is shown
+/// when it ends.
+private struct ActionResult {
+    let title: String
+    let message: String
 }
 
 // MARK: - ExportWarningsSheet
@@ -539,13 +571,93 @@ private func sectionHeading(_ title: String) -> some View {
     Text(title).font(.headline)
 }
 
+/// The extra space under a section's heading, before the section's content.
+private let headingBottomPadding: CGFloat = 8
+
+/// The space between the sections of the course details, and around them.
+private let sectionSpacing: CGFloat = 16
+
+/// The background of the course details: the window's color, darkened so the sections stand out.
+private struct DetailsBackground: View {
+    @Environment(\.colorScheme) private var colorScheme
+
+    var body: some View {
+        Color(nsColor: .windowBackgroundColor)
+            .overlay(Color.black.opacity(colorScheme == .dark ? 0.35 : 0.1))
+    }
+}
+
+/// The background of a section of the course details: the window's color, lightened, with
+/// rounded corners.
+private struct SectionCardBackground: View {
+    @Environment(\.colorScheme) private var colorScheme
+
+    var body: some View {
+        RoundedRectangle(cornerRadius: 10)
+            .fill(Color(nsColor: .windowBackgroundColor))
+            .overlay(RoundedRectangle(cornerRadius: 10).fill(Color.white.opacity(colorScheme == .dark ? 0.05 : 0.6)))
+    }
+}
+
+private extension View {
+    /// Shows a section of the course details as a card: padded, as wide as the details, and on a
+    /// lighter background with rounded corners.
+    func sectionCard() -> some View {
+        padding(16)
+            .frame(maxWidth: .infinity, alignment: .leading)
+            .background(SectionCardBackground())
+    }
+}
+
 struct ScorecardTableView: View {
     @Binding var course: Course
     @State private var subCourseToDelete: Int?
+    /// The round whose handicaps are shown as the scorecard prints them, or `nil` to show each
+    /// sub-course's stored handicaps.
+    @State private var selectedHandicapRound: [Int]?
+
+    /// The rounds a scorecard prints for the course.
+    private var rounds: [[Int]] {
+        ScorecardRounds.rounds(in: course)
+    }
+
+    /// The rounds of more than one sub-course when the course has more than one such round. With
+    /// these, a hole's printed handicap depends on the round, so the user picks one.
+    private var handicapRounds: [[Int]] {
+        let rounds = rounds.filter { $0.count > 1 }
+        return rounds.count > 1 ? rounds : []
+    }
+
+    /// ``selectedHandicapRound``, or `nil` when the course no longer has that round.
+    private var handicapRound: [Int]? {
+        selectedHandicapRound.flatMap { handicapRounds.contains($0) ? $0 : nil }
+    }
 
     var body: some View {
-        ScrollView {
+        VStack(alignment: .leading, spacing: sectionSpacing) {
+            VStack(alignment: .leading, spacing: 8) {
+                sectionHeading("Ratings")
+                    .padding(.bottom, headingBottomPadding)
+                ratingsTable
+            }
+            .sectionCard()
+
             VStack(alignment: .leading, spacing: 24) {
+                VStack(alignment: .leading, spacing: 8) {
+                    // The sub-course tables below already keep their distance from the heading.
+                    sectionHeading("Yardages")
+                        .padding(.bottom, handicapRounds.isEmpty ? 0 : headingBottomPadding)
+                    if !handicapRounds.isEmpty {
+                        Picker("Show handicaps for", selection: $selectedHandicapRound) {
+                            Text("Each sub-course alone").tag([Int]?.none)
+                            ForEach(handicapRounds, id: \.self) { round in
+                                Text(ScorecardRounds.name(of: round, in: course)).tag([Int]?.some(round))
+                            }
+                        }
+                        .fixedSize()
+                    }
+                }
+
                 ForEach(Array(course.subCourses.enumerated()), id: \.element.id) { index, _ in
                     VStack(alignment: .leading, spacing: 4) {
                         HStack {
@@ -581,12 +693,8 @@ struct ScorecardTableView: View {
                                     TextField("", value: $hole.par, format: .number)
                                         .frame(width: 40)
                                         .textFieldStyle(.roundedBorder)
-                                    TextField("", value: $hole.maleHandicap, format: .number)
-                                        .frame(width: 45)
-                                        .textFieldStyle(.roundedBorder)
-                                    TextField("", value: $hole.femaleHandicap, format: .number)
-                                        .frame(width: 45)
-                                        .textFieldStyle(.roundedBorder)
+                                    handicapField(subCourse: index, holeNumber: hole.number, gender: .male)
+                                    handicapField(subCourse: index, holeNumber: hole.number, gender: .female)
                                     ForEach(course.tees) { tee in
                                         let binding = Binding(
                                             get: { hole.yardages[tee.name] ?? 0 },
@@ -609,9 +717,8 @@ struct ScorecardTableView: View {
                     Label("Add Sub-course", systemImage: "plus")
                 }
                 .buttonStyle(.borderless)
-                .padding(.horizontal)
             }
-            .padding()
+            .sectionCard()
         }
         .confirmationDialog(
             "Delete \(subCourseToDelete.flatMap { course.subCourses.indices.contains($0) ? course.subCourses[$0].name : nil } ?? "this sub-course")?",
@@ -633,6 +740,86 @@ struct ScorecardTableView: View {
         } message: {
             Text("This will remove all holes in this sub-course.")
         }
+    }
+
+    // MARK: - Ratings
+
+    /// The rating and slope of each round from each tee, as a scorecard prints them.
+    @ViewBuilder
+    private var ratingsTable: some View {
+        let teeNames = course.tees.map(\.name) + course.comboTees.map(\.name)
+        if rounds.isEmpty || teeNames.isEmpty {
+            Text("Add a tee and a sub-course to enter ratings and slopes.")
+                .font(.caption)
+                .foregroundStyle(.secondary)
+        } else {
+            Grid(alignment: .leading, horizontalSpacing: 4, verticalSpacing: 2) {
+                GridRow {
+                    Text("Round").bold()
+                    Text("Tee").bold()
+                    Text("M Rating").bold().frame(width: 70)
+                    Text("M Slope").bold().frame(width: 60)
+                    Text("F Rating").bold().frame(width: 70)
+                    Text("F Slope").bold().frame(width: 60)
+                }
+
+                ForEach(rounds, id: \.self) { round in
+                    Divider()
+                    ForEach(Array(teeNames.enumerated()), id: \.element) { teeIndex, tee in
+                        GridRow {
+                            Text(teeIndex == 0 ? ScorecardRounds.name(of: round, in: course) : "")
+                                .padding(.trailing, 8)
+                            Text(tee)
+                                .padding(.trailing, 8)
+                            ForEach(Gender.allCases, id: \.self) { gender in
+                                TextField("", value: ratingBinding(round: round, tee: tee, gender: gender), format: .number.precision(.fractionLength(0...2)))
+                                    .frame(width: 70)
+                                    .textFieldStyle(.roundedBorder)
+                                TextField("", value: slopeBinding(round: round, tee: tee, gender: gender), format: .number)
+                                    .frame(width: 60)
+                                    .textFieldStyle(.roundedBorder)
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    private func ratingBinding(round: [Int], tee: String, gender: Gender) -> Binding<Double?> {
+        Binding(
+            get: { ScorecardRounds.rating(in: course, round: round, tee: tee, gender: gender) },
+            set: { ScorecardRounds.setRating($0, in: &course, round: round, tee: tee, gender: gender) }
+        )
+    }
+
+    private func slopeBinding(round: [Int], tee: String, gender: Gender) -> Binding<Int?> {
+        Binding(
+            get: { ScorecardRounds.slope(in: course, round: round, tee: tee, gender: gender) },
+            set: { ScorecardRounds.setSlope($0, in: &course, round: round, tee: tee, gender: gender) }
+        )
+    }
+
+    // MARK: - Handicaps
+
+    /// A field for one hole's handicap. It shows the handicap as the scorecard prints it for the
+    /// picked round. When a round is picked that does not have the sub-course, the field shows
+    /// the stored handicap and cannot be changed.
+    private func handicapField(subCourse: Int, holeNumber: Int, gender: Gender) -> some View {
+        let binding = Binding<Int>(
+            get: {
+                guard let hole = course.subCourses[subCourse].holes.firstIndex(where: { $0.number == holeNumber }) else { return 0 }
+                return ScorecardRounds.handicaps(in: course, round: handicapRound, subCourse: subCourse, gender: gender)[hole]
+            },
+            set: { handicap in
+                guard let hole = course.subCourses[subCourse].holes.firstIndex(where: { $0.number == holeNumber }) else { return }
+                ScorecardRounds.setHandicap(handicap, in: &course, round: handicapRound, subCourse: subCourse, hole: hole, gender: gender)
+            }
+        )
+        return TextField("", value: binding, format: .number)
+            .frame(width: 45)
+            .textFieldStyle(.roundedBorder)
+            .disabled(handicapRound.map { !$0.contains(subCourse) } ?? false)
     }
 }
 

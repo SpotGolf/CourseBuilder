@@ -72,12 +72,12 @@ enum GreenCutOut {
     }
 
     /// The points without a last point that repeats the first.
-    private static func openRing(_ points: [Coordinate]) -> [Coordinate] {
+    static func openRing(_ points: [Coordinate]) -> [Coordinate] {
         guard points.count > 1, let first = points.first, let last = points.last, same(first, last) else { return points }
         return Array(points.dropLast())
     }
 
-    private static func same(_ a: Coordinate, _ b: Coordinate) -> Bool {
+    static func same(_ a: Coordinate, _ b: Coordinate) -> Bool {
         OSMChangeDetector.distanceMeters(a, b) <= OSMChangeDetector.samePointMeters
     }
 }

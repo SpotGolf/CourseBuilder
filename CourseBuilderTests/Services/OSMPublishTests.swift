@@ -90,6 +90,36 @@ struct OSMChangeDetectorTests {
         ])
     }
 
+    @Test func movedCenterlineDoesNotShareNodes() {
+        // The centerline's first point is moved onto a corner of the tee.
+        let tee = Feature(id: 1, type: .tee, polygon: CoordinatePath(square()), osmID: "w1")
+        let line = Feature(id: 2, type: .centerline, polygon: CoordinatePath([point(north: 5, east: 5), point(north: 200, east: 5)]), osmID: "w2")
+        var course = makeCourse(features: [tee, line])
+        let baseline = OSMBaseline(course: course)
+        course.features[1].polygon = CoordinatePath([square()[0], point(north: 200, east: 5)])
+
+        let changes = OSMChangeDetector.changes(in: course, from: baseline)
+
+        #expect(changes.map(\.osmID) == ["w2"])
+        #expect(changes.first?.pointsChanged == true)
+        #expect(changes.first?.sharedNodeOSMIDs == [])
+    }
+
+    @Test func movedFeatureDoesNotShareNodesWithCenterline() {
+        // A corner of the tee is moved onto the centerline's first point.
+        let tee = Feature(id: 1, type: .tee, polygon: CoordinatePath(square()), osmID: "w1")
+        let line = Feature(id: 2, type: .centerline, polygon: CoordinatePath([point(north: 5, east: 5), point(north: 200, east: 5)]), osmID: "w2")
+        var course = makeCourse(features: [tee, line])
+        let baseline = OSMBaseline(course: course)
+        course.features[0].polygon = CoordinatePath([point(north: 5, east: 5)] + square().dropFirst())
+
+        let changes = OSMChangeDetector.changes(in: course, from: baseline)
+
+        #expect(changes.map(\.osmID) == ["w1"])
+        #expect(changes.first?.pointsChanged == true)
+        #expect(changes.first?.sharedNodeOSMIDs == [])
+    }
+
     @Test func pendingMultipolygonIsAChange() {
         let course = makeCourse(features: [
             Feature(id: 1, type: .fairway, polygon: CoordinatePath(square()), osmID: "w1"),
@@ -337,12 +367,316 @@ struct OSMMultipolygonTests {
     /// A 100 m square fairway.
     private let fairwayPoints = [point(north: 0), point(north: 0, east: 100), point(north: 100, east: 100), point(north: 100)]
 
+    /// A square with its south-west corner `north` and `east` meters from the fairway's.
+    private func box(north: Double, east: Double, size: Double = 10) -> CoordinatePath {
+        CoordinatePath([
+            point(north: north, east: east), point(north: north, east: east + size),
+            point(north: north + size, east: east + size), point(north: north + size, east: east),
+        ])
+    }
+
+    @Test func featuresInsideFairwayWayBecomeInnerMembers() {
+        let fairway = Feature(id: 1, type: .fairway, polygon: CoordinatePath(fairwayPoints), osmID: "w1")
+        let green = Feature(id: 2, type: .green, polygon: box(north: 70, east: 40), osmID: "w2")
+        let bunker = Feature(id: 3, type: .bunker, polygon: box(north: 40, east: 20), osmID: "w3")
+        let water = Feature(id: 4, type: .water, polygon: box(north: 10, east: 60), osmID: "w4")
+        let tee = Feature(id: 5, type: .tee, polygon: box(north: 10, east: 20), osmID: "w5")
+        let course = makeCourse(features: [fairway, green, bunker, water, tee])
+        let baseline = OSMBaseline(course: course)
+
+        #expect(OSMMultipolygon.containedFeatures(in: fairway, course: course).map(\.id) == [2, 3, 4, 5])
+        #expect(OSMMultipolygon.missingFeatures(in: fairway, course: course, baseline: baseline).map(\.id) == [2, 3, 4, 5])
+    }
+
+    @Test func featuresOverlappingFairwayAreLeftOut() {
+        let fairway = Feature(id: 1, type: .fairway, polygon: CoordinatePath(fairwayPoints), osmID: "w1")
+        let inside = Feature(id: 2, type: .bunker, polygon: box(north: 40, east: 40), osmID: "w2")
+        let crossing = Feature(id: 3, type: .bunker, polygon: box(north: 95, east: 40), osmID: "w3")
+        let outside = Feature(id: 4, type: .water, polygon: box(north: 40, east: 200), osmID: "w4")
+        let covering = Feature(id: 5, type: .water, polygon: box(north: -50, east: -50, size: 200), osmID: "w5")
+        let course = makeCourse(features: [fairway, inside, crossing, outside, covering])
+
+        #expect(OSMMultipolygon.containedFeatures(in: fairway, course: course).map(\.id) == [2])
+    }
+
+    @Test func featureCuttingAcrossBendInFairwayIsLeftOut() {
+        // An L-shaped fairway. The bunker's corners are all inside it, but its edges cut across the bend.
+        let bend = [
+            point(north: 0), point(north: 0, east: 100), point(north: 40, east: 100),
+            point(north: 40, east: 40), point(north: 100, east: 40), point(north: 100),
+        ]
+        let fairway = Feature(id: 1, type: .fairway, polygon: CoordinatePath(bend), osmID: "w1")
+        let cutting = Feature(id: 2, type: .bunker, polygon: CoordinatePath([
+            point(north: 10, east: 90), point(north: 30, east: 90), point(north: 90, east: 30), point(north: 90, east: 10),
+        ]), osmID: "w2")
+        let course = makeCourse(features: [fairway, cutting])
+
+        #expect(OSMMultipolygon.containedFeatures(in: fairway, course: course).isEmpty)
+    }
+
+    @Test func fairwayWithNothingInsideHasNoInnerMembers() {
+        let fairway = Feature(id: 1, type: .fairway, polygon: CoordinatePath(fairwayPoints), osmID: "w1")
+        let away = Feature(id: 2, type: .green, polygon: box(north: 300, east: 40), osmID: "w2")
+        let course = makeCourse(features: [fairway, away])
+        let baseline = OSMBaseline(course: course)
+
+        #expect(OSMMultipolygon.containedFeatures(in: fairway, course: course).isEmpty)
+        #expect(OSMMultipolygon.missingFeatures(in: fairway, course: course, baseline: baseline).isEmpty)
+        #expect(OSMMultipolygon.containedFeatures(in: fairway, course: makeCourse(features: [fairway])).isEmpty)
+    }
+
+    @Test func featuresNotInOSMAsWaysAreLeftOut() {
+        let fairway = Feature(id: 1, type: .fairway, polygon: CoordinatePath(fairwayPoints), osmID: "w1")
+        let new = Feature(id: 2, type: .bunker, polygon: box(north: 40, east: 20))
+        let relation = Feature(id: 3, type: .water, polygon: box(north: 40, east: 60), osmID: "r3")
+        let course = makeCourse(features: [fairway, new, relation])
+
+        #expect(OSMMultipolygon.containedFeatures(in: fairway, course: course).isEmpty)
+    }
+
+    @Test func featureInsideAnotherContainedFeatureIsLeftOut() {
+        let fairway = Feature(id: 1, type: .fairway, polygon: CoordinatePath(fairwayPoints), osmID: "w1")
+        let water = Feature(id: 2, type: .water, polygon: box(north: 30, east: 30, size: 40), osmID: "w2")
+        let island = Feature(id: 3, type: .green, polygon: box(north: 45, east: 45), osmID: "w3")
+        let course = makeCourse(features: [fairway, water, island])
+
+        #expect(OSMMultipolygon.containedFeatures(in: fairway, course: course).map(\.id) == [2])
+    }
+
+    @Test func fairwayRelationGetsFeaturesMissingFromIt() {
+        let fairway = Feature(id: 1, type: .fairway, polygon: CoordinatePath(fairwayPoints), osmID: "r1")
+        let green = Feature(id: 2, type: .green, polygon: box(north: 70, east: 40), osmID: "w2")
+        let bunker = Feature(id: 3, type: .bunker, polygon: box(north: 40, east: 20), osmID: "w3")
+        let water = Feature(id: 4, type: .water, polygon: box(north: 10, east: 60), osmID: "w4")
+        let crossing = Feature(id: 5, type: .bunker, polygon: box(north: 95, east: 40), osmID: "w5")
+        let course = makeCourse(features: [fairway, green, bunker, water, crossing])
+        let members: [OSMRelation.Member] = [.init(type: "way", ref: 50, role: "outer"), .init(type: "way", ref: 2, role: "inner")]
+        let baseline = OSMBaseline(entries: ["r1": .init(osmID: "r1", version: 3, type: .fairway, points: [], members: members)])
+
+        #expect(OSMMultipolygon.missingFeatures(in: fairway, course: course, baseline: baseline).map(\.id) == [3, 4])
+    }
+
+    @Test func fairwayRelationWithEveryFeatureHasNothingMissing() {
+        let fairway = Feature(id: 1, type: .fairway, polygon: CoordinatePath(fairwayPoints), osmID: "r1")
+        let green = Feature(id: 2, type: .green, polygon: box(north: 70, east: 40), osmID: "w2")
+        let bunker = Feature(id: 3, type: .bunker, polygon: box(north: 40, east: 20), osmID: "w3")
+        let course = makeCourse(features: [fairway, green, bunker])
+        let members: [OSMRelation.Member] = [
+            .init(type: "way", ref: 50, role: "outer"), .init(type: "way", ref: 2, role: "inner"), .init(type: "way", ref: 3, role: "inner"),
+        ]
+        let baseline = OSMBaseline(entries: ["r1": .init(osmID: "r1", version: 3, type: .fairway, points: [], members: members)])
+
+        #expect(OSMMultipolygon.missingFeatures(in: fairway, course: course, baseline: baseline).isEmpty)
+    }
+
+    @Test func multipolygonUploadAddsEveryContainedFeatureAsInner() {
+        let fairwayWay = OSMWay(id: 1, version: 2, nodes: [10, 11, 12, 13, 10], tags: ["golf": "fairway"])
+        let fairway = Feature(id: 1, type: .fairway, polygon: CoordinatePath(fairwayPoints), osmID: "w1")
+        let green = Feature(id: 2, type: .green, polygon: box(north: 70, east: 40), osmID: "w2")
+        let bunker = Feature(id: 3, type: .bunker, polygon: box(north: 40, east: 20), osmID: "w3")
+        let crossing = Feature(id: 4, type: .bunker, polygon: box(north: 95, east: 40), osmID: "w4")
+        let course = makeCourse(features: [fairway, green, bunker, crossing])
+        var baseline = OSMBaseline(course: course)
+        let inner = OSMMultipolygon.missingFeatures(in: fairway, course: course, baseline: baseline)
+        baseline.pendingMultipolygons = [PendingMultipolygon(fairwayOSMID: "w1", innerOSMIDs: inner.compactMap(\.osmID))]
+
+        let changes = OSMChangeDetector.changes(in: course, from: baseline)
+        #expect(changes == [OSMFeatureChange(action: .multipolygon, featureID: 1, type: .fairway, osmID: "w1", innerOSMIDs: ["w2", "w3"])])
+
+        let fetched = OSMFetchedElements(ways: [1: OSMWayFull(way: fairwayWay, nodes: [:])])
+        let upload = OSMChangeBuilder.upload(for: changes, course: course, fetched: fetched, changesetID: 7)
+        #expect(upload.sent["r-1"]?.members == [
+            .init(type: "way", ref: 1, role: "outer"),
+            .init(type: "way", ref: 2, role: "inner"),
+            .init(type: "way", ref: 3, role: "inner"),
+        ])
+    }
+
+    @Test func overlappingBunkerIsCutOutOfFairwayEdge() {
+        let bunker = Array(box(north: 95, east: 40))
+
+        // The fairway keeps its four points and takes the bunker's two points that are inside it.
+        #expect(OverlapCutOut.cutOut(bunker, from: fairwayPoints) == [
+            point(north: 100), point(north: 0), point(north: 0, east: 100), point(north: 100, east: 100),
+            bunker[1], bunker[0],
+        ])
+    }
+
+    @Test func overlappingBunkerIsCutOutOfFairwayCorner() {
+        let bunker = Array(box(north: 95, east: 95))
+
+        // The fairway's corner inside the bunker is replaced by the bunker's corner inside the fairway.
+        #expect(OverlapCutOut.cutOut(bunker, from: fairwayPoints) == [
+            point(north: 100), point(north: 0), point(north: 0, east: 100), bunker[0],
+        ])
+    }
+
+    @Test func fairwayEdgeWeavingAcrossBunkerIsCutOut() {
+        // Hole 1 at Walnut Creek, in course file units. The fairway's west edge runs down the
+        // bunker's east edge, crosses it five times, and already shares two points with it.
+        func points(_ units: [(Int, Int)]) -> [Coordinate] {
+            units.map { Coordinate(lat: Double($0.0) / 365_000, lon: Double($0.1) / 365_000) }
+        }
+        let bunker = points([
+            (14562180, -38368293), (14562182, -38368296), (14562182, -38368299), (14562182, -38368303), (14562182, -38368307),
+            (14562180, -38368310), (14562178, -38368312), (14562176, -38368313), (14562173, -38368314), (14562171, -38368314),
+            (14562169, -38368315), (14562168, -38368316), (14562166, -38368316), (14562165, -38368317), (14562163, -38368319),
+            (14562160, -38368321), (14562157, -38368322), (14562155, -38368322), (14562153, -38368320), (14562151, -38368319),
+            (14562150, -38368314), (14562150, -38368307), (14562151, -38368299), (14562154, -38368295), (14562156, -38368292),
+            (14562160, -38368289), (14562165, -38368286), (14562170, -38368285), (14562174, -38368286), (14562177, -38368289),
+        ])
+        let farEdge = points([(14562100, -38368200), (14562230, -38368200)])
+        let fairway = points([
+            (14562206, -38368309), (14562198, -38368306), (14562193, -38368302), (14562189, -38368299), (14562185, -38368295),
+            (14562181, -38368290), (14562173, -38368286), (14562170, -38368285), (14562168, -38368285), (14562166, -38368286),
+            (14562164, -38368286), (14562162, -38368288), (14562160, -38368289), (14562158, -38368290), (14562157, -38368292),
+            (14562155, -38368293), (14562154, -38368294), (14562153, -38368295), (14562152, -38368296), (14562152, -38368297),
+            (14562151, -38368298), (14562150, -38368299), (14562150, -38368300), (14562148, -38368302), (14562143, -38368305),
+            (14562139, -38368308), (14562135, -38368309),
+        ]) + farEdge
+
+        let result = OverlapCutOut.cutOut(bunker, from: fairway)
+
+        // The fairway now runs along the bunker's east edge on the bunker's own points.
+        #expect(result != nil)
+        for point in bunker[24...28] {
+            #expect(result?.contains(point) == true)
+        }
+        // Every point is one of the fairway's or one of the bunker's, and none is inside the bunker.
+        #expect(result?.allSatisfy { fairway.contains($0) || bunker.contains($0) } == true)
+        #expect(result?.contains { !bunker.contains($0) && PolygonGeometry.contains($0, in: bunker) } == false)
+        // The rest of the fairway is untouched.
+        #expect(result?.contains(fairway[0]) == true)
+        #expect(result?.contains(fairway[26]) == true)
+        #expect(farEdge.allSatisfy { result?.contains($0) == true })
+        // Nothing is left to fix.
+        #expect(OverlapCutOut.cutOut(bunker, from: result ?? []) == nil)
+    }
+
+    @Test func featureSharingAnEdgeWithoutOverlapIsNotCutOut() {
+        // A bunker outside the fairway that already shares the fairway's top edge points.
+        let fairway = fairwayPoints + []
+        let bunker = [fairwayPoints[2], fairwayPoints[3], point(north: 110), point(north: 110, east: 100)]
+
+        #expect(OverlapCutOut.cutOut(bunker, from: fairway) == nil)
+    }
+
+    @Test func closedFairwayStaysClosedAfterCutOut() {
+        let bunker = Array(box(north: 95, east: 40))
+        let result = OverlapCutOut.cutOut(bunker, from: fairwayPoints + [fairwayPoints[0]])
+
+        #expect(result?.count == 7)
+        #expect(result?.first == result?.last)
+    }
+
+    @Test func featuresThatDoNotOverlapAreNotCutOut() {
+        #expect(OverlapCutOut.cutOut(Array(box(north: 40, east: 40)), from: fairwayPoints) == nil)
+        #expect(OverlapCutOut.cutOut(Array(box(north: 40, east: 200)), from: fairwayPoints) == nil)
+        #expect(OverlapCutOut.cutOut(Array(box(north: -50, east: -50, size: 200)), from: fairwayPoints) == nil)
+        // A strip across the whole fairway crosses its outline four times.
+        #expect(OverlapCutOut.cutOut([
+            point(north: 40, east: -10), point(north: 40, east: 110), point(north: 60, east: 110), point(north: 60, east: -10),
+        ], from: fairwayPoints) == nil)
+    }
+
+    @Test func cleanUpCutsOutEveryOverlappingFeatureButNotFairways() {
+        let fairway = Feature(id: 1, type: .fairway, polygon: CoordinatePath(fairwayPoints), osmID: "r1")
+        let inside = Feature(id: 2, type: .green, polygon: box(north: 40, east: 40), osmID: "w2")
+        let top = Feature(id: 3, type: .bunker, polygon: box(north: 95, east: 40), osmID: "w3")
+        let bottom = Feature(id: 4, type: .bunker, polygon: box(north: -5, east: 40), osmID: "w4")
+        let other = Feature(id: 5, type: .fairway, polygon: box(north: 40, east: 95), osmID: "w5")
+        let course = makeCourse(features: [fairway, inside, top, bottom, other])
+
+        #expect(OverlapCutOut.features(toCutOutOf: fairway, course: course).map(\.id) == [3, 4])
+        let result = OverlapCutOut.cutOutAll(from: fairway, course: course)
+        #expect(result?.count == 8)
+        #expect(result?.contains(Array(top.polygon)[0]) == true)
+        #expect(result?.contains(Array(bottom.polygon)[2]) == true)
+
+        // Nothing overlaps once the fairway is reshaped, and the green inside it is still inside.
+        var cleaned = course
+        cleaned.features[0].polygon = CoordinatePath(result ?? [])
+        #expect(OverlapCutOut.features(toCutOutOf: cleaned.features[0], course: cleaned).isEmpty)
+        #expect(OverlapCutOut.cutOutAll(from: cleaned.features[0], course: cleaned) == nil)
+        #expect(OSMMultipolygon.containedFeatures(in: cleaned.features[0], course: cleaned).map(\.id) == [2])
+    }
+
+    @Test func greenGivesWayToOverlappingBunkerAndWater() {
+        let green = Feature(id: 1, type: .green, polygon: CoordinatePath(fairwayPoints), osmID: "w1")
+        let bunker = Feature(id: 2, type: .bunker, polygon: box(north: 95, east: 40), osmID: "w2")
+        let water = Feature(id: 3, type: .water, polygon: box(north: -5, east: 40), osmID: "w3")
+        let tee = Feature(id: 4, type: .tee, polygon: box(north: 40, east: 95), osmID: "w4")
+        let fairway = Feature(id: 5, type: .fairway, polygon: box(north: 40, east: -5), osmID: "w5")
+        let otherGreen = Feature(id: 6, type: .green, polygon: box(north: 95, east: 70), osmID: "w6")
+        var course = makeCourse(features: [green, bunker, water, tee, fairway, otherGreen])
+        let baseline = OSMBaseline(course: course)
+
+        #expect(OverlapCutOut.features(toCutOutOf: green, course: course).map(\.id) == [2, 3])
+        let result = OverlapCutOut.cutOutAll(from: green, course: course)
+        #expect(result?.count == 8)
+        #expect(result?.contains(Array(bunker.polygon)[0]) == true)
+        #expect(result?.contains(Array(water.polygon)[2]) == true)
+
+        // The reshaped green shares the bunker's and the water's nodes, and nothing is left to fix.
+        course.features[0].polygon = CoordinatePath(result ?? [])
+        let changes = OSMChangeDetector.changes(in: course, from: baseline)
+        #expect(changes.map(\.osmID) == ["w1"])
+        #expect(changes.first?.sharedNodeOSMIDs == ["w2", "w3"])
+        #expect(OverlapCutOut.features(toCutOutOf: course.features[0], course: course).isEmpty)
+    }
+
+    @Test func bunkersWaterAndTeesNeverGiveWay() {
+        let green = Feature(id: 1, type: .green, polygon: box(north: 95, east: 40), osmID: "w1")
+        for type in [FeatureType.bunker, .water, .tee, .centerline] {
+            let feature = Feature(id: 2, type: type, polygon: CoordinatePath(fairwayPoints), osmID: "w2")
+            let course = makeCourse(features: [feature, green])
+            #expect(OverlapCutOut.features(toCutOutOf: feature, course: course).isEmpty)
+            #expect(OverlapCutOut.cutOutAll(from: feature, course: course) == nil)
+        }
+    }
+
+    @Test func reshapedFairwaySharesTheBunkersNodes() {
+        let fairway = Feature(id: 1, type: .fairway, polygon: CoordinatePath(fairwayPoints), osmID: "w1")
+        let bunker = Feature(id: 3, type: .bunker, polygon: box(north: 95, east: 40), osmID: "w3")
+        var course = makeCourse(features: [fairway, bunker])
+        let baseline = OSMBaseline(course: course)
+
+        course.features[0].polygon = CoordinatePath(OverlapCutOut.cutOutAll(from: fairway, course: course) ?? [])
+        let changes = OSMChangeDetector.changes(in: course, from: baseline)
+
+        #expect(changes.count == 1)
+        #expect(changes.first?.osmID == "w1")
+        #expect(changes.first?.pointsChanged == true)
+        #expect(changes.first?.sharedNodeOSMIDs == ["w3"])
+    }
+
+    @Test func centerlinesAreIgnored() {
+        let fairway = Feature(id: 1, type: .fairway, polygon: CoordinatePath(fairwayPoints), osmID: "r1")
+        // One line of play stays inside the fairway. The other starts and ends outside it.
+        let inside = Feature(id: 2, type: .centerline, polygon: CoordinatePath([
+            point(north: 10, east: 50), point(north: 50, east: 60), point(north: 90, east: 50),
+        ]), osmID: "w2")
+        let through = Feature(id: 3, type: .centerline, polygon: CoordinatePath([
+            point(north: -50, east: 50), point(north: 50, east: 60), point(north: 150, east: 50),
+        ]), osmID: "w3")
+        let crossing = Feature(id: 4, type: .centerline, polygon: CoordinatePath([
+            point(north: 50, east: 50), point(north: 120, east: 40), point(north: 120, east: 60),
+        ]), osmID: "w4")
+        let course = makeCourse(features: [fairway, inside, through, crossing])
+        let baseline = OSMBaseline(entries: ["r1": .init(osmID: "r1", version: 3, type: .fairway, points: [])])
+
+        #expect(OSMMultipolygon.containedFeatures(in: fairway, course: course).isEmpty)
+        #expect(OSMMultipolygon.missingFeatures(in: fairway, course: course, baseline: baseline).isEmpty)
+        #expect(OverlapCutOut.features(toCutOutOf: fairway, course: course).isEmpty)
+        #expect(OverlapCutOut.cutOutAll(from: fairway, course: course) == nil)
+    }
+
     @Test func greenInsideFairwayIsOffered() {
         let fairway = Feature(id: 1, type: .fairway, polygon: CoordinatePath(fairwayPoints), osmID: "w1")
         let inside = Feature(id: 2, type: .green, polygon: CoordinatePath(square(north: 40).map { Coordinate(lat: $0.lat, lon: $0.lon + 0.0004) }), osmID: "w2")
         let course = makeCourse(features: [fairway, inside])
 
-        #expect(OSMMultipolygon.containedGreens(in: fairway, course: course).map(\.id) == [2])
+        #expect(OSMMultipolygon.containedFeatures(in: fairway, course: course).map(\.id) == [2])
     }
 
     @Test func greenCrossingOutlineIsNotOffered() {
@@ -351,7 +685,7 @@ struct OSMMultipolygonTests {
         let newGreen = Feature(id: 3, type: .green, polygon: CoordinatePath(square(north: 40).map { Coordinate(lat: $0.lat, lon: $0.lon + 0.0004) }))
         let course = makeCourse(features: [fairway, crossing, newGreen])
 
-        #expect(OSMMultipolygon.containedGreens(in: fairway, course: course).isEmpty)
+        #expect(OSMMultipolygon.containedFeatures(in: fairway, course: course).isEmpty)
     }
 
     @Test func greenMissingFromRelationFairwayIsOffered() {
@@ -362,9 +696,9 @@ struct OSMMultipolygonTests {
         let missing = OSMBaseline(entries: ["r1": .init(osmID: "r1", version: 3, type: .fairway, points: [], members: [.init(type: "way", ref: 50, role: "outer")])])
         let present = OSMBaseline(entries: ["r1": .init(osmID: "r1", version: 3, type: .fairway, points: [], members: [.init(type: "way", ref: 2, role: "inner")])])
 
-        #expect(OSMMultipolygon.missingGreens(in: fairway, course: course, baseline: unknown).map(\.id) == [2])
-        #expect(OSMMultipolygon.missingGreens(in: fairway, course: course, baseline: missing).map(\.id) == [2])
-        #expect(OSMMultipolygon.missingGreens(in: fairway, course: course, baseline: present).isEmpty)
+        #expect(OSMMultipolygon.missingFeatures(in: fairway, course: course, baseline: unknown).map(\.id) == [2])
+        #expect(OSMMultipolygon.missingFeatures(in: fairway, course: course, baseline: missing).map(\.id) == [2])
+        #expect(OSMMultipolygon.missingFeatures(in: fairway, course: course, baseline: present).isEmpty)
     }
 
     @Test func relationUploadAddsMissingInnerGreens() {
@@ -722,5 +1056,31 @@ struct PublishToOSMSheetTests {
     @Test func detailText() {
         #expect(PublishToOSMSheet.detail(for: OSMFeatureChange(action: .modify, featureID: 1, type: .water, osmID: "w1", oldType: .bunker, pointsChanged: true)) == "points, type, was bunker")
         #expect(PublishToOSMSheet.detail(for: OSMFeatureChange(action: .modify, featureID: 1, type: .bunker, osmID: "w1", addsGolfTag: true)) == "adds golf=bunker")
+    }
+
+    @Test func multipolygonDetailNamesTheFeaturesCutOut() {
+        let course = makeCourse(features: [
+            Feature(id: 1, type: .fairway, polygon: CoordinatePath(square()), osmID: "r1"),
+            Feature(id: 12, type: .green, polygon: CoordinatePath(square()), osmID: "w12"),
+            Feature(id: 14, type: .bunker, polygon: CoordinatePath(square()), osmID: "w14"),
+            Feature(id: 15, type: .bunker, polygon: CoordinatePath(square()), osmID: "w15"),
+        ])
+        let one = OSMFeatureChange(action: .multipolygon, featureID: 1, type: .fairway, osmID: "r1", innerOSMIDs: ["w14"])
+        let many = OSMFeatureChange(action: .multipolygon, featureID: 1, type: .fairway, osmID: "r1", innerOSMIDs: ["w14", "w12", "w15"])
+
+        #expect(PublishToOSMSheet.actionName(.multipolygon) == "Cut out")
+        #expect(PublishToOSMSheet.detail(for: one, in: course) == "Fairway no longer covers bunker #14.")
+        #expect(PublishToOSMSheet.detail(for: many, in: course) == "Fairway no longer covers green #12 and bunkers #14 and #15.")
+        #expect(PublishToOSMSheet.detail(for: one) == "Fairway no longer covers the features inside it.")
+    }
+
+    @Test func reshapedFairwayDetailNamesTheFeatureItFollows() {
+        let course = makeCourse(features: [
+            Feature(id: 1, type: .fairway, polygon: CoordinatePath(square()), osmID: "r1"),
+            Feature(id: 14, type: .bunker, polygon: CoordinatePath(square()), osmID: "w14"),
+        ])
+        let change = OSMFeatureChange(action: .modify, featureID: 1, type: .fairway, osmID: "r1", pointsChanged: true, sharedNodeOSMIDs: ["w14"])
+
+        #expect(PublishToOSMSheet.detail(for: change, in: course) == "points, edge now follows bunker #14")
     }
 }

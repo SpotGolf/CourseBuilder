@@ -1141,6 +1141,7 @@ struct MapEditorView: View {
                     revertControls(for: course.features[featureIndex])
                     multipolygonControls(for: course.features[featureIndex])
                     cutOutGreenControls(for: course.features[featureIndex])
+                    fixGreenOverlapControls(for: course.features[featureIndex])
 
                     Button("Delete Feature", role: .destructive) {
                         featureToDelete = featureID
@@ -2185,8 +2186,9 @@ struct MapEditorView: View {
         clearStatusAfterDelay()
     }
 
-    /// Convert to Multipolygon for a fairway way with greens inside it, Add Green to Multipolygon
-    /// for a fairway relation missing greens inside it, or the pending change with a way to cancel it.
+    /// Convert to Multipolygon for a fairway way with features inside it, Clean Up Multipolygon
+    /// for a fairway relation that is missing features inside it or has features overlapping it,
+    /// or the pending change with a way to cancel it.
     @ViewBuilder
     private func multipolygonControls(for feature: Feature) -> some View {
         if let baseline = osmBaseline {
@@ -2195,11 +2197,11 @@ struct MapEditorView: View {
                 VStack(alignment: .leading, spacing: 8) {
                     Text(isRelation
                          ? (pending.innerOSMIDs.count == 1
-                            ? "Gets the green inside it as an inner member on the next publish."
-                            : "Gets the \(pending.innerOSMIDs.count) greens inside it as inner members on the next publish.")
+                            ? "Gets the feature inside it as an inner member on the next publish."
+                            : "Gets the \(pending.innerOSMIDs.count) features inside it as inner members on the next publish.")
                          : (pending.innerOSMIDs.count == 1
-                            ? "Becomes a multipolygon with the green inside it on the next publish."
-                            : "Becomes a multipolygon with the \(pending.innerOSMIDs.count) greens inside it on the next publish."))
+                            ? "Becomes a multipolygon with the feature inside it on the next publish."
+                            : "Becomes a multipolygon with the \(pending.innerOSMIDs.count) features inside it on the next publish."))
                         .font(.caption)
                         .foregroundStyle(.secondary)
                         .fixedSize(horizontal: false, vertical: true)
@@ -2208,17 +2210,23 @@ struct MapEditorView: View {
                     }
                 }
             } else {
-                let greens = OSMMultipolygon.missingGreens(in: feature, course: course, baseline: baseline)
-                if !greens.isEmpty {
-                    Button(isRelation ? "Add Green to Multipolygon" : "Convert to Multipolygon") {
-                        setPendingMultipolygon(
-                            PendingMultipolygon(fairwayOSMID: feature.osmID ?? "", innerOSMIDs: greens.compactMap(\.osmID)),
-                            for: feature
-                        )
+                let inner = OSMMultipolygon.missingFeatures(in: feature, course: course, baseline: baseline)
+                let hasOverlaps = isRelation && !OverlapCutOut.features(toCutOutOf: feature, course: course).isEmpty
+                if !inner.isEmpty || hasOverlaps {
+                    Button(isRelation ? "Clean Up Multipolygon" : "Convert to Multipolygon") {
+                        if hasOverlaps {
+                            cutOutOverlaps(from: feature)
+                        }
+                        if !inner.isEmpty {
+                            setPendingMultipolygon(
+                                PendingMultipolygon(fairwayOSMID: feature.osmID ?? "", innerOSMIDs: inner.compactMap(\.osmID)),
+                                for: feature
+                            )
+                        }
                     }
                     .help(isRelation
-                          ? "On the next publish, add the greens inside this fairway to its multipolygon as inner rings"
-                          : "On the next publish, make this fairway a multipolygon with the greens inside it as inner rings")
+                          ? "Reshape this fairway to follow the edge of features that overlap it and, on the next publish, add the features inside it that are missing from its multipolygon as inner rings"
+                          : "On the next publish, make this fairway a multipolygon with the features inside it as inner rings")
                 }
             }
         }
@@ -2246,6 +2254,29 @@ struct MapEditorView: View {
         selectedVertexIndex = nil
         isEditingFeature = false
         statusMessage = "Cut the green out of feature #\(fairway.id)"
+        clearStatusAfterDelay()
+    }
+
+    /// Fix Overlaps for a green drawn partly over a bunker or water.
+    @ViewBuilder
+    private func fixGreenOverlapControls(for feature: Feature) -> some View {
+        if feature.type == .green, !OverlapCutOut.features(toCutOutOf: feature, course: course).isEmpty {
+            Button("Fix Overlaps") {
+                cutOutOverlaps(from: feature)
+            }
+            .help("Reshape this green to follow the edge of the bunkers and water that overlap it, sharing their edge")
+        }
+    }
+
+    /// Reshapes the fairway or green to follow the edge of each feature that overlaps it.
+    private func cutOutOverlaps(from fairway: Feature) {
+        guard let index = course.features.firstIndex(where: { $0.id == fairway.id }),
+              let polygon = OverlapCutOut.cutOutAll(from: fairway, course: course) else { return }
+        course.features[index].polygon = CoordinatePath(polygon)
+        undoRecords.append(.replacedPolygon(featureID: fairway.id, oldPolygon: Array(fairway.polygon)))
+        selectedVertexIndex = nil
+        isEditingFeature = false
+        statusMessage = "Cut the overlapping features out of feature #\(fairway.id)"
         clearStatusAfterDelay()
     }
 

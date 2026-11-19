@@ -42,28 +42,23 @@ struct PublishToOSMSheet: View {
             Text("Publish to OSM")
                 .font(.headline)
 
-            ScrollView {
-                Grid(alignment: .leading, horizontalSpacing: 12, verticalSpacing: 4) {
-                    ForEach(rows) { row in
-                        GridRow {
-                            Text(row.action)
-                            Text(row.type)
-                            Text(row.feature)
-                            Text(row.hole)
-                            Text(row.osmID)
-                                .monospaced()
-                            Text(row.detail)
-                                .foregroundStyle(row.isConflict ? .red : .secondary)
-                        }
-                        .foregroundStyle(row.isConflict ? .red : .primary)
-                    }
+            Table(rows) {
+                TableColumn("Action") { cell($0.action, in: $0) }
+                    .width(80)
+                TableColumn("Type") { cell($0.type, in: $0) }
+                    .width(60)
+                TableColumn("Feature") { cell($0.feature, in: $0) }
+                    .width(55)
+                TableColumn("Hole") { cell($0.hole, in: $0) }
+                    .width(50)
+                TableColumn("OSM ID") { cell($0.osmID, in: $0).monospaced() }
+                    .width(90)
+                TableColumn("Detail") { row in
+                    cell(row.detail, in: row, isSecondary: true)
+                        .help(row.detail)
                 }
-                .font(.caption)
-                .frame(maxWidth: .infinity, alignment: .leading)
-                .padding(8)
             }
-            .frame(height: 160)
-            .background(Color(.textBackgroundColor))
+            .frame(height: 220)
             .clipShape(RoundedRectangle(cornerRadius: 6))
 
             TextEditor(text: $comment, selection: $selection)
@@ -99,9 +94,14 @@ struct PublishToOSMSheet: View {
             .disabled(isPublishing)
         }
         .padding()
-        .frame(width: 560)
+        .frame(width: 900)
         .interactiveDismissDisabled(isPublishing)
         .onAppear { isCommentFocused = true }
+    }
+
+    /// One table cell. A conflict's row is red.
+    private func cell(_ text: String, in row: Row, isSecondary: Bool = false) -> Text {
+        Text(text).foregroundStyle(row.isConflict ? AnyShapeStyle(.red) : AnyShapeStyle(isSecondary ? .secondary : .primary))
     }
 
     private func runPublish() async {
@@ -154,7 +154,7 @@ struct PublishToOSMSheet: View {
                     feature: change.featureID.map { "#\($0)" } ?? "",
                     hole: change.featureID.flatMap { holeOrder[$0].map { "Hole \($0.number)" } } ?? "",
                     osmID: change.osmID ?? "",
-                    detail: isConflict ? "changed in OSM" : Self.detail(for: change),
+                    detail: isConflict ? "changed in OSM" : Self.detail(for: change, in: course),
                     isConflict: isConflict
                 )
             }
@@ -163,25 +163,44 @@ struct PublishToOSMSheet: View {
     static func actionName(_ action: OSMFeatureChange.Action) -> String {
         switch action {
         case .modify: "Changed"
-        case .multipolygon: "Multipolygon"
+        case .multipolygon: "Cut out"
         case .courseOutline: "Course outline"
         case .create: "New"
         case .delete: "Deleted"
         }
     }
 
-    static func detail(for change: OSMFeatureChange) -> String {
+    /// What the change does, in plain words. The course is used to name the other features a
+    /// change involves.
+    static func detail(for change: OSMFeatureChange, in course: Course? = nil) -> String {
         if change.action == .multipolygon {
-            return "inner: \(change.innerOSMIDs.joined(separator: ", "))"
+            let names = featureNames(for: change.innerOSMIDs, in: course)
+            return "Fairway no longer covers \(names.isEmpty ? "the features inside it" : names)."
         }
         if change.action == .courseOutline {
             return change.osmID?.hasPrefix("n") == true ? "replaces the node" : "takes tags from it"
         }
         var parts: [String] = []
-        if change.pointsChanged { parts.append("points") }
+        if change.pointsChanged {
+            let names = featureNames(for: change.sharedNodeOSMIDs, in: course)
+            parts.append(names.isEmpty ? "points" : "points, edge now follows \(names)")
+        }
         if let oldType = change.oldType { parts.append("type, was \(oldType.rawValue)") }
         if change.addsGolfTag { parts.append("adds golf=\(OSMChangeBuilder.tags(for: change.type)["golf"] ?? "")") }
         return parts.joined(separator: ", ")
+    }
+
+    /// The course's features with the OSM IDs, as a phrase such as "green #12 and bunkers #14
+    /// and #15". Grouped by type. Empty when none of them are in the course.
+    static func featureNames(for osmIDs: [String], in course: Course?) -> String {
+        guard let course else { return "" }
+        let features = course.features.filter { feature in feature.osmID.map(osmIDs.contains) ?? false }
+        let groups: [String] = FeatureType.allCases.compactMap { type in
+            let ids = features.filter { $0.type == type }.map { "#\($0.id)" }
+            guard !ids.isEmpty else { return nil }
+            return "\(type.rawValue)\(ids.count == 1 ? "" : "s") \(ids.formatted(.list(type: .and)))"
+        }
+        return groups.formatted(.list(type: .and))
     }
 
     /// The hole that uses each feature, with its place in course order.
@@ -194,4 +213,38 @@ struct PublishToOSMSheet: View {
         }
         return order
     }
+}
+
+#Preview("Every kind of change") {
+    let square = CoordinatePath([
+        Coordinate(lat: 40, lon: -105), Coordinate(lat: 40, lon: -104.999),
+        Coordinate(lat: 40.001, lon: -104.999), Coordinate(lat: 40.001, lon: -105),
+    ])
+    let features = [
+        Feature(id: 1, type: .fairway, polygon: square, osmID: "r1"),
+        Feature(id: 12, type: .green, polygon: square, osmID: "w12"),
+        Feature(id: 14, type: .bunker, polygon: square, osmID: "w14"),
+        Feature(id: 15, type: .bunker, polygon: square, osmID: "w15"),
+        Feature(id: 20, type: .water, polygon: square, osmID: "w20"),
+        Feature(id: 30, type: .bunker, polygon: square),
+    ]
+    let course = Course(
+        name: "Preview",
+        location: CourseLocation(address: "", city: "", state: "", country: "US", coordinate: Coordinate(lat: 40, lon: -105)),
+        features: features,
+        subCourses: [SubCourse(name: "Front", holes: [Hole(number: 3, par: 4, features: [1, 12, 14, 15, 20, 30])])]
+    )
+    PublishToOSMSheet(
+        changes: [
+            OSMFeatureChange(action: .modify, featureID: 12, type: .green, osmID: "w12", pointsChanged: true),
+            OSMFeatureChange(action: .modify, featureID: 1, type: .fairway, osmID: "r1", pointsChanged: true, sharedNodeOSMIDs: ["w14"]),
+            OSMFeatureChange(action: .modify, featureID: 20, type: .water, osmID: "w20", oldType: .bunker, pointsChanged: true),
+            OSMFeatureChange(action: .modify, featureID: 14, type: .bunker, osmID: "w14", addsGolfTag: true),
+            OSMFeatureChange(action: .multipolygon, featureID: 1, type: .fairway, osmID: "r1", innerOSMIDs: ["w12", "w14", "w15"]),
+            OSMFeatureChange(action: .create, featureID: 30, type: .bunker, osmID: nil),
+            OSMFeatureChange(action: .delete, featureID: nil, type: .tee, osmID: "w40"),
+        ],
+        course: course,
+        userName: "pat"
+    ) { _ in }
 }

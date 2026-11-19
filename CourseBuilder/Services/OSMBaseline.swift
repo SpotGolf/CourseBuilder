@@ -72,7 +72,7 @@ struct OSMBaseline: Codable, Equatable {
     /// Entries by OSM ID.
     var entries: [String: Entry] = [:]
 
-    /// Fairways to make into multipolygons, or fairway relations to add greens to, on the next publish.
+    /// Fairways to make into multipolygons, or fairway relations to add inner features to, on the next publish.
     var pendingMultipolygons: [PendingMultipolygon] = []
 
     /// The `leisure=golf_course` element that is not a usable course outline, found by the last import.

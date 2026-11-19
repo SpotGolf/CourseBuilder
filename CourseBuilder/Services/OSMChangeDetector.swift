@@ -22,7 +22,7 @@ struct OSMFeatureChange: Hashable, Identifiable {
     /// Whether the feature's OSM element is missing its `golf` tag, such as a bunker imported from
     /// a way tagged only `natural=sand`.
     var addsGolfTag = false
-    /// For a multipolygon change, the OSM IDs of the inner greens.
+    /// For a multipolygon change, the OSM IDs of the inner features.
     var innerOSMIDs: [String] = []
     /// For a points change, the other OSM ways with nodes at the feature's new points. The way
     /// reuses their nodes, such as a fairway reshaped to follow the edge of a green.
@@ -76,7 +76,7 @@ enum OSMChangeDetector {
 
         let courseOSMIDs = Set(course.features.compactMap(\.osmID))
         for pending in baseline.pendingMultipolygons {
-            // A fairway or green deleted since the conversion was asked for is left out.
+            // A fairway or inner feature deleted since the conversion was asked for is left out.
             let inner = pending.innerOSMIDs.filter(courseOSMIDs.contains)
             guard let fairway = course.features.first(where: { $0.osmID == pending.fairwayOSMID }), !inner.isEmpty else { continue }
             changes.append(OSMFeatureChange(
@@ -111,13 +111,17 @@ enum OSMChangeDetector {
 
     /// The other ways in the baseline with a point at one of the feature's points that its own
     /// element does not have.
+    ///
+    /// Centerlines never share nodes, in either direction. OSM asks that a hole's way not be
+    /// joined to tees, greens, fairways, or other features.
     static func sharedNodeOSMIDs(for feature: Feature, entry: OSMBaseline.Entry, in baseline: OSMBaseline) -> [String] {
+        guard feature.type != .centerline else { return [] }
         let own = entry.coordinates
         let added = feature.polygon.filter { point in !own.contains { distanceMeters($0, point) <= samePointMeters } }
         guard !added.isEmpty else { return [] }
         return baseline.entries.values
             .filter { other in
-                other.osmID != entry.osmID && other.osmID.hasPrefix("w")
+                other.osmID != entry.osmID && other.osmID.hasPrefix("w") && other.type != .centerline
                     && other.coordinates.contains { point in added.contains { distanceMeters($0, point) <= samePointMeters } }
             }
             .map(\.osmID)

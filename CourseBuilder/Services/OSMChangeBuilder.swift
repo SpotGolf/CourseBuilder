@@ -191,9 +191,9 @@ enum OSMChangeBuilder {
     /// Builds the `osmChange` XML for the sent changes.
     ///
     /// Point edits on a relation go to its one outer way. A multipolygon change on a fairway way
-    /// makes a relation with the way as its outer member and the greens as inner members, and
+    /// makes a relation with the way as its outer member and the features inside it as inner members, and
     /// moves the way's tags to the relation. A multipolygon change on a fairway relation adds the
-    /// greens it is missing as inner members. A deleted relation also deletes its outer ways that
+    /// features it is missing as inner members. A deleted relation also deletes its outer ways that
     /// have no tags. Its inner ways are features of their own and are left alone.
     ///
     /// A course outline change creates a closed way with the outline's tags. A misplaced node is
